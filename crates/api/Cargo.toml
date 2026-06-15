@@ -1,0 +1,17 @@
+[package]
+name = "kokkak-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "HTTP API server (axum) — entry point for web/admin/mobile clients"
+
+[[bin]]
+name = "kokkak-api"
+path = "src/main.rs"
+
+[dependencies]
+# Core
+tokio = { workspace = true }
+axum = { workspace = true }

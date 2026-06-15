@@ -1,0 +1,11 @@
+[package]
+name = "kokkak-infra"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Adapters: tiberius (SQL Server), mongodb, redis, nats, fcm, S3"
+
+[dependencies]
+# Filled in per task — see AGENTS.md § 3

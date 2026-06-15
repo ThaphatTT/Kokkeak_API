@@ -1,0 +1,15 @@
+[package]
+name = "kokkak-worker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "NATS consumer — background jobs (push, email, pdf, points, etc.)"
+
+[[bin]]
+name = "kokkak-worker"
+path = "src/main.rs"
+
+[dependencies]
+# Filled in M4 (T18)

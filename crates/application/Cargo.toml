@@ -1,0 +1,11 @@
+[package]
+name = "kokkak-application"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Use cases: orchestrate domain + repo traits (1 action = 1 use case)"
+
+[dependencies]
+# Filled in per task — see AGENTS.md § 3
