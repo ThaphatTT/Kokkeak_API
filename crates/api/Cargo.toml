@@ -15,6 +15,13 @@ path = "src/main.rs"
 # Core
 tokio = { workspace = true }
 axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+uuid = { workspace = true }
+
+# Telemetry
+tracing = { workspace = true }
+metrics = { workspace = true }
 
 # Internal
 kokkak-common = { path = "../common" }

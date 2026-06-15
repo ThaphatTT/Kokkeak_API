@@ -10,5 +10,6 @@
 #![warn(missing_docs)]
 
 pub mod config;
+pub mod telemetry;
 
 pub use config::{ConfigError, LogFormat, LogSettings, ServerSettings, Settings};
