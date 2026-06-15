@@ -1,26 +1,34 @@
 //! Kokkeak API entry point.
 //!
-//! T01 (M0): minimal — only `GET /healthz` returns 200 OK.
-//! Full HTTP routing, middleware, and graceful shutdown are added in T05+.
+//! T01: minimal — only `GET /healthz` returns 200 OK.
+//! T02: load + validate `Settings` from env, fail fast on misconfig.
 
 use axum::{Router, http::StatusCode, response::IntoResponse, routing::get};
+use kokkak_common::config::Settings;
 
 #[tokio::main]
 async fn main() {
+    // T02: load & validate configuration (fail-fast on misconfig)
+    let settings = Settings::load().unwrap_or_else(|err| {
+        eprintln!("[kokkak-api] invalid configuration: {err}");
+        eprintln!("[kokkak-api] see .env.example for required variables");
+        std::process::exit(1);
+    });
+
+    println!("[kokkak-api] config loaded: server.addr={} workers={} log.format={:?}",
+        settings.server.addr, settings.server.workers, settings.log.format);
+
     let app = Router::new().route("/healthz", get(healthz));
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+    let listener = tokio::net::TcpListener::bind(&settings.server.addr)
         .await
-        .expect("failed to bind 0.0.0.0:3000");
+        .unwrap_or_else(|err| {
+            eprintln!("[kokkak-api] failed to bind {}: {err}", settings.server.addr);
+            std::process::exit(1);
+        });
 
-    println!(
-        "kokkak-api listening on http://{}",
-        listener.local_addr().expect("local_addr")
-    );
-
-    axum::serve(listener, app)
-        .await
-        .expect("server error");
+    println!("[kokkak-api] listening on http://{}", settings.server.addr);
+    axum::serve(listener, app).await.expect("server error");
 }
 
 async fn healthz() -> impl IntoResponse {

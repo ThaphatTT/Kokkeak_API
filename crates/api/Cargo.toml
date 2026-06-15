@@ -15,3 +15,6 @@ path = "src/main.rs"
 # Core
 tokio = { workspace = true }
 axum = { workspace = true }
+
+# Internal
+kokkak-common = { path = "../common" }

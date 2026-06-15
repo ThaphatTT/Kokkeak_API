@@ -8,4 +8,9 @@ authors.workspace = true
 description = "Common utilities: error, config, telemetry, response envelope"
 
 [dependencies]
-# Filled in per task — see AGENTS.md § 3
+serde = { workspace = true }
+figment = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

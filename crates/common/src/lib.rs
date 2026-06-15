@@ -8,3 +8,7 @@
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
+
+pub mod config;
+
+pub use config::{ConfigError, LogFormat, LogSettings, ServerSettings, Settings};
