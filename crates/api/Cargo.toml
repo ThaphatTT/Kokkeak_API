@@ -45,6 +45,9 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 # Validation
 validator = { workspace = true }
 
+# M10 repo_factory
+thiserror = { workspace = true }
+
 [dev-dependencies]
 # Test body / JSON inspection in handler tests.
 serde_json = { workspace = true }

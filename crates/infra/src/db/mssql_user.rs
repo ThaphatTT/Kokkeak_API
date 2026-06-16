@@ -54,12 +54,19 @@ impl UserRepository for MssqlUserRepository {
             .query("SELECT id, email, display_name, password_hash, roles, status, locale, created_at, updated_at FROM [user] WHERE id = @P1", &[&id as &dyn ToSql])
             .await
             .map_err(|e| RepoError::Backend(e.to_string()))?;
-        let mut stream = rows.into_row_stream();
-        while let Some(row) = stream
-            .try_next()
-            .await
-            .map_err(|e| RepoError::Backend(e.to_string()))?
-        {
+        let collected: Vec<tiberius::Row> = {
+            let mut s = rows.into_row_stream();
+            let mut out = Vec::new();
+            while let Some(row) = s
+                .try_next()
+                .await
+                .map_err(|e| RepoError::Backend(e.to_string()))?
+            {
+                out.push(row);
+            }
+            out
+        };
+        if let Some(row) = collected.into_iter().next() {
             return Ok(Some(row_to_user(&row)?));
         }
         Ok(None)
@@ -79,12 +86,19 @@ impl UserRepository for MssqlUserRepository {
             )
             .await
             .map_err(|e| RepoError::Backend(e.to_string()))?;
-        let mut stream = rows.into_row_stream();
-        while let Some(row) = stream
-            .try_next()
-            .await
-            .map_err(|e| RepoError::Backend(e.to_string()))?
-        {
+        let collected: Vec<tiberius::Row> = {
+            let mut s = rows.into_row_stream();
+            let mut out = Vec::new();
+            while let Some(row) = s
+                .try_next()
+                .await
+                .map_err(|e| RepoError::Backend(e.to_string()))?
+            {
+                out.push(row);
+            }
+            out
+        };
+        if let Some(row) = collected.into_iter().next() {
             return Ok(Some(row_to_user(&row)?));
         }
         Ok(None)

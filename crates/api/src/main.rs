@@ -25,23 +25,19 @@ use axum::{
     body::Body,
     http::{header::CONTENT_TYPE, StatusCode},
     response::{IntoResponse, Response},
-    routing::get,
-    Router,
+    routing::{get, Router},
 };
 use kokkak_common::{config::Settings, telemetry};
 use kokkak_domain::HealthRegistry;
 use kokkak_infra::auth::jwt::JwtService;
 use kokkak_infra::cache::redis::RedisCache;
-use kokkak_infra::db::json_catalog::JsonServiceRepository;
-use kokkak_infra::db::json_chat::JsonChatRepository;
-use kokkak_infra::db::json_order::JsonOrderRepository;
-use kokkak_infra::db::json_payment::JsonPaymentRepository;
-use kokkak_infra::db::json_user::JsonUserRepository;
 use kokkak_infra::db::mongo::MongoClient;
 use kokkak_infra::queue::nats::NatsQueue;
 
-use kokkak_api::build_app_state;
+use kokkak_api::build_app_state_with;
+use kokkak_api::build_repos;
 use kokkak_api::build_router;
+use kokkak_api::RepoBackend;
 
 /// T03: serve Prometheus text-format metrics.
 async fn metrics_handler() -> impl IntoResponse {
@@ -102,62 +98,25 @@ async fn main() {
         std::process::exit(1);
     }));
 
-    // ---- M1.5: build JSON-DB repositories ----
-    let user_repo = JsonUserRepository::open(data_dir.join("users.json"))
-        .await
-        .unwrap_or_else(|e| {
-            eprintln!("[kokkak-api] failed to open user repo: {e}");
-            std::process::exit(1);
-        });
-    let service_repo = JsonServiceRepository::open(data_dir.join("services.json"))
-        .await
-        .unwrap_or_else(|e| {
-            eprintln!("[kokkak-api] failed to open service repo: {e}");
-            std::process::exit(1);
-        });
-    let order_repo = JsonOrderRepository::open(data_dir.join("orders.json"))
-        .await
-        .unwrap_or_else(|e| {
-            eprintln!("[kokkak-api] failed to open order repo: {e}");
-            std::process::exit(1);
-        });
-    // M8: chat uses a JSON file (or, when Mongo is configured
-    // and a `chat` sub-module is plugged in, the MongoDB
-    // adapter). For M8 we always use the JSON sim.
-    let chat_repo = JsonChatRepository::open(data_dir.join("chat.json"))
-        .await
-        .unwrap_or_else(|e| {
-            eprintln!("[kokkak-api] failed to open chat repo: {e}");
-            std::process::exit(1);
-        });
-    // M9: payment / commission / payout JSON sim.
-    let payment_repo = JsonPaymentRepository::open(data_dir.join("payments.json"))
-        .await
-        .unwrap_or_else(|e| {
-            eprintln!("[kokkak-api] failed to open payment repo: {e}");
-            std::process::exit(1);
-        });
-
-    // ---- M2: build use cases ----
-    let user_repo_arc: Arc<dyn kokkak_domain::UserRepository> = Arc::new(user_repo);
-    let service_repo_arc: Arc<dyn kokkak_domain::ServiceRepository> = Arc::new(service_repo);
-    let order_repo_arc: Arc<dyn kokkak_domain::OrderRepository> = Arc::new(order_repo);
-    let chat_repo_arc: Arc<dyn kokkak_domain::ChatRepository> = Arc::new(chat_repo);
-    let payment_repo_arc: Arc<dyn kokkak_domain::PaymentRepository> = Arc::new(payment_repo);
+    // ---- M10: build the repository bundle (MSSQL or JSON) ----
+    let bundle = build_repos(&data_dir, &settings).await.unwrap_or_else(|e| {
+        eprintln!("[kokkak-api] failed to build repo bundle: {e}");
+        std::process::exit(1);
+    });
+    tracing::info!(
+        backend = bundle.backend.as_str(),
+        "kokkak-api: repository bundle ready"
+    );
+    // Pin the bundle to silence the unused-warning if the
+    // Mssql pool is dropped (we keep it alive for the
+    // process lifetime via the `RepoBundle`).
+    let _ = (bundle.backend, bundle.mssql_pool.is_some());
 
     // ---- T05 + M1: build readiness registry ----
     let registry = build_health_registry(&settings).await;
 
     // ---- Build app state ----
-    let state = build_app_state(
-        user_repo_arc,
-        service_repo_arc,
-        order_repo_arc,
-        chat_repo_arc,
-        payment_repo_arc,
-        jwt,
-        registry,
-    );
+    let state = build_app_state_with(bundle, jwt, registry);
 
     // ---- Routes ----
     let app = build_router(state)
