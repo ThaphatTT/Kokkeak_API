@@ -8,4 +8,36 @@ authors.workspace = true
 description = "Domain entities, value objects, business rules, traits (no framework/DB)"
 
 [dependencies]
-# Filled in per task — see AGENTS.md § 3
+# Ports (traits) + their typed errors
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+
+# Pure utility crate (no runtime); used for `future::join_all` to
+# run health checks concurrently. Allowed in `domain` because it is
+# a combinator library, not an IO/runtime.
+futures = { workspace = true }
+
+# Bytes payload for queue messages (no runtime, no IO).
+bytes = "1"
+
+# Entities are serializable so adapters can persist them; serde has
+# no IO / runtime cost so it stays in domain.
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+rust_decimal = { workspace = true }
+
+# Trait-level dependency for the auth-related typed errors
+# (jsonwebtoken is only used in adapters; we keep it out of domain).
+
+# Opaque cursor codec (no IO, no runtime).
+base64 = "0.22"
+
+# Decimal macro for the payment commission tests (no IO, no runtime).
+rust_decimal_macros = { workspace = true }
+
+[dev-dependencies]
+# Test runtime only — kept out of `[dependencies]` to keep `domain`
+# runtime-pure (AGENTS.md § 6).
+tokio = { workspace = true, features = ["macros", "rt"] }

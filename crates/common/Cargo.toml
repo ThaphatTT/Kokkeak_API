@@ -12,11 +12,17 @@ serde = { workspace = true }
 figment = { workspace = true }
 thiserror = { workspace = true }
 
+# Axum (for IntoResponse impl + Json helpers)
+axum = { workspace = true }
+
 # Telemetry
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
+
+# M7: i18n
+rust-i18n = "3"
 
 [dev-dependencies]
 serde_json = { workspace = true }

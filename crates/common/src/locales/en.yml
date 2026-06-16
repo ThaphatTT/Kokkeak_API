@@ -1,0 +1,30 @@
+auth:
+  register_success: "Account created"
+  login_success: "Login successful"
+  invalid_credentials: "Invalid email or password"
+  email_taken: "Email already in use"
+order:
+  created: "Order created"
+  status:
+    pending: "Pending"
+    active: "Active"
+    completed: "Completed"
+    closed: "Closed"
+    cancelled: "Cancelled"
+common:
+  not_found: "Not found"
+  forbidden: "Forbidden"
+  internal: "Internal error"
+chat:
+  room_opened: "Chat room opened"
+  message_sent: "Message sent"
+  message_received: "Message received"
+  not_participant: "You are not a participant of this room"
+  empty_body: "Message body cannot be empty"
+  body_too_long: "Message body is too long"
+payment:
+  created: "Payment created"
+  confirmed: "Payment confirmed"
+  amount_invalid: "Invalid payment amount"
+  order_not_payable: "This order is not yet payable"
+  payout_marked_paid: "Payout marked as paid"

@@ -1,0 +1,10 @@
+//! HTTP handlers (one module per feature area).
+
+pub mod auth;
+pub mod catalog;
+pub mod chat;
+pub mod health;
+pub mod order;
+pub mod payment;
+pub mod user;
+pub mod ws;

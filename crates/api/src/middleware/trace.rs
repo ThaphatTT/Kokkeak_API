@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use axum::{
     extract::Request,
-    http::{HeaderValue, header::HeaderName},
+    http::{header::HeaderName, HeaderValue},
     middleware::Next,
     response::Response,
 };
