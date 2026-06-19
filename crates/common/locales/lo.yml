@@ -25,7 +25,7 @@ err_auth:
   token_expired: "ໂທເຄັນໝົດອາຍຸແລ້ວ"
   invalid_token: "ໂທເຄັນບໍ່ຖືກຕ້ອງ: {0}"
   forbidden: "ຖືກຫ້າມ: {0}"
-  email_taken: "ອີເມວນີ້ຖືກໃຊ້ແລ້ວ"
+  username_taken: "ຊື່ຜູ້ໃຊ້ນີ້ຖືກໃຊ້ແລ້ວ"
   validation: "ຂໍ້ມູນບໍ່ຜ່ານການກວດສອບ: {0}"
   backend: "ລະບົບຢືນຢັນຕົວຕົນຂັດຂ້ອງ: {0}"
   missing_header: "ບໍ່ພົບ ຫຼື Authorization header ບໍ່ຖືກຕ້ອງ"

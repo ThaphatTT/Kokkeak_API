@@ -1,9 +1,16 @@
-//! Auth use cases (M2).
+//! Auth use cases (M2 + M14).
 //!
 //! Encapsulates register / login / refresh. Takes `Arc<dyn UserRepository>`
 //! and a `PasswordHasher` + `JwtService` (from `infra`). Stays
 //! transport-agnostic — the API layer maps HTTP requests to these
 //! inputs.
+//!
+//! M14 changes (NEW_DB.txt alignment):
+//! - `email` field replaced by `username` (NEW_DB `user_username_username`)
+//! - `display_name` replaced by `first_name` + `last_name`
+//! - `locale` removed from the User aggregate (now lives in JWT /
+//!   Accept-Language per M11)
+//! - `EmailTaken` → `UsernameTaken`
 
 use std::sync::Arc;
 
@@ -16,22 +23,25 @@ use uuid::Uuid;
 /// Register input (สมัครสมาชิกใหม่).
 #[derive(Debug, Clone)]
 pub struct RegisterInput {
-    /// Email (will be lowercased).
-    pub email: String,
+    /// Login username (will be lowercased). In practice this can be
+    /// an email, phone, or alphanumeric handle — the API doesn't
+    /// enforce a particular shape (NEW_DB stores it as
+    /// `user_username_username`).
+    pub username: String,
     /// Plain-text password (use case hashes it; never logged).
     pub password: String,
-    /// Display name.
-    pub display_name: String,
+    /// First name (`[user].user_first_name`).
+    pub first_name: String,
+    /// Last name (`[user].user_last_name`).
+    pub last_name: String,
     /// Role to grant. Only customer/technician allowed in self-registration.
     pub role: Role,
-    /// Locale preference (`"th"` / `"en"` / `"lo"`).
-    pub locale: String,
 }
 
 /// Login input.
 #[derive(Debug, Clone)]
 pub struct LoginInput {
-    pub email: String,
+    pub username: String,
     pub password: String,
     /// Token scope (`"mobile"` / `"web"` / `"admin"`).
     pub scope: String,
@@ -62,29 +72,32 @@ impl AuthService {
 
     /// Register a new account.
     pub async fn register(&self, input: RegisterInput) -> Result<AuthOutcome, AuthError> {
-        let email = input.email.trim().to_lowercase();
-        if email.is_empty() || !email.contains('@') {
-            return Err(AuthError::Validation("invalid email".into()));
+        let username = input.username.trim().to_lowercase();
+        if username.is_empty() {
+            return Err(AuthError::Validation("username must not be empty".into()));
         }
         if input.password.len() < 8 {
             return Err(AuthError::Validation(
                 "password must be at least 8 characters".into(),
             ));
         }
+        if input.first_name.trim().is_empty() {
+            return Err(AuthError::Validation("first_name must not be empty".into()));
+        }
         let now = Utc::now();
         let user = User {
             id: Uuid::new_v4(),
-            email,
-            display_name: input.display_name.trim().to_string(),
+            first_name: input.first_name.trim().to_string(),
+            last_name: input.last_name.trim().to_string(),
+            username,
             password_hash: self.hasher.hash(&input.password)?,
             roles: vec![input.role],
             status: UserStatus::Active,
-            locale: input.locale,
             created_at: now,
             updated_at: now,
         };
         self.users.insert(&user).await.map_err(|e| match e {
-            kokkak_domain::RepoError::Conflict(_) => AuthError::EmailTaken,
+            kokkak_domain::RepoError::Conflict(_) => AuthError::UsernameTaken,
             other => AuthError::Backend(other.to_string()),
         })?;
         let tokens = self.issue_pair(user.id, &user.roles, "mobile")?;
@@ -94,12 +107,12 @@ impl AuthService {
         })
     }
 
-    /// Login by email + password.
+    /// Login by username + password.
     pub async fn login(&self, input: LoginInput) -> Result<AuthOutcome, AuthError> {
-        let email = input.email.trim().to_lowercase();
+        let username = input.username.trim().to_lowercase();
         let user = self
             .users
-            .find_by_email(&email)
+            .find_by_username(&username)
             .await
             .map_err(|e| AuthError::Backend(e.to_string()))?
             .ok_or(AuthError::InvalidCredentials)?;
@@ -258,42 +271,44 @@ mod tests {
         let (svc, path) = make_service().await;
         let out = svc
             .register(RegisterInput {
-                email: "Alice@Example.com".into(),
+                username: "Alice@Example.com".into(),
                 password: "supersecret-123".into(),
-                display_name: "Alice".into(),
+                first_name: "Alice".into(),
+                last_name: "Wonder".into(),
                 role: Role::Customer,
-                locale: "lo".into(),
             })
             .await
             .unwrap();
-        assert_eq!(out.user.email, "alice@example.com");
+        assert_eq!(out.user.username, "alice@example.com");
+        assert_eq!(out.user.first_name, "Alice");
+        assert_eq!(out.user.last_name, "Wonder");
         assert!(!out.tokens.access_token.is_empty());
         let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
-    async fn register_duplicate_email_returns_email_taken() {
+    async fn register_duplicate_username_returns_username_taken() {
         let (svc, path) = make_service().await;
         svc.register(RegisterInput {
-            email: "a@b.com".into(),
+            username: "alice".into(),
             password: "supersecret-123".into(),
-            display_name: "A".into(),
+            first_name: "Alice".into(),
+            last_name: "Wonder".into(),
             role: Role::Customer,
-            locale: "lo".into(),
         })
         .await
         .unwrap();
         let err = svc
             .register(RegisterInput {
-                email: "a@b.com".into(),
+                username: "alice".into(),
                 password: "supersecret-123".into(),
-                display_name: "A2".into(),
+                first_name: "Alice2".into(),
+                last_name: "Wonder2".into(),
                 role: Role::Customer,
-                locale: "lo".into(),
             })
             .await
             .unwrap_err();
-        assert!(matches!(err, AuthError::EmailTaken));
+        assert!(matches!(err, AuthError::UsernameTaken));
         let _ = std::fs::remove_file(&path);
     }
 
@@ -301,17 +316,17 @@ mod tests {
     async fn login_with_wrong_password_fails() {
         let (svc, path) = make_service().await;
         svc.register(RegisterInput {
-            email: "a@b.com".into(),
+            username: "alice".into(),
             password: "supersecret-123".into(),
-            display_name: "A".into(),
+            first_name: "Alice".into(),
+            last_name: "Wonder".into(),
             role: Role::Customer,
-            locale: "lo".into(),
         })
         .await
         .unwrap();
         let err = svc
             .login(LoginInput {
-                email: "a@b.com".into(),
+                username: "alice".into(),
                 password: "wrong-password".into(),
                 scope: "mobile".into(),
             })
@@ -325,23 +340,23 @@ mod tests {
     async fn login_with_correct_password_returns_tokens() {
         let (svc, path) = make_service().await;
         svc.register(RegisterInput {
-            email: "a@b.com".into(),
+            username: "alice".into(),
             password: "supersecret-123".into(),
-            display_name: "A".into(),
+            first_name: "Alice".into(),
+            last_name: "Wonder".into(),
             role: Role::Customer,
-            locale: "lo".into(),
         })
         .await
         .unwrap();
         let out = svc
             .login(LoginInput {
-                email: "a@b.com".into(),
+                username: "alice".into(),
                 password: "supersecret-123".into(),
                 scope: "mobile".into(),
             })
             .await
             .unwrap();
-        assert_eq!(out.user.email, "a@b.com");
+        assert_eq!(out.user.username, "alice");
         let _ = std::fs::remove_file(&path);
     }
 
@@ -350,11 +365,11 @@ mod tests {
         let (svc, path) = make_service().await;
         let registered = svc
             .register(RegisterInput {
-                email: "a@b.com".into(),
+                username: "alice".into(),
                 password: "supersecret-123".into(),
-                display_name: "A".into(),
+                first_name: "Alice".into(),
+                last_name: "Wonder".into(),
                 role: Role::Customer,
-                locale: "lo".into(),
             })
             .await
             .unwrap();
@@ -367,7 +382,7 @@ mod tests {
         // Production adds a `jti` claim for true rotation.
         assert!(!out.tokens.access_token.is_empty());
         assert!(!out.tokens.refresh_token.is_empty());
-        assert_eq!(out.user.email, "a@b.com");
+        assert_eq!(out.user.username, "alice");
         let _ = std::fs::remove_file(&path);
     }
 
@@ -376,11 +391,11 @@ mod tests {
         let (svc, path) = make_service().await;
         let registered = svc
             .register(RegisterInput {
-                email: "a@b.com".into(),
+                username: "alice".into(),
                 password: "supersecret-123".into(),
-                display_name: "A".into(),
+                first_name: "Alice".into(),
+                last_name: "Wonder".into(),
                 role: Role::Customer,
-                locale: "lo".into(),
             })
             .await
             .unwrap();
@@ -389,6 +404,40 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, AuthError::InvalidToken(_)));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn register_rejects_short_password() {
+        let (svc, path) = make_service().await;
+        let err = svc
+            .register(RegisterInput {
+                username: "alice".into(),
+                password: "short".into(),
+                first_name: "Alice".into(),
+                last_name: "Wonder".into(),
+                role: Role::Customer,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AuthError::Validation(_)));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn register_rejects_empty_first_name() {
+        let (svc, path) = make_service().await;
+        let err = svc
+            .register(RegisterInput {
+                username: "alice".into(),
+                password: "supersecret-123".into(),
+                first_name: "  ".into(),
+                last_name: "Wonder".into(),
+                role: Role::Customer,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AuthError::Validation(_)));
         let _ = std::fs::remove_file(&path);
     }
 }

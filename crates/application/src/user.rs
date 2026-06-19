@@ -1,6 +1,8 @@
-//! User use cases (M2).
+//! User use cases (M2 + M14).
 //!
 //! - `get_me`: fetch the public view of the current user.
+//! - `get_user`: fetch the full `User` aggregate (used by chat /
+//!   payment use cases that need the role list / status).
 
 use std::sync::Arc;
 
@@ -27,7 +29,7 @@ impl UserService {
     }
 
     /// Fetch the full `User` (used by chat + payment use cases
-    /// that need the locale / status / role list).
+    /// that need the role list / status).
     pub async fn get_user(&self, user_id: Uuid) -> Result<kokkak_domain::User, AuthError> {
         self.users
             .find_by_id(user_id)
@@ -56,19 +58,21 @@ mod tests {
         let id = Uuid::new_v4();
         let u = User {
             id,
-            email: "a@b.com".into(),
-            display_name: "A".into(),
+            first_name: "A".into(),
+            last_name: "B".into(),
+            username: "ab".into(),
             password_hash: "$argon2".into(),
             roles: vec![Role::Customer],
             status: UserStatus::Active,
-            locale: "lo".into(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
         repo.insert(&u).await.unwrap();
         let svc = UserService::new(Arc::new(repo));
         let me = svc.get_me(id).await.unwrap();
-        assert_eq!(me.email, "a@b.com");
+        assert_eq!(me.username, "ab");
+        assert_eq!(me.first_name, "A");
+        assert_eq!(me.last_name, "B");
         let _ = std::fs::remove_file(&path);
     }
 

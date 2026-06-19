@@ -26,7 +26,7 @@ err_auth:
   token_expired: "โทเคนหมดอายุ"
   invalid_token: "โทเคนไม่ถูกต้อง: {0}"
   forbidden: "ถูกห้าม: {0}"
-  email_taken: "อีเมลนี้ถูกใช้แล้ว"
+  username_taken: "ชื่อผู้ใช้นี้ถูกใช้แล้ว"
   validation: "ข้อมูลไม่ผ่านการตรวจสอบ: {0}"
   backend: "ระบบยืนยันตัวตนขัดข้อง: {0}"
   missing_header: "ไม่พบหรือ Authorization header ไม่ถูกต้อง"

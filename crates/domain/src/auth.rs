@@ -1,8 +1,11 @@
-//! Auth domain types (โดเมนยืนยันตัวตน — M2).
+//! Auth domain types (โดเมนยืนยันตัวตน — M2 + M14).
 //!
 //! Defines the typed errors and the **claims** the application / API
 //! layers exchange. Concrete JWT issue / verify lives in `infra::auth::jwt`
 //! so the domain stays free of `jsonwebtoken`.
+//!
+//! M14 renamed `EmailTaken` → `UsernameTaken` to match the NEW_DB
+//! schema where login is `user_username_username` (not email).
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -30,9 +33,11 @@ pub enum AuthError {
     #[error("forbidden: {0}")]
     Forbidden(String),
 
-    /// 409 — email already taken.
-    #[error("email already in use")]
-    EmailTaken,
+    /// 409 — username already in use. Was `EmailTaken` in the legacy
+    /// code; renamed to match NEW_DB which stores login in
+    /// `user_username_username`.
+    #[error("username already in use")]
+    UsernameTaken,
 
     /// 422 — input validation failure.
     #[error("validation: {0}")]
@@ -115,14 +120,19 @@ impl AuthSession {
 }
 
 /// Public-safe user view (no password hash).
+///
+/// M14 fields match the NEW_DB-aligned `User` aggregate:
+/// - `username` (was `email`)
+/// - `first_name` + `last_name` (was `display_name`)
+/// - no `locale` (locale comes from JWT / Accept-Language per M11)
 #[derive(Debug, Clone, Serialize)]
 pub struct PublicUser {
     pub id: Uuid,
-    pub email: String,
-    pub display_name: String,
+    pub username: String,
+    pub first_name: String,
+    pub last_name: String,
     pub roles: Vec<Role>,
     pub status: crate::user::UserStatus,
-    pub locale: String,
     pub created_at: DateTime<Utc>,
 }
 
@@ -130,11 +140,11 @@ impl From<&crate::user::User> for PublicUser {
     fn from(u: &crate::user::User) -> Self {
         Self {
             id: u.id,
-            email: u.email.clone(),
-            display_name: u.display_name.clone(),
+            username: u.username.clone(),
+            first_name: u.first_name.clone(),
+            last_name: u.last_name.clone(),
             roles: u.roles.clone(),
             status: u.status,
-            locale: u.locale.clone(),
             created_at: u.created_at,
         }
     }
@@ -196,5 +206,28 @@ mod tests {
         assert!(s.has_role(Role::Admin));
         assert!(s.is_admin());
         assert!(!s.has_role(Role::Customer));
+    }
+
+    #[test]
+    fn public_user_omits_password_hash() {
+        let now = Utc::now();
+        let u = crate::user::User {
+            id: Uuid::new_v4(),
+            first_name: "A".into(),
+            last_name: "B".into(),
+            username: "ab".into(),
+            password_hash: "$argon2id$SECRET".into(),
+            roles: vec![Role::Customer],
+            status: crate::user::UserStatus::Active,
+            created_at: now,
+            updated_at: now,
+        };
+        let pubu = PublicUser::from(&u);
+        let s = serde_json::to_string(&pubu).unwrap();
+        assert!(!s.contains("password"));
+        assert!(!s.contains("SECRET"));
+        assert!(s.contains("username"));
+        assert!(s.contains("first_name"));
+        assert!(s.contains("last_name"));
     }
 }

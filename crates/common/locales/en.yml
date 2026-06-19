@@ -24,7 +24,7 @@ err_auth:
   token_expired: "token expired"
   invalid_token: "invalid token: {0}"
   forbidden: "forbidden: {0}"
-  email_taken: "email already in use"
+  username_taken: "username already in use"
   validation: "validation: {0}"
   backend: "auth backend error: {0}"
   missing_header: "missing or invalid Authorization header"

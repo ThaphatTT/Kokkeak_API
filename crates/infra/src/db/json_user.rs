@@ -1,7 +1,15 @@
-//! JSON-file-backed `UserRepository` (M2).
+//! JSON-file-backed `UserRepository` (M2 + M14).
 //!
 //! Implements [`UserRepository`] using [`JsonStore`]. Production
-//! swaps this for the tiberius-backed implementation (M5+).
+//! swaps this for the tiberius-backed implementation that JOINs the
+//! 4 NEW_DB tables.
+//!
+//! **M14 schema note**: the JSON-DB sim keeps the same single-file
+//! shape (one `User` aggregate per record, keyed by user_guid). The
+//! 4-table normalization in NEW_DB.txt is hidden behind the
+//! repository port — the sim is just a dev convenience that
+//! persists the aggregate shape directly. No migration is required
+//! because tests always `remove_file` before each run.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -42,11 +50,11 @@ impl UserRepository for JsonUserRepository {
         Ok(self.store.find(&id.to_string()).await)
     }
 
-    async fn find_by_email(&self, email: &str) -> Result<Option<User>, RepoError> {
-        let lower = email.trim().to_lowercase();
+    async fn find_by_username(&self, username: &str) -> Result<Option<User>, RepoError> {
+        let lower = username.trim().to_lowercase();
         Ok(self
             .store
-            .find_by(|u| u.email.to_lowercase() == lower)
+            .find_by(|u| u.username.to_lowercase() == lower)
             .await)
     }
 
@@ -57,16 +65,16 @@ impl UserRepository for JsonUserRepository {
                 user.id
             )));
         }
-        let lower = user.email.to_lowercase();
+        let lower = user.username.to_lowercase();
         if self
             .store
-            .find_by(|u| u.email.to_lowercase() == lower)
+            .find_by(|u| u.username.to_lowercase() == lower)
             .await
             .is_some()
         {
             return Err(RepoError::Conflict(format!(
-                "email {} is already taken",
-                user.email
+                "username {} is already taken",
+                user.username
             )));
         }
         self.store
@@ -100,15 +108,15 @@ mod tests {
             .join(name)
     }
 
-    fn sample_user(email: &str) -> User {
+    fn sample_user(username: &str) -> User {
         User {
             id: Uuid::new_v4(),
-            email: email.into(),
-            display_name: "Alice".into(),
+            first_name: "Alice".into(),
+            last_name: "Wonder".into(),
+            username: username.into(),
             password_hash: "$argon2id$...".into(),
             roles: vec![Role::Customer],
             status: UserStatus::Active,
-            locale: "lo".into(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
@@ -119,31 +127,34 @@ mod tests {
         let path = tmp("u1.json");
         let _ = std::fs::remove_file(&path);
         let repo = JsonUserRepository::open(&path).await.unwrap();
-        let u = sample_user("a@b.com");
+        let u = sample_user("alice");
         let id = u.id;
         repo.insert(&u).await.unwrap();
         let got = repo.find_by_id(id).await.unwrap().unwrap();
-        assert_eq!(got.email, "a@b.com");
+        assert_eq!(got.username, "alice");
+        assert_eq!(got.first_name, "Alice");
     }
 
     #[tokio::test]
-    async fn find_by_email_is_case_insensitive() {
+    async fn find_by_username_is_case_insensitive() {
         let path = tmp("u2.json");
         let _ = std::fs::remove_file(&path);
         let repo = JsonUserRepository::open(&path).await.unwrap();
-        let u = sample_user("A@B.com");
+        let u = sample_user("Alice");
         repo.insert(&u).await.unwrap();
-        let got = repo.find_by_email("a@b.com").await.unwrap().unwrap();
+        let got = repo.find_by_username("alice").await.unwrap().unwrap();
         assert_eq!(got.id, u.id);
+        let got2 = repo.find_by_username("ALICE").await.unwrap().unwrap();
+        assert_eq!(got2.id, u.id);
     }
 
     #[tokio::test]
-    async fn duplicate_email_returns_conflict() {
+    async fn duplicate_username_returns_conflict() {
         let path = tmp("u3.json");
         let _ = std::fs::remove_file(&path);
         let repo = JsonUserRepository::open(&path).await.unwrap();
-        let u1 = sample_user("a@b.com");
-        let mut u2 = sample_user("a@b.com");
+        let u1 = sample_user("alice");
+        let mut u2 = sample_user("alice");
         u2.id = Uuid::new_v4();
         repo.insert(&u1).await.unwrap();
         let err = repo.insert(&u2).await.unwrap_err();
@@ -155,12 +166,12 @@ mod tests {
         let path = tmp("u4.json");
         let _ = std::fs::remove_file(&path);
         let repo = JsonUserRepository::open(&path).await.unwrap();
-        let mut u = sample_user("a@b.com");
+        let mut u = sample_user("alice");
         repo.insert(&u).await.unwrap();
-        u.display_name = "Bob".into();
+        u.first_name = "Bob".into();
         repo.update(&u).await.unwrap();
         let got = repo.find_by_id(u.id).await.unwrap().unwrap();
-        assert_eq!(got.display_name, "Bob");
+        assert_eq!(got.first_name, "Bob");
     }
 
     #[tokio::test]
@@ -168,7 +179,7 @@ mod tests {
         let path = tmp("u5.json");
         let _ = std::fs::remove_file(&path);
         let repo = JsonUserRepository::open(&path).await.unwrap();
-        let u = sample_user("a@b.com");
+        let u = sample_user("alice");
         let err = repo.update(&u).await.unwrap_err();
         assert!(matches!(err, RepoError::NotFound(_)));
     }
