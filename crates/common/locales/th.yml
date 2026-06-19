@@ -1,0 +1,79 @@
+# Thai locale.
+#
+# Project primary language (per AGENTS.md § 13). The Lao market is
+# the deployment target; Thai covers a sizable secondary market and
+# helps reviewers verify coverage.
+#
+# NOTE: This is **starter copy** — native speakers on the KOKKAK
+# team must review every string before shipping. The translation
+# must convey the *meaning* of the English original, not be a
+# literal word-for-word rendering.
+
+# -- generic error envelope --
+err:
+  bad_request: "คำขอไม่ถูกต้อง: {0}"
+  unauthorized: "ไม่ได้รับอนุญาต"
+  forbidden: "ถูกห้าม: {0}"
+  not_found: "ไม่พบ: {0}"
+  conflict: "ขัดแย้ง: {0}"
+  validation: "ข้อมูลไม่ผ่านการตรวจสอบ: {0}"
+  rate_limited: "ถูกจำกัดจำนวนคำขอ"
+  internal: "ข้อผิดพลาดภายใน: {0}"
+
+# -- AuthError / auth handlers --
+err_auth:
+  invalid_credentials: "อีเมลหรือรหัสผ่านไม่ถูกต้อง"
+  token_expired: "โทเคนหมดอายุ"
+  invalid_token: "โทเคนไม่ถูกต้อง: {0}"
+  forbidden: "ถูกห้าม: {0}"
+  username_taken: "ชื่อผู้ใช้นี้ถูกใช้แล้ว"
+  validation: "ข้อมูลไม่ผ่านการตรวจสอบ: {0}"
+  backend: "ระบบยืนยันตัวตนขัดข้อง: {0}"
+  missing_header: "ไม่พบหรือ Authorization header ไม่ถูกต้อง"
+  not_access_token: "โทเคนนี้ไม่ใช่ access token"
+  role_required: "ต้องมีสิทธิ์: {0}"
+  admin_required: "ต้องเป็นผู้ดูแลระบบ"
+  user_not_found: "ไม่พบผู้ใช้: {0}"
+
+# -- RepoError (generic) --
+err_repo:
+  not_found: "ไม่พบ: {0}"
+  conflict: "ขัดแย้ง: {0}"
+  backend: "ระบบจัดเก็บข้อมูลขัดข้อง: {0}"
+
+# -- ChatError + ChatRepoError --
+err_chat:
+  not_participant: "คุณไม่ได้เป็นสมาชิกของห้อง {0}"
+  room_not_found: "ไม่พบห้อง {0}"
+  invalid_body: "ข้อความไม่ถูกต้อง: {0}"
+  backend: "ระบบแชทขัดข้อง: {0}"
+  not_participant_msg: "คุณไม่ได้เป็นสมาชิกของห้องนี้"
+  membership_check_failed: "ตรวจสอบสมาชิกห้องไม่สำเร็จ: {0}"
+  bad_other_role: "other_role ต้องเป็น customer, technician หรือ admin เท่านั้น"
+
+err_chat_repo:
+  not_found: "ไม่พบ: {0}"
+  backend: "ระบบแชทขัดข้อง: {0}"
+
+# -- PaymentError + PaymentRepoError --
+err_payment:
+  order_not_payable: "คำสั่งงาน {0} ไม่สามารถชำระเงินได้ (สถานะไม่ตรง)"
+  not_found: "ไม่พบการชำระเงิน {0}"
+  not_found_msg: "ไม่พบการชำระเงิน"
+  invalid_amount: "จำนวนเงินไม่ถูกต้อง: {0}"
+  backend: "ระบบชำระเงินขัดข้อง: {0}"
+  bad_amount: "จำนวนเงินต้องเป็นตัวเลขทศนิยม"
+  not_yours: "การชำระเงินนี้ไม่ใช่ของคุณ"
+  unknown_payout_status: "ไม่รู้จักสถานะการจ่ายเงิน: {0}"
+
+err_payment_repo:
+  not_found: "ไม่พบ: {0}"
+  backend: "ระบบชำระเงินขัดข้อง: {0}"
+
+# -- Order handlers --
+err_order:
+  invalid_total: "ยอดเงินไม่ถูกต้อง"
+
+# -- Generic request validation --
+err_request:
+  bad_timestamp: "after ต้องเป็น timestamp รูปแบบ RFC3339"

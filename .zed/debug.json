@@ -1,0 +1,45 @@
+[
+  {
+    "label": "Debug kokkak-api",
+    "adapter": "CodeLLDB",
+    "build": {
+      "command": "cargo",
+      "args": ["build", "-p", "kokkak-api", "--bin", "kokkak-api"],
+      "cwd": "$ZED_WORKTREE_ROOT",
+    },
+    "request": "launch",
+    "program": "$ZED_WORKTREE_ROOT/target/debug/kokkak-api.exe",
+    "args": [],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "env": {
+      "RUST_LOG": "kokkak=debug,tower_http=info,info",
+      "RUST_BACKTRACE": "1",
+    },
+    "stop_on_entry": false
+  },
+  {
+    "label": "Debug kokkak-worker",
+    "adapter": "CodeLLDB",
+    "build": {
+      "command": "cargo",
+      "args": ["build", "-p", "kokkak-worker", "--bin", "kokkak-worker"],
+      "cwd": "$ZED_WORKTREE_ROOT",
+    },
+    "request": "launch",
+    "program": "$ZED_WORKTREE_ROOT/target/debug/kokkak-worker.exe",
+    "args": [],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "env": {
+      "RUST_LOG": "kokkak=debug,info",
+      "RUST_BACKTRACE": "1",
+    },
+    "stop_on_entry": false
+  },
+  {
+    "label": "Attach to kokkak-api (pid)",
+    "adapter": "CodeLLDB",
+    "request": "attach",
+    "pid": "$$ZED_PID$$",
+    "cwd": "$ZED_WORKTREE_ROOT",
+  },
+]

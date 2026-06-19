@@ -1,0 +1,109 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/common",
+    "crates/domain",
+    "crates/application",
+    "crates/infra",
+    "crates/api",
+    "crates/worker",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.96"
+license = "Proprietary"
+authors = ["Kokkeak Team"]
+description = "Kokkeak Backend API — handyman/technician marketplace (Laos)"
+
+# ---- Shared workspace dependencies ----
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.40", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# Web (axum)
+axum = { version = "0.7", features = ["macros", "ws"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors", "timeout"] }
+hyper = "1"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Errors
+thiserror = "1"
+anyhow = "1"
+
+# Logging / tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Metrics
+metrics = "0.23"
+metrics-exporter-prometheus = { version = "0.15", default-features = false }
+
+# Config
+figment = { version = "0.10", features = ["env", "toml"] }
+
+# Time / UUID
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.10", features = ["v4", "v7", "serde"] }
+
+# Decimal (เงิน)
+rust_decimal = { version = "1.36", features = ["serde-with-str"] }
+rust_decimal_macros = "1.36"
+
+# Validation
+validator = { version = "0.18", features = ["derive"] }
+
+# ---- M2: Auth (argon2 + JWT) ----
+argon2 = { version = "0.5", default-features = false, features = ["std"] }
+jsonwebtoken = "9"
+
+# ---- M1.5 / M2: JSON DB simulation ----
+# (no extra crate needed — uses tokio::fs + serde_json)
+
+# ---- M2: async helpers for single-flight + dedup ----
+once_cell = "1"
+
+# ---- M1: Infrastructure clients ----
+# SQL Server (deferred to M1.5 — see crates/infra/src/db/mssql.rs)
+# tiberius = { version = "0.12", default-features = false, features = ["chrono", "rust_decimal", "tokio", "tokio-rustls", "rustls"] }
+# bb8 = "0.8"
+# bb8-tiberius = "0.14"
+# (sql server adapters in the api worker use these directly via
+# the infra crate, not through the workspace deps above)
+
+# Redis
+redis = { version = "0.27", default-features = false, features = ["tokio-comp", "aio"] }
+deadpool-redis = "0.18"
+
+# In-process L1 cache
+moka = { version = "0.12", features = ["future"] }
+
+# NATS JetStream
+async-nats = "0.42"
+
+# MongoDB
+mongodb = "3.2"
+bson = { version = "2.13", features = ["chrono-0_4"] }
+
+# ---- M2/M3: Password verification needs a constant-time compare ----
+subtle = "2"
+
+# ---- Profile-specific ----
+[profile.dev]
+opt-level = 0
+debug = true
+incremental = false
+overflow-checks = true
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

@@ -1,0 +1,17 @@
+auth:
+  register_success: "สร้างบัญชีเรียบร้อย"
+  login_success: "เข้าสู่ระบบเรียบร้อย"
+  invalid_credentials: "อีเมลหรือรหัสผ่านไม่ถูกต้อง"
+  email_taken: "อีเมลนี้ถูกใช้แล้ว"
+order:
+  created: "สร้างงานเรียบร้อย"
+  status:
+    pending: "รอดำเนินการ"
+    active: "กำลังดำเนินการ"
+    completed: "งานเสร็จแล้ว"
+    closed: "ปิดงาน"
+    cancelled: "ยกเลิก"
+common:
+  not_found: "ไม่พบข้อมูล"
+  forbidden: "ไม่มีสิทธิ์เข้าถึง"
+  internal: "เกิดข้อผิดพลาดภายใน"

@@ -36,6 +36,9 @@ coverage/
 # AGENTS.md (project rule: NEVER push — Kokkeak-specific, internal)
 AGENTS.md
 
+# JSON-DB sim runtime state (M1.5+)
+data/
+
 # Plan docs (kept outside repo, in Desktop/KOKKAK_MIGRATION_PLAN/)
 /MIGRATION_PLAN/
 /DEVELOPMENT_PLAN*/
@@ -44,3 +47,5 @@ AGENTS.md
 *.bak
 *.tmp
 .DS_Store
+
+graphify-out

@@ -1,0 +1,981 @@
+//! Configuration loader (ตัวโหลดค่าตั้งค่า).
+//!
+//! Loads [`Settings`] from environment variables (prefix `KOKKAK_`,
+//! separator `__`) and validates them at startup. Process exits
+//! fast on misconfiguration (fail-fast principle).
+//!
+//! ## Environment variable convention
+//!
+//! ```text
+//! KOKKAK_<SECTION>__<KEY>=value
+//! ```
+//!
+//! Examples:
+//! - `KOKKAK_SERVER__ADDR=0.0.0.0:3000`
+//! - `KOKKAK_SERVER__WORKERS=4`
+//! - `KOKKAK_LOG__FORMAT=json`  (or `pretty`)
+//! - `KOKKAK_DATABASE__SQLSERVER_URL=sqlserver://...`
+//! - `KOKKAK_REDIS__URL=redis://host:6379`
+//! - `KOKKAK_NATS__URL=nats://host:4222`
+//! - `KOKKAK_MONGO__URL=mongodb://host:27017`
+//! - `KOKKAK_MONGO__DATABASE=kokkak`
+//! - `KOKKAK_DATA_DIR__PATH=./data/json_db`
+//! - `KOKKAK_AUTH__JWT_SECRET=...`
+
+use figment::providers::{Env, Format, Toml};
+use figment::Figment;
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+/// Errors when loading or validating configuration.
+#[derive(Debug, Error)]
+pub enum ConfigError {
+    /// Underlying figment provider error (missing/invalid env, parse error, etc.).
+    #[error("config provider error: {0}")]
+    Figment(#[from] Box<figment::Error>),
+
+    /// Semantically invalid value: a specific setting failed a post-load check.
+    #[error("invalid config: key={key}, {message}")]
+    Invalid { key: String, message: String },
+}
+
+impl From<figment::Error> for ConfigError {
+    fn from(err: figment::Error) -> Self {
+        Self::Figment(Box::new(err))
+    }
+}
+
+/// Top-level settings struct (โครงสร้างตั้งค่าระดับบนสุด).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Settings {
+    /// HTTP server settings (การตั้งค่า HTTP server).
+    #[serde(default)]
+    pub server: ServerSettings,
+
+    /// Logging settings (การตั้งค่า log).
+    #[serde(default)]
+    pub log: LogSettings,
+
+    /// SQL Server database settings (T06).
+    /// Empty by default; production MUST set `KOKKAK_DATABASE__SQLSERVER_URL`.
+    /// Acts as the **catch-all** for [`Settings::database_topology`].
+    #[serde(default)]
+    pub database: DatabaseSettings,
+
+    /// Multi-DB connection topology (M12). One pool per
+    /// [`DbRole`]. When a role's URL is empty it inherits from
+    /// the legacy [`Self::database`] field. See module-level
+    /// docs for the env-var contract.
+    #[serde(default)]
+    pub database_topology: DatabaseTopologySettings,
+
+    /// Redis cache + pub/sub settings (T07, T07A).
+    #[serde(default)]
+    pub redis: RedisSettings,
+
+    /// NATS JetStream queue settings (T08).
+    #[serde(default)]
+    pub nats: NatsSettings,
+
+    /// MongoDB settings (T09).
+    #[serde(default)]
+    pub mongo: MongoSettings,
+
+    /// JSON-DB simulation directory (M1.5 / M2 / M3).
+    #[serde(default)]
+    pub data_dir: DataDirSettings,
+
+    /// Auth / JWT settings (M2).
+    #[serde(default)]
+    pub auth: AuthSettings,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            server: ServerSettings::default(),
+            log: LogSettings::default(),
+            database: DatabaseSettings::default(),
+            database_topology: DatabaseTopologySettings::default(),
+            redis: RedisSettings::default(),
+            nats: NatsSettings::default(),
+            mongo: MongoSettings::default(),
+            data_dir: DataDirSettings::default(),
+            auth: AuthSettings::default(),
+        }
+    }
+}
+
+/// HTTP server settings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ServerSettings {
+    /// Bind address (e.g. `0.0.0.0:3000`).
+    #[serde(default = "default_addr")]
+    pub addr: String,
+
+    /// Number of Tokio worker threads (currently informational — `axum::serve`
+    /// runs on a single thread; multi-worker requires a process manager).
+    #[serde(default = "default_workers")]
+    pub workers: usize,
+}
+
+impl Default for ServerSettings {
+    fn default() -> Self {
+        Self {
+            addr: default_addr(),
+            workers: default_workers(),
+        }
+    }
+}
+
+/// Logging settings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LogSettings {
+    /// Output format for the structured logger.
+    #[serde(default = "default_log_format")]
+    pub format: LogFormat,
+}
+
+impl Default for LogSettings {
+    fn default() -> Self {
+        Self {
+            format: default_log_format(),
+        }
+    }
+}
+
+/// One slot in the multi-DB topology (M12).
+///
+/// Each role corresponds to a physical SQL Server database
+/// (`KOKKAK_MASTER`, `KOKKAK_CATALOG`, ...). Lives in the
+/// `config` module so the topology struct (which needs it)
+/// can live above `infra`. Adding a new role is a deliberate
+/// change: the compiler will guide every repository that needs
+/// updating via [`DatabaseTopologySettings::for_role`] / the
+/// matching `Mssql*Repository::new` calls.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum DbRole {
+    /// `KOKKAK_MASTER` — auth, user, RBAC, geo, config, bank, vat, commission, transport.
+    Master,
+    /// `KOKKAK_CATALOG` — services, categories, fees, warranties.
+    Catalog,
+    /// `KOKKAK_ORDER` — orders, bodies, stages, assignments, reviews, addons.
+    Order,
+    /// `KOKKAK_PAYMENT` — payments, statements, payouts.
+    Payment,
+    /// `KOKKAK_LOG` — audit, error log, login history.
+    Log,
+    /// `KOKKAK_REPORT` — read-only views for reports.
+    Report,
+    /// `KOKKAK_TEMP` — migration staging.
+    Temp,
+}
+
+impl DbRole {
+    /// Canonical env-var suffix: `KOKKAK_DATABASE__MASTER_URL`, etc.
+    pub const fn env_suffix(self) -> &'static str {
+        match self {
+            Self::Master => "MASTER_URL",
+            Self::Catalog => "CATALOG_URL",
+            Self::Order => "ORDER_URL",
+            Self::Payment => "PAYMENT_URL",
+            Self::Log => "LOG_URL",
+            Self::Report => "REPORT_URL",
+            Self::Temp => "TEMP_URL",
+        }
+    }
+
+    /// Stable string id (used in logs + health checks).
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Master => "master",
+            Self::Catalog => "catalog",
+            Self::Order => "order",
+            Self::Payment => "payment",
+            Self::Log => "log",
+            Self::Report => "report",
+            Self::Temp => "temp",
+        }
+    }
+
+    /// All roles, in stable iteration order.
+    pub const ALL: [DbRole; 7] = [
+        Self::Master,
+        Self::Catalog,
+        Self::Order,
+        Self::Payment,
+        Self::Log,
+        Self::Report,
+        Self::Temp,
+    ];
+}
+
+impl std::fmt::Display for DbRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// SQL Server database settings (T06).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DatabaseSettings {
+    /// Tiberius connection URL.
+    #[serde(default)]
+    pub sqlserver_url: String,
+
+    /// bb8 connection-pool max size (per instance). See AGENTS.md § 7.2.
+    #[serde(default = "default_db_pool_size")]
+    pub pool_size: u32,
+
+    /// Connection-acquisition timeout in seconds.
+    #[serde(default = "default_db_connect_timeout_secs")]
+    pub connect_timeout_secs: u64,
+
+    /// Path to SQL migration files (T09). Read by the migration runner.
+    #[serde(default = "default_migrations_dir")]
+    pub migrations_dir: String,
+}
+
+impl DatabaseSettings {
+    /// `true` when a real SQL Server URL has been configured.
+    pub fn is_configured(&self) -> bool {
+        !self.sqlserver_url.trim().is_empty() && self.sqlserver_url != "disabled"
+    }
+}
+
+impl Default for DatabaseSettings {
+    fn default() -> Self {
+        Self {
+            sqlserver_url: String::new(),
+            pool_size: default_db_pool_size(),
+            connect_timeout_secs: default_db_connect_timeout_secs(),
+            migrations_dir: default_migrations_dir(),
+        }
+    }
+}
+
+/// Convenience constructor used by tests and by
+/// [`crate::config::DatabaseTopologySettings::from_settings`].
+/// Lets the caller write `DatabaseSettings::from_url("Server=...")`
+/// without juggling four `Default` fields.
+impl DatabaseSettings {
+    /// Build a `DatabaseSettings` from a single connection URL,
+    /// using the default pool size / timeout / migrations dir.
+    ///
+    /// Recognised URL forms (forwarded verbatim to
+    /// `kokkak_infra::db::mssql::parse_connection_url`):
+    /// - ADO.NET: `Server=host;Database=db;User Id=u;Password=p`
+    /// - URL:     `mssql://user:pass@host:1433/db?encrypt=true`
+    /// - JDBC:    `jdbc:sqlserver://host:1433;database=db;...`
+    pub fn from_url(url: impl Into<String>) -> Self {
+        Self {
+            sqlserver_url: url.into(),
+            ..Self::default()
+        }
+    }
+}
+
+/// Multi-DB connection topology (M12).
+///
+/// Implements the per-role connection-strings defined in
+/// `AGENTS.md` § 7.1. Each role (`master`, `catalog`, `order`, ...)
+/// has its own [`DatabaseSettings`]. Roles whose URL is empty
+/// inherit from the `catch_all` slot, which itself is populated
+/// from the legacy [`Settings::database`] field at startup.
+///
+/// ## Env-var contract
+///
+/// ```text
+/// KOKKAK_DATABASE__SQLSERVER_URL          (legacy catch-all — still works)
+/// KOKKAK_DATABASE__CATCH_ALL_URL          (new — equivalent, takes precedence)
+/// KOKKAK_DATABASE__MASTER_URL             (per-role override)
+/// KOKKAK_DATABASE__CATALOG_URL            (per-role override)
+/// KOKKAK_DATABASE__ORDER_URL              (per-role override)
+/// KOKKAK_DATABASE__PAYMENT_URL            (per-role override)
+/// KOKKAK_DATABASE__LOG_URL                (per-role override)
+/// KOKKAK_DATABASE__REPORT_URL             (per-role override)
+/// KOKKAK_DATABASE__TEMP_URL               (per-role override)
+/// ```
+///
+/// The `Migrations` / `Pool size` / `Connect timeout` fields are
+/// per-role. If you set only the URL, defaults are used.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DatabaseTopologySettings {
+    /// Fallback URL used by every role that has no per-role URL.
+    /// Mirrors the legacy `Settings.database.sqlserver_url` for
+    /// backward compat.
+    #[serde(default)]
+    pub catch_all: DatabaseSettings,
+    /// `KOKKAK_MASTER` — auth, user, RBAC, geo, config, bank, vat, commission, transport.
+    #[serde(default)]
+    pub master: DatabaseSettings,
+    /// `KOKKAK_CATALOG` — services, categories, fees, warranties.
+    #[serde(default)]
+    pub catalog: DatabaseSettings,
+    /// `KOKKAK_ORDER` — orders, bodies, stages, assignments, reviews, addons.
+    #[serde(default)]
+    pub order: DatabaseSettings,
+    /// `KOKKAK_PAYMENT` — payments, statements, payouts.
+    #[serde(default)]
+    pub payment: DatabaseSettings,
+    /// `KOKKAK_LOG` — audit, error log, login history.
+    #[serde(default)]
+    pub log: DatabaseSettings,
+    /// `KOKKAK_REPORT` — read-only views for reports.
+    #[serde(default)]
+    pub report: DatabaseSettings,
+    /// `KOKKAK_TEMP` — migration staging.
+    #[serde(default)]
+    pub temp: DatabaseSettings,
+}
+
+impl Default for DatabaseTopologySettings {
+    fn default() -> Self {
+        Self {
+            catch_all: DatabaseSettings::default(),
+            master: DatabaseSettings::default(),
+            catalog: DatabaseSettings::default(),
+            order: DatabaseSettings::default(),
+            payment: DatabaseSettings::default(),
+            log: DatabaseSettings::default(),
+            report: DatabaseSettings::default(),
+            temp: DatabaseSettings::default(),
+        }
+    }
+}
+
+impl DatabaseTopologySettings {
+    /// Synthesise a topology from the top-level [`Settings`].
+    ///
+    /// For each role:
+    /// 1. If the per-role `sqlserver_url` is set, use it.
+    /// 2. Otherwise, if the top-level `database.sqlserver_url` is
+    ///    set, inherit it (preserving M10 behaviour).
+    /// 3. Otherwise, the role is unconfigured.
+    ///
+    /// Per-role `pool_size` / `connect_timeout_secs` /
+    /// `migrations_dir` follow the same precedence: per-role
+    /// > catch-all > default.
+    pub fn from_settings(s: &Settings) -> Self {
+        let mut out = Self::default();
+        out.catch_all = s.database.clone();
+        for role in crate::config::DbRole::ALL {
+            let per_role = s.database_topology.settings_for(role);
+            let merged = merge_with_fallback(per_role, &s.database);
+            *out.slot_mut(role) = merged;
+        }
+        out
+    }
+
+    /// Borrow the settings for a role, with the catch-all fallback
+    /// applied. **Returns the slot itself, not the merged value** —
+    /// use this when the caller already knows the role is
+    /// configured and wants to inspect its own URL.
+    pub fn slot(&self, role: crate::config::DbRole) -> &DatabaseSettings {
+        match role {
+            crate::config::DbRole::Master => &self.master,
+            crate::config::DbRole::Catalog => &self.catalog,
+            crate::config::DbRole::Order => &self.order,
+            crate::config::DbRole::Payment => &self.payment,
+            crate::config::DbRole::Log => &self.log,
+            crate::config::DbRole::Report => &self.report,
+            crate::config::DbRole::Temp => &self.temp,
+        }
+    }
+
+    /// Mutable accessor — see [`Self::slot`].
+    pub fn slot_mut(&mut self, role: crate::config::DbRole) -> &mut DatabaseSettings {
+        match role {
+            crate::config::DbRole::Master => &mut self.master,
+            crate::config::DbRole::Catalog => &mut self.catalog,
+            crate::config::DbRole::Order => &mut self.order,
+            crate::config::DbRole::Payment => &mut self.payment,
+            crate::config::DbRole::Log => &mut self.log,
+            crate::config::DbRole::Report => &mut self.report,
+            crate::config::DbRole::Temp => &mut self.temp,
+        }
+    }
+
+    /// Effective `DatabaseSettings` for a role: per-role slot,
+    /// filled in with the catch-all values wherever the per-role
+    /// slot is empty. This is what the topology builder feeds to
+    /// `tiberius`.
+    pub fn for_role(&self, role: crate::config::DbRole) -> DatabaseSettings {
+        let slot = self.slot(role);
+        if !slot.sqlserver_url.trim().is_empty() {
+            return slot.clone();
+        }
+        // Per-role URL empty: inherit the catch-all.
+        if !self.catch_all.sqlserver_url.trim().is_empty() {
+            // Use the catch-all URL; keep the per-role pool size
+            // override if the operator set one.
+            let mut out = self.catch_all.clone();
+            if slot.pool_size != default_db_pool_size() {
+                out.pool_size = slot.pool_size;
+            }
+            if slot.connect_timeout_secs != default_db_connect_timeout_secs() {
+                out.connect_timeout_secs = slot.connect_timeout_secs;
+            }
+            if slot.migrations_dir != default_migrations_dir() {
+                out.migrations_dir = slot.migrations_dir.clone();
+            }
+            return out;
+        }
+        slot.clone()
+    }
+
+    /// Private helper for `from_settings`: read the per-role slot
+    /// from a `Settings.database_topology` instance.
+    fn settings_for(&self, role: crate::config::DbRole) -> &DatabaseSettings {
+        self.slot(role)
+    }
+}
+
+/// Merge a per-role slot with the legacy catch-all. The per-role
+/// slot wins wherever it has been explicitly set. This is the
+/// serde-level version of [`DatabaseTopologySettings::for_role`].
+fn merge_with_fallback(
+    per_role: &DatabaseSettings,
+    catch_all: &DatabaseSettings,
+) -> DatabaseSettings {
+    let mut out = catch_all.clone();
+    if !per_role.sqlserver_url.trim().is_empty() {
+        out.sqlserver_url = per_role.sqlserver_url.clone();
+    }
+    if per_role.pool_size != default_db_pool_size() {
+        out.pool_size = per_role.pool_size;
+    }
+    if per_role.connect_timeout_secs != default_db_connect_timeout_secs() {
+        out.connect_timeout_secs = per_role.connect_timeout_secs;
+    }
+    if per_role.migrations_dir != default_migrations_dir() {
+        out.migrations_dir = per_role.migrations_dir.clone();
+    }
+    out
+}
+
+/// Redis cache + pub/sub settings (T07, T07A).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RedisSettings {
+    /// Redis connection URL.
+    #[serde(default = "default_redis_url")]
+    pub url: String,
+
+    /// deadpool-redis max pool size.
+    #[serde(default = "default_redis_pool_size")]
+    pub pool_size: usize,
+}
+
+impl RedisSettings {
+    pub fn is_configured(&self) -> bool {
+        !self.url.trim().is_empty() && self.url != "redis://disabled"
+    }
+}
+
+impl Default for RedisSettings {
+    fn default() -> Self {
+        Self {
+            url: default_redis_url(),
+            pool_size: default_redis_pool_size(),
+        }
+    }
+}
+
+/// NATS JetStream settings (T08).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NatsSettings {
+    /// NATS connection URL.
+    #[serde(default = "default_nats_url")]
+    pub url: String,
+
+    /// Prefix prepended to every stream / subject name.
+    #[serde(default = "default_nats_prefix")]
+    pub stream_prefix: String,
+}
+
+impl NatsSettings {
+    pub fn is_configured(&self) -> bool {
+        !self.url.trim().is_empty() && self.url != "nats://disabled"
+    }
+}
+
+impl Default for NatsSettings {
+    fn default() -> Self {
+        Self {
+            url: default_nats_url(),
+            stream_prefix: default_nats_prefix(),
+        }
+    }
+}
+
+/// MongoDB settings (T09).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MongoSettings {
+    #[serde(default = "default_mongo_url")]
+    pub url: String,
+
+    #[serde(default = "default_mongo_db")]
+    pub database: String,
+}
+
+impl MongoSettings {
+    pub fn is_configured(&self) -> bool {
+        !self.url.trim().is_empty() && self.url != "mongodb://disabled"
+    }
+}
+
+impl Default for MongoSettings {
+    fn default() -> Self {
+        Self {
+            url: default_mongo_url(),
+            database: default_mongo_db(),
+        }
+    }
+}
+
+/// JSON-DB simulation directory (M1.5 / M2 / M3).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DataDirSettings {
+    /// Directory where JSON-DB stores its files. Created if missing.
+    #[serde(default = "default_data_dir_path")]
+    pub path: String,
+    /// Delete the data dir on startup (dev convenience).
+    #[serde(default)]
+    pub reset_on_startup: bool,
+}
+
+impl Default for DataDirSettings {
+    fn default() -> Self {
+        Self {
+            path: default_data_dir_path(),
+            reset_on_startup: false,
+        }
+    }
+}
+
+/// Auth / JWT settings (M2).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuthSettings {
+    /// HS256 secret. Required in prod; empty = dev / JSON-DB mode.
+    #[serde(default)]
+    pub jwt_secret: String,
+    /// Issuer claim (`iss`).
+    #[serde(default = "default_auth_issuer")]
+    pub issuer: String,
+    /// Access-token TTL in seconds.
+    #[serde(default = "default_access_ttl")]
+    pub access_ttl_secs: i64,
+    /// Refresh-token TTL in seconds.
+    #[serde(default = "default_refresh_ttl")]
+    pub refresh_ttl_secs: i64,
+}
+
+impl Default for AuthSettings {
+    fn default() -> Self {
+        Self {
+            jwt_secret: String::new(),
+            issuer: default_auth_issuer(),
+            access_ttl_secs: default_access_ttl(),
+            refresh_ttl_secs: default_refresh_ttl(),
+        }
+    }
+}
+
+impl AuthSettings {
+    /// `true` iff a non-empty JWT secret is configured.
+    pub fn is_configured(&self) -> bool {
+        !self.jwt_secret.is_empty()
+    }
+}
+
+/// Output format for the structured logger.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum LogFormat {
+    /// Newline-delimited JSON (for log aggregators).
+    Json,
+    /// Human-readable pretty format (for local dev).
+    Pretty,
+}
+
+fn default_addr() -> String {
+    "0.0.0.0:3000".into()
+}
+fn default_workers() -> usize {
+    4
+}
+fn default_log_format() -> LogFormat {
+    LogFormat::Pretty
+}
+fn default_db_pool_size() -> u32 {
+    20
+}
+fn default_db_connect_timeout_secs() -> u64 {
+    5
+}
+fn default_migrations_dir() -> String {
+    "migrations".into()
+}
+fn default_redis_url() -> String {
+    "redis://disabled".into()
+}
+fn default_redis_pool_size() -> usize {
+    16
+}
+fn default_nats_url() -> String {
+    "nats://disabled".into()
+}
+fn default_nats_prefix() -> String {
+    "kokkak".into()
+}
+fn default_mongo_url() -> String {
+    "mongodb://disabled".into()
+}
+fn default_mongo_db() -> String {
+    "kokkak".into()
+}
+fn default_data_dir_path() -> String {
+    "./data/json_db".into()
+}
+fn default_auth_issuer() -> String {
+    "kokkak-api".into()
+}
+fn default_access_ttl() -> i64 {
+    900
+}
+fn default_refresh_ttl() -> i64 {
+    2_592_000
+}
+
+impl Settings {
+    /// Load from environment variables. Fails fast on errors.
+    pub fn load() -> Result<Self, ConfigError> {
+        let figment = Figment::new()
+            .merge(Toml::file("config.toml").nested())
+            .merge(Env::prefixed("KOKKAK_").split("__"));
+        let settings: Settings = figment.extract()?;
+        settings.validate()?;
+        Ok(settings)
+    }
+
+    /// Validate the loaded settings.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.server.addr.trim().is_empty() {
+            return Err(ConfigError::Invalid {
+                key: "KOKKAK_SERVER__ADDR".into(),
+                message: "must not be empty".into(),
+            });
+        }
+        if self.server.workers == 0 {
+            return Err(ConfigError::Invalid {
+                key: "KOKKAK_SERVER__WORKERS".into(),
+                message: "must be >= 1".into(),
+            });
+        }
+        if self.database.pool_size == 0 {
+            return Err(ConfigError::Invalid {
+                key: "KOKKAK_DATABASE__POOL_SIZE".into(),
+                message: "must be >= 1".into(),
+            });
+        }
+        if self.database.connect_timeout_secs == 0 {
+            return Err(ConfigError::Invalid {
+                key: "KOKKAK_DATABASE__CONNECT_TIMEOUT_SECS".into(),
+                message: "must be >= 1".into(),
+            });
+        }
+        // M12: also check the per-role slots in the topology.
+        // They use the same defaults as `database` so a zero
+        // here is a misconfiguration regardless of whether the
+        // URL itself is set.
+        for role in DbRole::ALL {
+            let s = self.database_topology.slot(role);
+            if s.pool_size == 0 {
+                return Err(ConfigError::Invalid {
+                    key: format!("KOKKAK_DATABASE__{}__POOL_SIZE", role.env_suffix()),
+                    message: "must be >= 1".into(),
+                });
+            }
+            if s.connect_timeout_secs == 0 {
+                return Err(ConfigError::Invalid {
+                    key: format!(
+                        "KOKKAK_DATABASE__{}__CONNECT_TIMEOUT_SECS",
+                        role.env_suffix()
+                    ),
+                    message: "must be >= 1".into(),
+                });
+            }
+        }
+        if self.redis.pool_size == 0 {
+            return Err(ConfigError::Invalid {
+                key: "KOKKAK_REDIS__POOL_SIZE".into(),
+                message: "must be >= 1".into(),
+            });
+        }
+        if self.nats.stream_prefix.trim().is_empty() {
+            return Err(ConfigError::Invalid {
+                key: "KOKKAK_NATS__STREAM_PREFIX".into(),
+                message: "must not be empty".into(),
+            });
+        }
+        if self.mongo.database.trim().is_empty() {
+            return Err(ConfigError::Invalid {
+                key: "KOKKAK_MONGO__DATABASE".into(),
+                message: "must not be empty".into(),
+            });
+        }
+        if self.data_dir.path.trim().is_empty() {
+            return Err(ConfigError::Invalid {
+                key: "KOKKAK_DATA_DIR__PATH".into(),
+                message: "must not be empty".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    /// Tests that touch env vars must hold this lock.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn clear_kokkak_env() {
+        for key in [
+            "KOKKAK_SERVER__ADDR",
+            "KOKKAK_SERVER__WORKERS",
+            "KOKKAK_LOG__FORMAT",
+            "KOKKAK_DATABASE__SQLSERVER_URL",
+            "KOKKAK_DATABASE__POOL_SIZE",
+            "KOKKAK_DATABASE__CONNECT_TIMEOUT_SECS",
+            "KOKKAK_DATABASE__MIGRATIONS_DIR",
+            "KOKKAK_DATABASE__CATCH_ALL_URL",
+            "KOKKAK_DATABASE__MASTER_URL",
+            "KOKKAK_DATABASE__CATALOG_URL",
+            "KOKKAK_DATABASE__ORDER_URL",
+            "KOKKAK_DATABASE__PAYMENT_URL",
+            "KOKKAK_DATABASE__LOG_URL",
+            "KOKKAK_DATABASE__REPORT_URL",
+            "KOKKAK_DATABASE__TEMP_URL",
+            "KOKKAK_REDIS__URL",
+            "KOKKAK_REDIS__POOL_SIZE",
+            "KOKKAK_NATS__URL",
+            "KOKKAK_NATS__STREAM_PREFIX",
+            "KOKKAK_MONGO__URL",
+            "KOKKAK_MONGO__DATABASE",
+            "KOKKAK_DATA_DIR__PATH",
+            "KOKKAK_AUTH__JWT_SECRET",
+            "KOKKAK_AUTH__ISSUER",
+            "KOKKAK_AUTH__ACCESS_TTL_SECS",
+            "KOKKAK_AUTH__REFRESH_TTL_SECS",
+        ] {
+            std::env::remove_var(key);
+        }
+    }
+
+    #[test]
+    fn default_settings_validate() {
+        let s = Settings::default();
+        assert_eq!(s.server.addr, "0.0.0.0:3000");
+        assert_eq!(s.server.workers, 4);
+        assert_eq!(s.log.format, LogFormat::Pretty);
+        assert!(!s.database.is_configured());
+        assert!(!s.redis.is_configured());
+        assert!(!s.nats.is_configured());
+        assert!(!s.mongo.is_configured());
+        assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn load_with_no_env_uses_defaults() {
+        let _guard = ENV_LOCK.lock().expect("mutex poisoned");
+        clear_kokkak_env();
+
+        let s = Settings::load().expect("load should succeed with defaults");
+        assert_eq!(s.server.addr, "0.0.0.0:3000");
+        assert_eq!(s.server.workers, 4);
+        assert_eq!(s.log.format, LogFormat::Pretty);
+        assert_eq!(s.database.pool_size, 20);
+        assert_eq!(s.redis.pool_size, 16);
+        assert_eq!(s.nats.stream_prefix, "kokkak");
+        assert_eq!(s.mongo.database, "kokkak");
+    }
+
+    #[test]
+    fn load_from_env_overrides() {
+        let _guard = ENV_LOCK.lock().expect("mutex poisoned");
+        clear_kokkak_env();
+
+        std::env::set_var("KOKKAK_SERVER__ADDR", "127.0.0.1:9999");
+        std::env::set_var("KOKKAK_SERVER__WORKERS", "8");
+        std::env::set_var("KOKKAK_LOG__FORMAT", "json");
+        std::env::set_var(
+            "KOKKAK_DATABASE__SQLSERVER_URL",
+            "sqlserver://sa:secret@db:1433/M",
+        );
+        std::env::set_var("KOKKAK_DATABASE__POOL_SIZE", "50");
+        std::env::set_var("KOKKAK_REDIS__URL", "redis://redis:6379");
+        std::env::set_var("KOKKAK_NATS__URL", "nats://nats:4222");
+        std::env::set_var("KOKKAK_NATS__STREAM_PREFIX", "kokkak.staging");
+        std::env::set_var("KOKKAK_MONGO__URL", "mongodb://mongo:27017");
+        std::env::set_var("KOKKAK_MONGO__DATABASE", "kokkak_staging");
+        std::env::set_var("KOKKAK_DATA_DIR__PATH", "/tmp/kokkak");
+        std::env::set_var("KOKKAK_AUTH__JWT_SECRET", "dev-secret");
+        std::env::set_var("KOKKAK_AUTH__ACCESS_TTL_SECS", "300");
+
+        let s = Settings::load().expect("load should succeed");
+        assert_eq!(s.server.addr, "127.0.0.1:9999");
+        assert_eq!(s.server.workers, 8);
+        assert_eq!(s.log.format, LogFormat::Json);
+        assert_eq!(s.database.sqlserver_url, "sqlserver://sa:secret@db:1433/M");
+        assert_eq!(s.database.pool_size, 50);
+        assert!(s.database.is_configured());
+        assert_eq!(s.redis.url, "redis://redis:6379");
+        assert!(s.redis.is_configured());
+        assert_eq!(s.nats.url, "nats://nats:4222");
+        assert_eq!(s.nats.stream_prefix, "kokkak.staging");
+        assert!(s.nats.is_configured());
+        assert_eq!(s.mongo.url, "mongodb://mongo:27017");
+        assert_eq!(s.mongo.database, "kokkak_staging");
+        assert!(s.mongo.is_configured());
+        assert_eq!(s.data_dir.path, "/tmp/kokkak");
+        assert!(s.auth.is_configured());
+        assert_eq!(s.auth.access_ttl_secs, 300);
+
+        clear_kokkak_env();
+    }
+
+    #[test]
+    fn invalid_log_format_fails() {
+        let _guard = ENV_LOCK.lock().expect("mutex poisoned");
+        clear_kokkak_env();
+        std::env::set_var("KOKKAK_LOG__FORMAT", "xml");
+
+        let result = Settings::load();
+        assert!(result.is_err(), "invalid format should fail to parse");
+    }
+
+    #[test]
+    fn empty_addr_fails_validation() {
+        let s = Settings {
+            server: ServerSettings {
+                addr: "".into(),
+                workers: 4,
+            },
+            ..Settings::default()
+        };
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn whitespace_only_addr_fails_validation() {
+        let s = Settings {
+            server: ServerSettings {
+                addr: "   ".into(),
+                workers: 4,
+            },
+            ..Settings::default()
+        };
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn zero_workers_fails_validation() {
+        let s = Settings {
+            server: ServerSettings {
+                addr: "0.0.0.0:3000".into(),
+                workers: 0,
+            },
+            ..Settings::default()
+        };
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn zero_db_pool_size_fails_validation() {
+        let s = Settings {
+            database: DatabaseSettings {
+                pool_size: 0,
+                ..DatabaseSettings::default()
+            },
+            ..Settings::default()
+        };
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn zero_redis_pool_size_fails_validation() {
+        let s = Settings {
+            redis: RedisSettings {
+                pool_size: 0,
+                ..RedisSettings::default()
+            },
+            ..Settings::default()
+        };
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn empty_nats_prefix_fails_validation() {
+        let s = Settings {
+            nats: NatsSettings {
+                stream_prefix: "".into(),
+                ..NatsSettings::default()
+            },
+            ..Settings::default()
+        };
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn empty_mongo_database_fails_validation() {
+        let s = Settings {
+            mongo: MongoSettings {
+                database: "".into(),
+                ..MongoSettings::default()
+            },
+            ..Settings::default()
+        };
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn empty_data_dir_fails_validation() {
+        let s = Settings {
+            data_dir: DataDirSettings {
+                path: "".into(),
+                ..DataDirSettings::default()
+            },
+            ..Settings::default()
+        };
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn log_format_parses_both_variants() {
+        let json: LogFormat = serde_json::from_str("\"json\"").unwrap();
+        let pretty: LogFormat = serde_json::from_str("\"pretty\"").unwrap();
+        assert_eq!(json, LogFormat::Json);
+        assert_eq!(pretty, LogFormat::Pretty);
+    }
+
+    #[test]
+    fn is_configured_treats_placeholder_url_as_unset() {
+        let s = Settings::default();
+        assert!(!s.database.is_configured());
+        assert!(!s.redis.is_configured());
+        assert!(!s.nats.is_configured());
+        assert!(!s.mongo.is_configured());
+    }
+
+    #[test]
+    fn auth_default_is_unconfigured() {
+        let a = AuthSettings::default();
+        assert!(!a.is_configured());
+        assert_eq!(a.issuer, "kokkak-api");
+        assert_eq!(a.access_ttl_secs, 900);
+        assert_eq!(a.refresh_ttl_secs, 2_592_000);
+    }
+}

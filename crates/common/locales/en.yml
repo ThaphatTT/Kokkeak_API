@@ -1,0 +1,77 @@
+# English locale (default fallback).
+#
+# Conventions:
+#   - Top-level group = feature area (err, chat, order, ...)
+#   - Variant label uses {0}, {1}, ... positional placeholders
+#     that the runtime substitutes with `tr(key, args)` arguments.
+#   - All keys consumed by the API must appear in all three locale
+#     files; missing keys fall back to this English file at runtime.
+
+# -- generic error envelope --
+err:
+  bad_request: "bad request: {0}"
+  unauthorized: "unauthorized"
+  forbidden: "forbidden: {0}"
+  not_found: "not found: {0}"
+  conflict: "conflict: {0}"
+  validation: "validation: {0}"
+  rate_limited: "rate limited"
+  internal: "internal: {0}"
+
+# -- AuthError / auth handlers --
+err_auth:
+  invalid_credentials: "invalid credentials"
+  token_expired: "token expired"
+  invalid_token: "invalid token: {0}"
+  forbidden: "forbidden: {0}"
+  username_taken: "username already in use"
+  validation: "validation: {0}"
+  backend: "auth backend error: {0}"
+  missing_header: "missing or invalid Authorization header"
+  not_access_token: "not an access token"
+  role_required: "role required: {0}"
+  admin_required: "admin required"
+  user_not_found: "user not found: {0}"
+
+# -- RepoError (generic; used by all repos) --
+err_repo:
+  not_found: "not found: {0}"
+  conflict: "conflict: {0}"
+  backend: "backend error: {0}"
+
+# -- ChatError + ChatRepoError --
+err_chat:
+  not_participant: "not a participant of room {0}"
+  room_not_found: "room {0} not found"
+  invalid_body: "invalid body: {0}"
+  backend: "chat backend error: {0}"
+  not_participant_msg: "not a participant of this room"
+  membership_check_failed: "membership check failed: {0}"
+  bad_other_role: "other_role must be one of: customer, technician, admin"
+
+err_chat_repo:
+  not_found: "not found: {0}"
+  backend: "chat backend error: {0}"
+
+# -- PaymentError + PaymentRepoError --
+err_payment:
+  order_not_payable: "order {0} is not payable (status mismatch)"
+  not_found: "payment {0} not found"
+  not_found_msg: "payment not found"
+  invalid_amount: "invalid amount: {0}"
+  backend: "payment backend error: {0}"
+  bad_amount: "amount must be a decimal string"
+  not_yours: "not your payment"
+  unknown_payout_status: "unknown payout status: {0}"
+
+err_payment_repo:
+  not_found: "not found: {0}"
+  backend: "payment backend error: {0}"
+
+# -- Order handlers --
+err_order:
+  invalid_total: "invalid total"
+
+# -- Generic request validation --
+err_request:
+  bad_timestamp: "after must be an RFC3339 timestamp"

@@ -1,0 +1,67 @@
+[package]
+name = "kokkak-infra"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Adapters: tiberius (SQL Server), mongodb, redis, nats, fcm, S3"
+
+[dependencies]
+# Internal
+kokkak-common = { path = "../common" }
+kokkak-domain = { path = "../domain" }
+kokkak-application = { path = "../application" }
+
+# Async
+tokio = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+
+# Errors / serde
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Logging / metrics
+tracing = { workspace = true }
+metrics = { workspace = true }
+
+# Time / UUID / decimal
+chrono = { workspace = true }
+uuid = { workspace = true }
+rust_decimal = { workspace = true }
+
+# ---- M1: Infrastructure clients ----
+# SQL Server (tiberius) + connection pool (bb8) — wired in M5
+tiberius = { version = "0.12", default-features = false, features = ["chrono", "rust_decimal", "tokio", "tokio-rustls", "rustls"] }
+bb8 = "0.8"
+bb8-tiberius = "0.14"
+
+# Redis client + pool
+redis = { workspace = true }
+deadpool-redis = { workspace = true }
+
+# In-process L1 cache
+moka = { workspace = true }
+once_cell = { workspace = true }
+
+# NATS JetStream
+async-nats = { workspace = true }
+bytes = "1"
+
+# MongoDB
+mongodb = { workspace = true }
+bson = { workspace = true }
+
+# ---- M2: Auth (argon2 + JWT) ----
+argon2 = { workspace = true }
+jsonwebtoken = { workspace = true }
+subtle = { workspace = true }
+
+# ---- M8: Chat pub/sub + S3 sha256 + S3 client ----
+sha2 = "0.10"
+rust-s3 = { version = "0.33", default-features = false, features = ["tokio-rustls-tls"] }
+
+# ---- M1.5 / M2: JSON DB simulation ----
+# No extra crate; uses tokio::fs + serde_json above.

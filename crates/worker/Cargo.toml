@@ -1,0 +1,57 @@
+[package]
+name = "kokkak-worker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "NATS consumer — background jobs (push, email, pdf, points, dispatch)"
+
+[[bin]]
+name = "kokkak-worker"
+path = "src/main.rs"
+
+[dependencies]
+# Internal crates — the worker invokes application use cases + reads
+# domain entities, the same way the API server does.
+kokkak-common = { path = "../common" }
+kokkak-domain = { path = "../domain" }
+kokkak-application = { path = "../application" }
+kokkak-infra = { path = "../infra" }
+
+# Core
+tokio = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+
+# Errors / serde
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Time / UUID
+chrono = { workspace = true }
+uuid = { workspace = true }
+
+# Telemetry
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
+metrics = { workspace = true }
+
+# NATS
+async-nats = { workspace = true }
+bytes = "1"
+
+# Used for idempotency cache (optional — falls back to in-memory when
+# Redis is unconfigured).
+redis = { workspace = true }
+deadpool-redis = { workspace = true }
+
+# MongoDB (for chat.persist handler)
+mongodb = { workspace = true }
+bson = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
+uuid = { workspace = true }
+serde_json = { workspace = true }
