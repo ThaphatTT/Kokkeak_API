@@ -59,19 +59,63 @@ impl CatalogService {
 mod tests {
     use super::*;
     use chrono::Utc;
-    use kokkak_infra::db::json_catalog::JsonServiceRepository;
+    use kokkak_domain::Cursor;
     use rust_decimal::Decimal;
-    use std::path::PathBuf;
+    use std::collections::HashMap;
     use std::str::FromStr;
     use uuid::Uuid;
 
-    fn svc_path() -> PathBuf {
-        let p = std::env::temp_dir()
-            .join("kokkak_catalog_test")
-            .join(format!("c-{}.json", Uuid::new_v4()));
-        let _ = std::fs::create_dir_all(p.parent().unwrap());
-        let _ = std::fs::remove_file(&p);
-        p
+    /// In-memory mock of [`ServiceRepository`] for unit tests.
+    ///
+    /// ponytail: HashMap-backed, no async runtime — just enough for the
+    /// pagination + insert tests in this file. Ceiling: doesn't model the
+    /// `active=false` filter exhaustively (we always insert active
+    /// samples); extend the predicate when a future test needs it.
+    #[derive(Default)]
+    struct MockServiceRepository {
+        by_id: std::sync::Mutex<HashMap<Uuid, ServiceCategory>>,
+        by_code: std::sync::Mutex<HashMap<String, Uuid>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ServiceRepository for MockServiceRepository {
+        async fn find_by_id(&self, id: Uuid) -> Result<Option<ServiceCategory>, RepoError> {
+            Ok(self.by_id.lock().unwrap().get(&id).cloned())
+        }
+        async fn find_by_code(&self, code: &str) -> Result<Option<ServiceCategory>, RepoError> {
+            let by_code = self.by_code.lock().unwrap();
+            let by_id = self.by_id.lock().unwrap();
+            Ok(by_code.get(code).and_then(|id| by_id.get(id).cloned()))
+        }
+        async fn list_active(
+            &self,
+            after: Option<Cursor>,
+            limit: u32,
+        ) -> Result<Vec<ServiceCategory>, RepoError> {
+            let by_id = self.by_id.lock().unwrap();
+            let mut items: Vec<ServiceCategory> =
+                by_id.values().filter(|s| s.active).cloned().collect();
+            items.sort_by_key(|i| i.sort_order);
+            if let Some(cursor) = after {
+                if let Ok(payload) = cursor.decode::<serde_json::Value>() {
+                    if let Some(n) = payload.get("after_sort").and_then(|v| v.as_i64()) {
+                        items.retain(|i| (i.sort_order as i64) > n);
+                    }
+                }
+            }
+            items.truncate(limit as usize);
+            Ok(items)
+        }
+        async fn insert(&self, service: &ServiceCategory) -> Result<(), RepoError> {
+            let mut by_id = self.by_id.lock().unwrap();
+            let mut by_code = self.by_code.lock().unwrap();
+            if by_code.contains_key(&service.code) {
+                return Err(RepoError::Conflict(format!("code {} taken", service.code)));
+            }
+            by_code.insert(service.code.clone(), service.id);
+            by_id.insert(service.id, service.clone());
+            Ok(())
+        }
     }
 
     fn sample(code: &str, sort: i32) -> ServiceCategory {
@@ -89,11 +133,11 @@ mod tests {
 
     #[tokio::test]
     async fn list_active_with_pagination() {
-        let repo = JsonServiceRepository::open(svc_path()).await.unwrap();
+        let repo: Arc<dyn ServiceRepository> = Arc::new(MockServiceRepository::default());
         repo.insert(&sample("a", 10)).await.unwrap();
         repo.insert(&sample("b", 20)).await.unwrap();
         repo.insert(&sample("c", 30)).await.unwrap();
-        let svc = CatalogService::new(Arc::new(repo));
+        let svc = CatalogService::new(repo);
         let page = svc.list_active(None, 2).await.unwrap();
         assert_eq!(page.items.len(), 2);
         assert!(page.next_cursor.is_some());

@@ -187,40 +187,30 @@ impl AppState {
     }
 
     /// Backwards-compat: a state without chat / payments.
+    /// M14.5: removed JSON-DB sim. `legacy()` now requires the caller
+    /// to pass chat + payments already built against MSSQL.
     #[allow(clippy::too_many_arguments)]
     pub fn legacy(
         auth: Arc<AuthService>,
         user: Arc<UserService>,
         catalog: Arc<CatalogService>,
         orders: Arc<OrderService>,
+        chat: Arc<ChatService>,
+        payments: Arc<PaymentService>,
         jwt: Arc<JwtService>,
         health: HealthRegistry,
         translation: Arc<dyn TranslationRepository>,
     ) -> Self {
-        let transport: Arc<dyn ChatTransport> = Arc::new(BroadcastTransport::default());
-        let repo: Arc<dyn ChatRepository> = Arc::new(
-            kokkak_infra::db::json_chat::JsonChatRepository::open_in_memory()
-                .unwrap_or_else(|_| panic!("in-memory chat always works")),
-        );
-        let chat_svc = Arc::new(ChatService::new(repo, transport));
-        let chat = ChatHandle {
-            service: chat_svc,
+        let chat_handle = ChatHandle {
+            service: chat,
             local: Arc::new(BroadcastTransport::default()),
         };
-        let orders_for_payments = orders.clone();
-        let payments = Arc::new(PaymentService::new(
-            Arc::new(
-                kokkak_infra::db::json_payment::JsonPaymentRepository::open_in_memory()
-                    .expect("in-memory payment always works"),
-            ),
-            orders_for_payments.orders_repo(),
-        ));
         Self {
             auth,
             user: user.clone(),
             catalog,
             orders,
-            chat,
+            chat: chat_handle,
             payments,
             jwt,
             health,

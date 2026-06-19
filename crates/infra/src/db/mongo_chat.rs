@@ -209,7 +209,10 @@ impl ChatRepository for MongoChatRepository {
         if want.len() < 2 {
             return Ok(None);
         }
-        let uids: Vec<bson::Bson> = want.iter().map(|u| bson::Bson::String(u.to_string())).collect();
+        let uids: Vec<bson::Bson> = want
+            .iter()
+            .map(|u| bson::Bson::String(u.to_string()))
+            .collect();
         // Find any room that contains all of these user_ids.
         let mut cur = self
             .rooms
@@ -291,11 +294,11 @@ impl ChatRepository for MongoChatRepository {
                 "sender_id": { "$ne": user_id.to_string() },
                 "read_by.user_id": { "$ne": user_id.to_string() },
             };
-            let unread = self
-                .messages
-                .count_documents(unread_filter)
-                .await
-                .map_err(|e| ChatRepoError::Backend(e.to_string()))? as u32;
+            let unread =
+                self.messages
+                    .count_documents(unread_filter)
+                    .await
+                    .map_err(|e| ChatRepoError::Backend(e.to_string()))? as u32;
             out.push(RoomSummary {
                 room,
                 last_message: last,

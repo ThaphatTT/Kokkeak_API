@@ -27,7 +27,11 @@ impl Handler for CommEmailHandler {
     async fn handle(&self, message_id: &str, payload: &[u8]) -> Result<(), HandlerError> {
         let body = std::str::from_utf8(payload)
             .map_err(|e| HandlerError::Failed(format!("non-utf8 payload: {e}")))?;
-        info!(message_id, body = body, "comm.email (stub) — would call SMTP");
+        info!(
+            message_id,
+            body = body,
+            "comm.email (stub) — would call SMTP"
+        );
         Ok(())
     }
 }

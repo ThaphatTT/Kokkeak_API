@@ -197,10 +197,58 @@ pub trait JwtIssuerPort: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// In-memory mock of UserRepository for unit tests.
+    /// Stores users in a HashMap; collision on username returns Conflict.
+    #[derive(Default)]
+    struct MockUserRepository {
+        by_id: std::sync::Mutex<std::collections::HashMap<uuid::Uuid, User>>,
+        by_username: std::sync::Mutex<std::collections::HashMap<String, Uuid>>,
+    }
+
+    #[async_trait::async_trait]
+    impl UserRepository for MockUserRepository {
+        async fn find_by_id(&self, id: Uuid) -> Result<Option<User>, kokkak_domain::RepoError> {
+            Ok(self.by_id.lock().unwrap().get(&id).cloned())
+        }
+        async fn find_by_username(
+            &self,
+            username: &str,
+        ) -> Result<Option<User>, kokkak_domain::RepoError> {
+            let key = username.trim().to_lowercase();
+            let by_un = self.by_username.lock().unwrap();
+            let by_id = self.by_id.lock().unwrap();
+            Ok(by_un.get(&key).and_then(|id| by_id.get(id).cloned()))
+        }
+        async fn insert(&self, user: &User) -> Result<(), kokkak_domain::RepoError> {
+            let key = user.username.trim().to_lowercase();
+            let mut by_un = self.by_username.lock().unwrap();
+            if by_un.contains_key(&key) {
+                return Err(kokkak_domain::RepoError::Conflict(format!(
+                    "username {} taken",
+                    user.username
+                )));
+            }
+            by_un.insert(key, user.id);
+            self.by_id.lock().unwrap().insert(user.id, user.clone());
+            Ok(())
+        }
+        async fn update(&self, user: &User) -> Result<(), kokkak_domain::RepoError> {
+            let mut by_id = self.by_id.lock().unwrap();
+            if !by_id.contains_key(&user.id) {
+                return Err(kokkak_domain::RepoError::NotFound(format!(
+                    "user {} not found",
+                    user.id
+                )));
+            }
+            by_id.insert(user.id, user.clone());
+            Ok(())
+        }
+    }
+
     use kokkak_infra::auth::jwt::JwtService;
     use kokkak_infra::auth::password::PasswordHasherImpl;
-    use kokkak_infra::db::json_user::JsonUserRepository;
-    use std::path::PathBuf;
+    // skip MssqlUserRepository;
 
     // Test-only adapter: bridges the concrete `PasswordHasherImpl` to
     // the `PasswordHasherPort` trait without depending on the
@@ -244,13 +292,8 @@ mod tests {
         }
     }
 
-    async fn make_service() -> (AuthService, PathBuf) {
-        let path: PathBuf = std::env::temp_dir()
-            .join("kokkak_app_auth_test")
-            .join(format!("auth-{}.json", Uuid::new_v4()));
-        let _ = std::fs::create_dir_all(path.parent().unwrap());
-        let _ = std::fs::remove_file(&path);
-        let repo = JsonUserRepository::open(&path).await.unwrap();
+    async fn make_service() -> AuthService {
+        let repo: Arc<dyn UserRepository> = Arc::new(MockUserRepository::default());
         let settings = kokkak_common::config::AuthSettings {
             jwt_secret: "test-secret-please-change-me".into(),
             issuer: "kokkak-test".into(),
@@ -258,17 +301,16 @@ mod tests {
             refresh_ttl_secs: 600,
         };
         let jwt = JwtService::new(&settings).unwrap();
-        let svc = AuthService::new(
-            Arc::new(repo),
+        AuthService::new(
+            repo,
             Arc::new(TestHasher(PasswordHasherImpl::new())),
             Arc::new(TestJwt(jwt)),
-        );
-        (svc, path)
+        )
     }
 
     #[tokio::test]
     async fn register_creates_user_and_returns_tokens() {
-        let (svc, path) = make_service().await;
+        let svc = make_service().await;
         let out = svc
             .register(RegisterInput {
                 username: "Alice@Example.com".into(),
@@ -283,12 +325,11 @@ mod tests {
         assert_eq!(out.user.first_name, "Alice");
         assert_eq!(out.user.last_name, "Wonder");
         assert!(!out.tokens.access_token.is_empty());
-        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
     async fn register_duplicate_username_returns_username_taken() {
-        let (svc, path) = make_service().await;
+        let svc = make_service().await;
         svc.register(RegisterInput {
             username: "alice".into(),
             password: "supersecret-123".into(),
@@ -309,12 +350,11 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, AuthError::UsernameTaken));
-        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
     async fn login_with_wrong_password_fails() {
-        let (svc, path) = make_service().await;
+        let svc = make_service().await;
         svc.register(RegisterInput {
             username: "alice".into(),
             password: "supersecret-123".into(),
@@ -333,12 +373,11 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, AuthError::InvalidCredentials));
-        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
     async fn login_with_correct_password_returns_tokens() {
-        let (svc, path) = make_service().await;
+        let svc = make_service().await;
         svc.register(RegisterInput {
             username: "alice".into(),
             password: "supersecret-123".into(),
@@ -357,12 +396,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out.user.username, "alice");
-        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
     async fn refresh_exchanges_refresh_token() {
-        let (svc, path) = make_service().await;
+        let svc = make_service().await;
         let registered = svc
             .register(RegisterInput {
                 username: "alice".into(),
@@ -383,12 +421,11 @@ mod tests {
         assert!(!out.tokens.access_token.is_empty());
         assert!(!out.tokens.refresh_token.is_empty());
         assert_eq!(out.user.username, "alice");
-        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
     async fn refresh_with_access_token_fails() {
-        let (svc, path) = make_service().await;
+        let svc = make_service().await;
         let registered = svc
             .register(RegisterInput {
                 username: "alice".into(),
@@ -404,12 +441,11 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, AuthError::InvalidToken(_)));
-        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
     async fn register_rejects_short_password() {
-        let (svc, path) = make_service().await;
+        let svc = make_service().await;
         let err = svc
             .register(RegisterInput {
                 username: "alice".into(),
@@ -421,12 +457,11 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, AuthError::Validation(_)));
-        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
     async fn register_rejects_empty_first_name() {
-        let (svc, path) = make_service().await;
+        let svc = make_service().await;
         let err = svc
             .register(RegisterInput {
                 username: "alice".into(),
@@ -438,6 +473,5 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, AuthError::Validation(_)));
-        let _ = std::fs::remove_file(&path);
     }
 }

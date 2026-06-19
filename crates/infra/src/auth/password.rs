@@ -10,7 +10,9 @@
 //! `hash()` call. The handler validates first, then hashes inside
 //! the use case.
 
-use argon2::password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
+use argon2::password_hash::{
+    rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
+};
 use argon2::Argon2;
 
 use kokkak_domain::AuthError;

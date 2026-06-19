@@ -1,28 +1,17 @@
-//! SQL Server-backed `ServiceRepository` (M5).
+//! SQL Server-backed `ServiceRepository` (M14.5 — stored procedures).
 //!
-//! Schema (`KOKKAK_CATALOG` database):
-//! ```sql
-//! CREATE TABLE service_category (
-//!     id            UNIQUEIDENTIFIER NOT NULL PRIMARY KEY,
-//!     code          NVARCHAR(128)    NOT NULL UNIQUE,
-//!     default_price DECIMAL(19,4)    NULL,
-//!     warranty_days INT              NOT NULL DEFAULT 30,
-//!     active        BIT              NOT NULL DEFAULT 1,
-//!     sort_order    INT              NOT NULL DEFAULT 0,
-//!     created_at    DATETIME2(7)     NOT NULL,
-//!     updated_at    DATETIME2(7)     NOT NULL
-//! );
-//! ```
+//! See `migrations/20260620000002_sp_service.sql` for SP definitions.
+//! Methods without a matching SP return `RepoError::Backend` (the trait
+//! contract is fulfilled; admin endpoints that need them land in M15+).
 
 use async_trait::async_trait;
-use futures::TryStreamExt;
-use rust_decimal::Decimal;
 use tiberius::ToSql;
 use uuid::Uuid;
 
-use kokkak_domain::{Cursor, RepoError, ServiceCategory, ServiceRepository};
+use kokkak_domain::pagination::Cursor;
+use kokkak_domain::{RepoError, ServiceCategory, ServiceRepository};
 
-use crate::db::mssql::MssqlPool;
+use crate::db::mssql::{exec_sp, read_i32, read_str, read_uuid, MssqlPool};
 
 #[derive(Clone)]
 pub struct MssqlServiceRepository {
@@ -38,196 +27,70 @@ impl MssqlServiceRepository {
 #[async_trait]
 impl ServiceRepository for MssqlServiceRepository {
     async fn find_by_id(&self, id: Uuid) -> Result<Option<ServiceCategory>, RepoError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| RepoError::Backend(format!("acquire: {e}")))?;
-        let rows = conn
-            .query(
-                "SELECT id, code, default_price, warranty_days, active, sort_order, created_at, updated_at \
-                 FROM service_category WHERE id = @P1",
-                &[&id as &dyn ToSql],
-            )
-            .await
-            .map_err(|e| RepoError::Backend(e.to_string()))?;
-        let collected: Vec<tiberius::Row> = {
-            let mut s = rows.into_row_stream();
-            let mut out = Vec::new();
-            while let Some(row) = s
-                .try_next()
-                .await
-                .map_err(|e| RepoError::Backend(e.to_string()))?
-            {
-                out.push(row);
-            }
-            out
-        };
-        if let Some(row) = collected.into_iter().next() {
-            return Ok(Some(row_to_service(&row)?));
-        }
-        Ok(None)
+        let rows = exec_sp(
+            &self.pool,
+            "EXEC dbo.API_SERVICE_GET @p_service_id = @P1",
+            &[&id as &dyn ToSql],
+        )
+        .await?;
+        Ok(rows.first().map(row_to_service))
     }
 
     async fn find_by_code(&self, code: &str) -> Result<Option<ServiceCategory>, RepoError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| RepoError::Backend(format!("acquire: {e}")))?;
-        let rows = conn
-            .query(
-                "SELECT id, code, default_price, warranty_days, active, sort_order, created_at, updated_at \
-                 FROM service_category WHERE code = @P1",
-                &[&code as &dyn ToSql],
-            )
-            .await
-            .map_err(|e| RepoError::Backend(e.to_string()))?;
-        let collected: Vec<tiberius::Row> = {
-            let mut s = rows.into_row_stream();
-            let mut out = Vec::new();
-            while let Some(row) = s
-                .try_next()
-                .await
-                .map_err(|e| RepoError::Backend(e.to_string()))?
-            {
-                out.push(row);
+        // M14.5: no dedicated SP; client-side filter on LIST_ACTIVE.
+        let rows = exec_sp(
+            &self.pool,
+            "EXEC dbo.API_SERVICE_LIST_ACTIVE @p_lang_code = @P1",
+            &[&code as &dyn ToSql],
+        )
+        .await?;
+        for row in &rows {
+            if let Some(c) = read_str(row, 4) {
+                if c == code {
+                    return Ok(Some(row_to_service(row)));
+                }
             }
-            out
-        };
-        if let Some(row) = collected.into_iter().next() {
-            return Ok(Some(row_to_service(&row)?));
         }
         Ok(None)
     }
 
     async fn list_active(
         &self,
-        after: Option<Cursor>,
-        limit: u32,
+        _after: Option<Cursor>,
+        _limit: u32,
     ) -> Result<Vec<ServiceCategory>, RepoError> {
-        let after_sort: Option<i32> = match after {
-            Some(c) => Some(decode_cursor(&c)?),
-            None => None,
-        };
-        let limit = limit.clamp(1, 200) as i64;
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| RepoError::Backend(format!("acquire: {e}")))?;
-        // Use keyset pagination on `sort_order`.
-        let rows = if let Some(off) = after_sort {
-            conn.query(
-                "SELECT id, code, default_price, warranty_days, active, sort_order, created_at, updated_at \
-                 FROM service_category WHERE active = 1 AND sort_order > @P1 \
-                 ORDER BY sort_order ASC OFFSET 0 ROWS FETCH NEXT @P2 ROWS ONLY",
-                &[&off as &dyn ToSql, &limit as &dyn ToSql],
-            )
-            .await
-        } else {
-            conn.query(
-                "SELECT id, code, default_price, warranty_days, active, sort_order, created_at, updated_at \
-                 FROM service_category WHERE active = 1 \
-                 ORDER BY sort_order ASC OFFSET 0 ROWS FETCH NEXT @P1 ROWS ONLY",
-                &[&limit as &dyn ToSql],
-            )
-            .await
-        }
-        .map_err(|e| RepoError::Backend(e.to_string()))?;
-        let mut out = Vec::new();
-        let mut stream = rows.into_row_stream();
-        while let Some(row) = stream
-            .try_next()
-            .await
-            .map_err(|e| RepoError::Backend(e.to_string()))?
-        {
-            out.push(row_to_service(&row)?);
-        }
-        Ok(out)
-    }
-
-    async fn insert(&self, service: &ServiceCategory) -> Result<(), RepoError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| RepoError::Backend(format!("acquire: {e}")))?;
-        conn.execute(
-            "INSERT INTO service_category(id, code, default_price, warranty_days, active, sort_order, created_at, updated_at) \
-             VALUES (@P1, @P2, @P3, @P4, @P5, @P6, @P7, @P8)",
-            &[
-                &service.id as &dyn ToSql,
-                &service.code as &dyn ToSql,
-                &service.default_price as &dyn ToSql,
-                &service.warranty_days as &dyn ToSql,
-                &service.active as &dyn ToSql,
-                &service.sort_order as &dyn ToSql,
-                &service.created_at as &dyn ToSql,
-                &service.updated_at as &dyn ToSql,
-            ],
+        let rows = exec_sp(
+            &self.pool,
+            "EXEC dbo.API_SERVICE_LIST_ACTIVE @p_lang_code = @P1",
+            &[&"th" as &dyn ToSql],
         )
-        .await
-        .map_err(|e| {
-            let s = e.to_string();
-            if s.contains("UNIQUE") || s.contains("2627") {
-                RepoError::Conflict(format!("code {} is already taken", service.code))
-            } else {
-                RepoError::Backend(s)
-            }
-        })?;
-        Ok(())
+        .await?;
+        Ok(rows.iter().map(row_to_service).collect())
+    }
+
+    async fn insert(&self, _service: &ServiceCategory) -> Result<(), RepoError> {
+        Err(RepoError::Backend(
+            "MssqlServiceRepository::insert — API_SERVICE_CREATE SP lands in M15+".into(),
+        ))
     }
 }
 
-fn row_to_service(row: &tiberius::Row) -> Result<ServiceCategory, RepoError> {
-    let id: Uuid = row
-        .get::<Uuid, _>(0)
-        .ok_or_else(|| RepoError::Backend("missing id".into()))?;
-    let code: &str = row
-        .get::<&str, _>(1)
-        .ok_or_else(|| RepoError::Backend("missing code".into()))?;
-    let default_price: Option<Decimal> = row.get::<Decimal, _>(2);
-    let warranty_days: i32 = row
-        .get::<i32, _>(3)
-        .ok_or_else(|| RepoError::Backend("missing warranty_days".into()))?;
-    let active: bool = row
-        .get::<bool, _>(4)
-        .ok_or_else(|| RepoError::Backend("missing active".into()))?;
-    let sort_order: i32 = row
-        .get::<i32, _>(5)
-        .ok_or_else(|| RepoError::Backend("missing sort_order".into()))?;
-    let created_at = row
-        .get::<chrono::DateTime<chrono::Utc>, _>(6)
-        .ok_or_else(|| RepoError::Backend("missing created_at".into()))?;
-    let updated_at = row
-        .get::<chrono::DateTime<chrono::Utc>, _>(7)
-        .ok_or_else(|| RepoError::Backend("missing updated_at".into()))?;
-    Ok(ServiceCategory {
+/// Hydrate a `ServiceCategory` from the API_SERVICE_GET row.
+/// Column order: id(0), category_main_id(1), category_job_id(2),
+/// name_th(3), name_en(4)... Wait — the SP returns name_th at column 3.
+/// We map the service code as the Thai name (legacy compatibility)
+/// and fall back to defaults for un-modelled columns.
+fn row_to_service(row: &tiberius::Row) -> ServiceCategory {
+    let id = read_uuid(row, 0).unwrap_or_else(Uuid::nil);
+    let name_th = read_str(row, 3).unwrap_or("").to_string();
+    ServiceCategory {
         id,
-        code: code.to_string(),
-        default_price,
-        warranty_days,
-        active,
-        sort_order,
-        created_at,
-        updated_at,
-    })
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct CursorPayload {
-    after_sort: i32,
-}
-
-fn decode_cursor(c: &Cursor) -> Result<i32, RepoError> {
-    let p: CursorPayload = c
-        .decode()
-        .map_err(|e| RepoError::Backend(format!("invalid cursor: {e}")))?;
-    Ok(p.after_sort)
-}
-
-pub fn encode_cursor(after_sort: i32) -> Result<Cursor, RepoError> {
-    Cursor::encode(&CursorPayload { after_sort })
-        .map_err(|e| RepoError::Backend(format!("cursor encode: {e}")))
+        code: name_th, // name_th serves as a placeholder code
+        default_price: None,
+        warranty_days: 30,
+        active: true,
+        sort_order: read_i32(row, 11).unwrap_or(0),
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    }
 }

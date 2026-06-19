@@ -24,6 +24,7 @@ use kokkak_application::payment::PaymentService;
 use kokkak_application::user::UserService;
 use kokkak_domain::{HealthRegistry, TranslationRepository};
 use kokkak_infra::auth::jwt::JwtService;
+use kokkak_infra::db::mssql::MssqlPool;
 
 use adapters::{JwtIssuerAdapter, PasswordHasherAdapter};
 
@@ -84,45 +85,48 @@ pub fn build_app_state(
     registry: HealthRegistry,
     translation: Arc<dyn TranslationRepository>,
 ) -> AppState {
+    // M14.5: backend is always Mssql; the pool/mssql_pool are
+    // optional because build_app_state_with doesn't need them.
+    let backend_marker: Option<MssqlPool> = None;
     let bundle = RepoBundle {
-        backend: RepoBackend::Json,
+        backend: RepoBackend::Mssql,
         users: user_repo,
         services: service_repo,
         orders: order_repo,
         chat: chat_repo,
         payments: payment_repo,
         translation,
-        mssql_pool: None,
+        mssql_pool: backend_marker,
         topology: None,
     };
     build_app_state_with(bundle, jwt, registry)
 }
 
-/// Convenience builder for tests/dev: use the JSON-DB sims
-/// for chat and payment and an in-process chat transport.
+/// Convenience builder for tests/dev: pass chat + payments already
+/// built against MSSQL. The in-memory chat transport is wired up here.
+/// M14.5: removed JSON-DB sim entirely.
 #[allow(clippy::too_many_arguments)]
 pub fn build_app_state_json(
     user_repo: Arc<dyn kokkak_domain::UserRepository>,
     service_repo: Arc<dyn kokkak_domain::ServiceRepository>,
     order_repo: Arc<dyn kokkak_domain::OrderRepository>,
+    chat_repo: Arc<dyn kokkak_domain::ChatRepository>,
+    payment_repo: Arc<dyn kokkak_domain::PaymentRepository>,
     jwt: Arc<JwtService>,
     registry: HealthRegistry,
     translation: Arc<dyn TranslationRepository>,
 ) -> AppState {
-    use kokkak_infra::db::json_chat::JsonChatRepository;
-    use kokkak_infra::db::json_payment::JsonPaymentRepository;
-    let chat_repo: Arc<dyn kokkak_domain::ChatRepository> =
-        Arc::new(JsonChatRepository::open_in_memory().expect("in-memory chat"));
-    let payment_repo: Arc<dyn kokkak_domain::PaymentRepository> =
-        Arc::new(JsonPaymentRepository::open_in_memory().expect("in-memory payment"));
-    build_app_state(
-        user_repo,
-        service_repo,
-        order_repo,
-        chat_repo,
-        payment_repo,
-        jwt,
-        registry,
+    let backend_marker: Option<MssqlPool> = None;
+    let bundle = RepoBundle {
+        backend: RepoBackend::Mssql,
+        users: user_repo,
+        services: service_repo,
+        orders: order_repo,
+        chat: chat_repo,
+        payments: payment_repo,
         translation,
-    )
+        mssql_pool: backend_marker,
+        topology: None,
+    };
+    build_app_state_with(bundle, jwt, registry)
 }

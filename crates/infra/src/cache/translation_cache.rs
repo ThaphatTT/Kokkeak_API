@@ -123,11 +123,45 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::json_translation::JsonTranslationRepository;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    /// Tiny in-memory [`TranslationRepository`] for cache tests.
+    ///
+    /// ponytail: HashMap + Mutex — just enough to prove the cache layer
+    /// invalidates correctly. Ceiling: not thread-safe across processes
+    /// (we don't need that for unit tests); the real backend is
+    /// [`crate::db::mssql_translation::MssqlTranslationRepository`].
+    #[derive(Default)]
+    struct InMemoryTranslationRepository {
+        rows: Mutex<HashMap<(String, String), String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl TranslationRepository for InMemoryTranslationRepository {
+        async fn get(&self, locale: &str, key: &str) -> Result<Option<String>, TranslationError> {
+            Ok(self
+                .rows
+                .lock()
+                .unwrap()
+                .get(&(locale.to_string(), key.to_string()))
+                .cloned())
+        }
+        async fn put(&self, locale: &str, key: &str, value: &str) -> Result<(), TranslationError> {
+            self.rows
+                .lock()
+                .unwrap()
+                .insert((locale.to_string(), key.to_string()), value.to_string());
+            Ok(())
+        }
+        async fn count(&self) -> Result<usize, TranslationError> {
+            Ok(self.rows.lock().unwrap().len())
+        }
+    }
 
     #[tokio::test]
     async fn cache_returns_inner_value_on_miss_then_serves_from_cache() {
-        let inner = JsonTranslationRepository::in_memory();
+        let inner = InMemoryTranslationRepository::default();
         inner.put("en", "k", "v1").await.unwrap();
         let cache = CachedTranslationRepository::new(inner);
         // First call: miss -> inner -> returns "v1".
@@ -141,7 +175,7 @@ mod tests {
 
     #[tokio::test]
     async fn put_invalidates_cache_so_next_get_sees_fresh_value() {
-        let inner = JsonTranslationRepository::in_memory();
+        let inner = InMemoryTranslationRepository::default();
         inner.put("en", "k", "old").await.unwrap();
         let cache = CachedTranslationRepository::new(inner);
         // Warm the cache.
@@ -154,7 +188,7 @@ mod tests {
 
     #[tokio::test]
     async fn missing_override_is_cached() {
-        let inner = JsonTranslationRepository::in_memory();
+        let inner = InMemoryTranslationRepository::default();
         let cache = CachedTranslationRepository::new(inner);
         // Cold: miss -> inner returns None -> cached.
         assert!(cache.get("en", "absent").await.unwrap().is_none());
@@ -170,7 +204,7 @@ mod tests {
 
     #[tokio::test]
     async fn invalidate_all_clears_every_entry() {
-        let inner = JsonTranslationRepository::in_memory();
+        let inner = InMemoryTranslationRepository::default();
         inner.put("en", "a", "1").await.unwrap();
         inner.put("en", "b", "2").await.unwrap();
         let cache = CachedTranslationRepository::new(inner);

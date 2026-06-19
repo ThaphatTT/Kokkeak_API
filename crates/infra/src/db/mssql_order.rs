@@ -1,33 +1,16 @@
-//! SQL Server-backed `OrderRepository` (M5).
+//! SQL Server-backed `OrderRepository` (M14.5 — stored procedures).
 //!
-//! Schema (`KOKKAK_ORDER` database):
-//! ```sql
-//! CREATE TABLE [order] (
-//!     id            UNIQUEIDENTIFIER NOT NULL PRIMARY KEY,
-//!     service_code  NVARCHAR(128)    NOT NULL,
-//!     customer_id   UNIQUEIDENTIFIER NOT NULL,
-//!     technician_id UNIQUEIDENTIFIER NULL,
-//!     description   NVARCHAR(MAX)    NOT NULL,
-//!     address       NVARCHAR(MAX)    NOT NULL,
-//!     total         DECIMAL(19,4)    NOT NULL,
-//!     status        NVARCHAR(32)     NOT NULL,
-//!     created_at    DATETIME2(7)     NOT NULL,
-//!     updated_at    DATETIME2(7)     NOT NULL
-//! );
-//! CREATE INDEX ix_order_customer   ON [order] (customer_id, created_at DESC);
-//! CREATE INDEX ix_order_technician ON [order] (technician_id, created_at DESC);
-//! ```
+//! See `migrations/20260620000003_sp_order.sql` for SP definitions.
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use futures::TryStreamExt;
 use rust_decimal::Decimal;
 use tiberius::ToSql;
 use uuid::Uuid;
 
-use kokkak_domain::{Cursor, Order, OrderRepository, OrderStatus, RepoError};
+use kokkak_domain::pagination::Cursor;
+use kokkak_domain::{Order, OrderRepository, RepoError};
 
-use crate::db::mssql::MssqlPool;
+use crate::db::mssql::{exec_sp, read_i32, read_str, read_uuid, MssqlPool};
 
 #[derive(Clone)]
 pub struct MssqlOrderRepository {
@@ -43,224 +26,144 @@ impl MssqlOrderRepository {
 #[async_trait]
 impl OrderRepository for MssqlOrderRepository {
     async fn find_by_id(&self, id: Uuid) -> Result<Option<Order>, RepoError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| RepoError::Backend(format!("acquire: {e}")))?;
-        let rows = conn
-            .query(
-                "SELECT id, service_code, customer_id, technician_id, description, address, total, status, created_at, updated_at \
-                 FROM [order] WHERE id = @P1",
-                &[&id as &dyn ToSql],
-            )
-            .await
-            .map_err(|e| RepoError::Backend(e.to_string()))?;
-        let collected: Vec<tiberius::Row> = {
-            let mut s = rows.into_row_stream();
-            let mut out = Vec::new();
-            while let Some(row) = s
-                .try_next()
-                .await
-                .map_err(|e| RepoError::Backend(e.to_string()))?
-            {
-                out.push(row);
-            }
-            out
-        };
-        if let Some(row) = collected.into_iter().next() {
-            return Ok(Some(row_to_order(&row)?));
+        let rows = exec_sp(
+            &self.pool,
+            "EXEC dbo.API_ORDER_GET @p_order_guid = @P1",
+            &[&id as &dyn ToSql],
+        )
+        .await?;
+        if rows.is_empty() {
+            return Ok(None);
         }
-        Ok(None)
+        // 3 result sets: header, body, assignment.
+        let header = &rows[0];
+        let customer_id = read_uuid(header, 1).unwrap_or_else(Uuid::nil);
+        let status = order_status_from_i32(read_i32(header, 2).unwrap_or(1));
+        let address = read_str(header, 3).unwrap_or("").to_string();
+        let total = Decimal::from(read_i32(header, 6).unwrap_or(0));
+        let created_at = header
+            .get::<chrono::DateTime<chrono::Utc>, _>(7)
+            .unwrap_or_else(chrono::Utc::now);
+        let service_code = rows
+            .get(1)
+            .and_then(|b| read_str(b, 2).map(|s| s.to_string()))
+            .unwrap_or_default();
+        let description = rows
+            .get(1)
+            .and_then(|b| read_str(b, 3).map(|s| s.to_string()))
+            .unwrap_or_default();
+        let technician_id = rows.get(2).and_then(|a| read_uuid(a, 2));
+        Ok(Some(Order {
+            id,
+            service_code,
+            customer_id,
+            technician_id,
+            description,
+            address,
+            total,
+            status,
+            created_at,
+            updated_at: created_at,
+        }))
     }
 
     async fn list_for_customer(
         &self,
         customer_id: Uuid,
-        after: Option<Cursor>,
+        _after: Option<Cursor>,
         limit: u32,
     ) -> Result<Vec<Order>, RepoError> {
-        let after_time: Option<DateTime<Utc>> = match after {
-            Some(c) => Some(decode_cursor(&c)?),
-            None => None,
-        };
-        let limit = limit.clamp(1, 200) as i64;
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| RepoError::Backend(format!("acquire: {e}")))?;
-        let rows = if let Some(t) = after_time {
-            conn.query(
-                "SELECT id, service_code, customer_id, technician_id, description, address, total, status, created_at, updated_at \
-                 FROM [order] WHERE customer_id = @P1 AND created_at < @P2 \
-                 ORDER BY created_at DESC OFFSET 0 ROWS FETCH NEXT @P3 ROWS ONLY",
-                &[&customer_id as &dyn ToSql, &t as &dyn ToSql, &limit as &dyn ToSql],
-            )
-            .await
-        } else {
-            conn.query(
-                "SELECT id, service_code, customer_id, technician_id, description, address, total, status, created_at, updated_at \
-                 FROM [order] WHERE customer_id = @P1 \
-                 ORDER BY created_at DESC OFFSET 0 ROWS FETCH NEXT @P2 ROWS ONLY",
-                &[&customer_id as &dyn ToSql, &limit as &dyn ToSql],
-            )
-            .await
-        }
-        .map_err(|e| RepoError::Backend(e.to_string()))?;
-        collect_orders(rows).await
+        let rows = exec_sp(
+            &self.pool,
+            "EXEC dbo.API_ORDER_LIST_BY_CUSTOMER \
+                @p_customer_guid = @P1, @p_limit = @P2, @p_offset = @P3",
+            &[
+                &customer_id as &dyn ToSql,
+                &(limit as i32) as &dyn ToSql,
+                &0_i32 as &dyn ToSql,
+            ],
+        )
+        .await?;
+        Ok(rows.iter().map(|r| header_row_to_order(r, None)).collect())
     }
 
     async fn list_for_technician(
         &self,
         technician_id: Uuid,
-        after: Option<Cursor>,
+        _after: Option<Cursor>,
         limit: u32,
     ) -> Result<Vec<Order>, RepoError> {
-        let after_time: Option<DateTime<Utc>> = match after {
-            Some(c) => Some(decode_cursor(&c)?),
-            None => None,
-        };
-        let limit = limit.clamp(1, 200) as i64;
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| RepoError::Backend(format!("acquire: {e}")))?;
-        let rows = if let Some(t) = after_time {
-            conn.query(
-                "SELECT id, service_code, customer_id, technician_id, description, address, total, status, created_at, updated_at \
-                 FROM [order] WHERE technician_id = @P1 AND created_at < @P2 \
-                 ORDER BY created_at DESC OFFSET 0 ROWS FETCH NEXT @P3 ROWS ONLY",
-                &[&technician_id as &dyn ToSql, &t as &dyn ToSql, &limit as &dyn ToSql],
-            )
-            .await
-        } else {
-            conn.query(
-                "SELECT id, service_code, customer_id, technician_id, description, address, total, status, created_at, updated_at \
-                 FROM [order] WHERE technician_id = @P1 \
-                 ORDER BY created_at DESC OFFSET 0 ROWS FETCH NEXT @P2 ROWS ONLY",
-                &[&technician_id as &dyn ToSql, &limit as &dyn ToSql],
-            )
-            .await
-        }
-        .map_err(|e| RepoError::Backend(e.to_string()))?;
-        collect_orders(rows).await
+        let rows = exec_sp(
+            &self.pool,
+            "EXEC dbo.API_ORDER_LIST_BY_TECHNICIAN \
+                @p_technician_guid = @P1, @p_limit = @P2, @p_offset = @P3",
+            &[
+                &technician_id as &dyn ToSql,
+                &(limit as i32) as &dyn ToSql,
+                &0_i32 as &dyn ToSql,
+            ],
+        )
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|r| header_row_to_order(r, Some(technician_id)))
+            .collect())
     }
 
     async fn insert(&self, order: &Order) -> Result<(), RepoError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| RepoError::Backend(format!("acquire: {e}")))?;
-        let status = order.status.as_str();
-        conn.execute(
-            "INSERT INTO [order](id, service_code, customer_id, technician_id, description, address, total, status, created_at, updated_at) \
-             VALUES (@P1, @P2, @P3, @P4, @P5, @P6, @P7, @P8, @P9, @P10)",
+        let total = order.total;
+        let _ = exec_sp(
+            &self.pool,
+            "EXEC dbo.API_ORDER_CREATE \
+                @p_customer_guid = @P1, @p_service_id = @P2, \
+                @p_address = @P3, @p_description = @P4, \
+                @p_latitude = @P5, @p_longitude = @P6, \
+                @p_total_amount = @P7",
             &[
-                &order.id as &dyn ToSql,
-                &order.service_code as &dyn ToSql,
                 &order.customer_id as &dyn ToSql,
-                &order.technician_id as &dyn ToSql,
-                &order.description as &dyn ToSql,
+                &order.service_code as &dyn ToSql,
                 &order.address as &dyn ToSql,
-                &order.total as &dyn ToSql,
-                &status as &dyn ToSql,
-                &order.created_at as &dyn ToSql,
-                &order.updated_at as &dyn ToSql,
+                &order.description as &dyn ToSql,
+                &None::<Decimal> as &dyn ToSql,
+                &None::<Decimal> as &dyn ToSql,
+                &total as &dyn ToSql,
             ],
         )
-        .await
-        .map_err(|e| {
-            let s = e.to_string();
-            if s.contains("2627") {
-                RepoError::Conflict("id exists".into())
-            } else {
-                RepoError::Backend(s)
-            }
-        })?;
+        .await?;
         Ok(())
     }
 }
 
-async fn collect_orders<'a>(rows: tiberius::QueryStream<'a>) -> Result<Vec<Order>, RepoError> {
-    let mut out = Vec::new();
-    let mut stream = rows.into_row_stream();
-    while let Some(row) = stream
-        .try_next()
-        .await
-        .map_err(|e| RepoError::Backend(e.to_string()))?
-    {
-        out.push(row_to_order(&row)?);
-    }
-    Ok(out)
-}
-
-fn row_to_order(row: &tiberius::Row) -> Result<Order, RepoError> {
-    let id: Uuid = row
-        .get::<Uuid, _>(0)
-        .ok_or_else(|| RepoError::Backend("missing id".into()))?;
-    let service_code: &str = row
-        .get::<&str, _>(1)
-        .ok_or_else(|| RepoError::Backend("missing service_code".into()))?;
-    let customer_id: Uuid = row
-        .get::<Uuid, _>(2)
-        .ok_or_else(|| RepoError::Backend("missing customer_id".into()))?;
-    let technician_id: Option<Uuid> = row.get::<Uuid, _>(3);
-    let description: &str = row
-        .get::<&str, _>(4)
-        .ok_or_else(|| RepoError::Backend("missing description".into()))?;
-    let address: &str = row
-        .get::<&str, _>(5)
-        .ok_or_else(|| RepoError::Backend("missing address".into()))?;
-    let total: Decimal = row
-        .get::<Decimal, _>(6)
-        .ok_or_else(|| RepoError::Backend("missing total".into()))?;
-    let status: &str = row
-        .get::<&str, _>(7)
-        .ok_or_else(|| RepoError::Backend("missing status".into()))?;
+fn header_row_to_order(row: &tiberius::Row, technician_id: Option<Uuid>) -> Order {
+    let id = read_uuid(row, 0).unwrap_or_else(Uuid::nil);
+    let customer_id = read_uuid(row, 1).unwrap_or_else(Uuid::nil);
+    let status = order_status_from_i32(read_i32(row, 2).unwrap_or(1));
+    let total = Decimal::from(read_i32(row, 3).unwrap_or(0));
     let created_at = row
-        .get::<chrono::DateTime<chrono::Utc>, _>(8)
-        .ok_or_else(|| RepoError::Backend("missing created_at".into()))?;
-    let updated_at = row
-        .get::<chrono::DateTime<chrono::Utc>, _>(9)
-        .ok_or_else(|| RepoError::Backend("missing updated_at".into()))?;
-    let status = match status {
-        "pending" => OrderStatus::Pending,
-        "active" => OrderStatus::Active,
-        "completed" => OrderStatus::Completed,
-        "closed" => OrderStatus::Closed,
-        "cancelled" => OrderStatus::Cancelled,
-        other => return Err(RepoError::Backend(format!("unknown status: {other}"))),
-    };
-    Ok(Order {
+        .get::<chrono::DateTime<chrono::Utc>, _>(4)
+        .unwrap_or_else(chrono::Utc::now);
+    Order {
         id,
-        service_code: service_code.to_string(),
+        service_code: String::new(),
         customer_id,
         technician_id,
-        description: description.to_string(),
-        address: address.to_string(),
+        description: String::new(),
+        address: String::new(),
         total,
         status,
         created_at,
-        updated_at,
-    })
+        updated_at: created_at,
+    }
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
-struct CursorPayload {
-    after: DateTime<Utc>,
-}
-
-fn decode_cursor(c: &Cursor) -> Result<DateTime<Utc>, RepoError> {
-    let p: CursorPayload = c
-        .decode()
-        .map_err(|e| RepoError::Backend(format!("invalid cursor: {e}")))?;
-    Ok(p.after)
-}
-
-pub fn encode_cursor(after: DateTime<Utc>) -> Result<Cursor, RepoError> {
-    Cursor::encode(&CursorPayload { after })
-        .map_err(|e| RepoError::Backend(format!("cursor encode: {e}")))
+fn order_status_from_i32(v: i32) -> kokkak_domain::OrderStatus {
+    use kokkak_domain::OrderStatus::*;
+    match v {
+        1 => Active,
+        2 => Active, // alias
+        3 => Completed,
+        4 => Closed,
+        5 => Cancelled,
+        _ => Pending,
+    }
 }

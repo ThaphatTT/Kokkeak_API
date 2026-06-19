@@ -15,7 +15,6 @@ use std::sync::Arc;
 use kokkak_common::{config::Settings, telemetry};
 use kokkak_domain::ChatRepository;
 use kokkak_infra::cache::redis::RedisCache;
-use kokkak_infra::db::json_chat::JsonChatRepository;
 use tokio::sync::watch;
 use tracing::info;
 
@@ -62,24 +61,26 @@ async fn main() {
     // Build the handler context.
     let ctx = HandlerContext { idempotency };
 
-    // M8: open the chat repository (JSON sim) and hand it to
-    // the `chat.persist` handler.
-    let data_dir = std::path::PathBuf::from(&settings.data_dir.path);
-    if let Err(e) = tokio::fs::create_dir_all(&data_dir).await {
-        eprintln!("[kokkak-worker] failed to create data dir: {e}");
+    // M8: wire chat.persist to MSSQL (M14.5 — JSON-DB sim removed).
+    // The worker reuses the API process's topology when co-located,
+    // or builds its own pool from KOKKAK_DATABASE__SQLSERVER_URL.
+    let mssql_url = std::env::var("KOKKAK_DATABASE__SQLSERVER_URL").unwrap_or_default();
+    if mssql_url.is_empty() || mssql_url == "disabled" {
+        eprintln!(
+            "[kokkak-worker] KOKKAK_DATABASE__SQLSERVER_URL not set — chat.persist cannot start"
+        );
         std::process::exit(1);
     }
-    match JsonChatRepository::open(data_dir.join("chat.json")).await {
-        Ok(repo) => {
-            let repo: Arc<dyn ChatRepository> = Arc::new(repo);
-            kokkak_worker::handlers::chat_persist::set_chat_repo(repo);
-            info!("chat.persist handler wired to JSON-DB sim");
-        }
-        Err(e) => {
-            eprintln!("[kokkak-worker] failed to open chat.json: {e}");
-            std::process::exit(1);
-        }
-    }
+    let topo_settings = kokkak_common::config::DatabaseTopologySettings::from_settings(&settings);
+    let topo = kokkak_infra::db::topology::DatabaseTopology::build(&topo_settings, false)
+        .await
+        .expect("worker MSSQL topology build");
+    let primary_pool = topo.get(topo.primary_role().expect("primary")).clone();
+    let chat_repo: Arc<dyn ChatRepository> = Arc::new(
+        kokkak_infra::db::mssql_chat::MssqlChatRepository::new(primary_pool),
+    );
+    kokkak_worker::handlers::chat_persist::set_chat_repo(chat_repo);
+    info!("chat.persist handler wired to MSSQL");
 
     // Register every handler.
     let handlers: Vec<Arc<dyn kokkak_worker::handlers::Handler>> = vec![

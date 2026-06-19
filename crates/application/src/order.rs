@@ -162,20 +162,72 @@ impl OrderService {
 mod tests {
     use super::*;
     use chrono::Utc;
-    use kokkak_domain::OrderStatus;
-    use kokkak_infra::db::json_order::JsonOrderRepository;
+    use kokkak_domain::{Cursor, OrderStatus};
     use rust_decimal::Decimal;
-    use std::path::PathBuf;
+    use std::collections::HashMap;
     use std::str::FromStr;
     use uuid::Uuid;
 
-    fn svc_path() -> PathBuf {
-        let p = std::env::temp_dir()
-            .join("kokkak_order_test")
-            .join(format!("o-{}.json", Uuid::new_v4()));
-        let _ = std::fs::create_dir_all(p.parent().unwrap());
-        let _ = std::fs::remove_file(&p);
-        p
+    /// In-memory mock of [`OrderRepository`] for unit tests.
+    ///
+    /// ponytail: HashMap-backed, no async runtime — just enough for the
+    /// pagination test below. Ceiling: doesn't model `list_for_technician`
+    /// (the unit test only covers customer pagination); extend when a
+    /// future test needs the technician view.
+    #[derive(Default)]
+    struct MockOrderRepository {
+        by_id: std::sync::Mutex<HashMap<Uuid, Order>>,
+    }
+
+    #[async_trait::async_trait]
+    impl OrderRepository for MockOrderRepository {
+        async fn find_by_id(&self, id: Uuid) -> Result<Option<Order>, RepoError> {
+            Ok(self.by_id.lock().unwrap().get(&id).cloned())
+        }
+        async fn list_for_customer(
+            &self,
+            customer_id: Uuid,
+            after: Option<Cursor>,
+            limit: u32,
+        ) -> Result<Vec<Order>, RepoError> {
+            let by_id = self.by_id.lock().unwrap();
+            let mut items: Vec<Order> = by_id
+                .values()
+                .filter(|o| o.customer_id == customer_id)
+                .cloned()
+                .collect();
+            // Production lists most-recent-first (OrderService cursor
+            // keys off `created_at`); mirror that ordering here.
+            items.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+            if let Some(cursor) = after {
+                if let Ok(payload) = cursor.decode::<serde_json::Value>() {
+                    if let Some(s) = payload.get("after").and_then(|v| v.as_str()) {
+                        if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(s) {
+                            let cutoff: chrono::DateTime<Utc> = ts.with_timezone(&Utc);
+                            items.retain(|o| o.created_at < cutoff);
+                        }
+                    }
+                }
+            }
+            items.truncate(limit as usize);
+            Ok(items)
+        }
+        async fn list_for_technician(
+            &self,
+            _technician_id: Uuid,
+            _after: Option<Cursor>,
+            _limit: u32,
+        ) -> Result<Vec<Order>, RepoError> {
+            Ok(vec![])
+        }
+        async fn insert(&self, order: &Order) -> Result<(), RepoError> {
+            let mut by_id = self.by_id.lock().unwrap();
+            if by_id.contains_key(&order.id) {
+                return Err(RepoError::Conflict(format!("order {} exists", order.id)));
+            }
+            by_id.insert(order.id, order.clone());
+            Ok(())
+        }
     }
 
     fn sample(customer: Uuid) -> Order {
@@ -195,14 +247,14 @@ mod tests {
 
     #[tokio::test]
     async fn list_for_customer_pagination() {
-        let repo = JsonOrderRepository::open(svc_path()).await.unwrap();
+        let repo: Arc<dyn OrderRepository> = Arc::new(MockOrderRepository::default());
         let customer = Uuid::new_v4();
         for i in 0..3 {
             let mut o = sample(customer);
             o.created_at = chrono::DateTime::from_timestamp(1_700_000_000 + i * 100, 0).unwrap();
             repo.insert(&o).await.unwrap();
         }
-        let svc = OrderService::new(Arc::new(repo));
+        let svc = OrderService::new(repo);
         let page = svc.list_for_customer(customer, None, 2).await.unwrap();
         assert_eq!(page.items.len(), 2);
         assert!(page.next_cursor.is_some());

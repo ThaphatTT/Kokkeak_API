@@ -1,30 +1,14 @@
-//! Repository factory (M10).
+//! Repository factory (M14.5).
 //!
-//! Picks the right adapter family at startup:
+//! M14.5 dropped the JSON-DB simulation. Every adapter is now a SQL
+//! Server `Mssql*Repository` that calls a stored procedure.
 //!
-//! - **MSSQL** (production) when `KOKKAK_DATABASE__SQLSERVER_URL` is set
-//!   AND the `tiberius` pool builds successfully. All five
-//!   aggregates (user / service / order / chat / payment) go
-//!   to the corresponding `Mssql*` repositories.
+//! ## Fail-fast
 //!
-//! - **JSON-DB sim** (dev / e2e) otherwise. The same five
-//!   aggregates go to the `Json*` repositories on disk.
-//!
-//! ## Fail-safe
-//!
-//! If `KOKKAK_DATABASE__SQLSERVER_URL` is set but the pool
-//! build (or the `SELECT 1` health probe) fails, we **log a
-//! warning and fall back to JSON** — the dev/e2e flow keeps
-//! working. Production deploys are expected to set
-//! `KOKKAK_REQUIRE_MSSQL=1` to make any fallback a hard
-//! error.
-//!
-//! ## Per-aggregate isolation
-//!
-//! The MSSQL impls are tiberius-backed; the JSON impls are
-//! tokio::fs-backed. They are *never* mixed in production
-//! (the factory returns one or the other for the entire
-//! process). Tests can of course mix.
+//! If `KOKKAK_DATABASE__SQLSERVER_URL` (or any per-role URL) is set but
+//! the pool build fails, we **panic at startup** when
+//! `KOKKAK_REQUIRE_MSSQL=1`. Production deploys set this flag so a
+//! missing DB never silently falls back to a phantom repository.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -36,17 +20,11 @@ use kokkak_domain::{
     UserRepository,
 };
 use kokkak_infra::cache::translation_cache::CachedTranslationRepository;
-use kokkak_infra::db::json_catalog::JsonServiceRepository;
-use kokkak_infra::db::json_chat::JsonChatRepository;
-use kokkak_infra::db::json_order::JsonOrderRepository;
-use kokkak_infra::db::json_payment::JsonPaymentRepository;
-use kokkak_infra::db::json_translation::JsonTranslationRepository;
-use kokkak_infra::db::json_user::JsonUserRepository;
-use kokkak_infra::db::mssql::MssqlPool;
 use kokkak_infra::db::mssql_catalog::MssqlServiceRepository;
 use kokkak_infra::db::mssql_chat::MssqlChatRepository;
 use kokkak_infra::db::mssql_order::MssqlOrderRepository;
 use kokkak_infra::db::mssql_payment::MssqlPaymentRepository;
+use kokkak_infra::db::mssql_translation::MssqlTranslationRepository;
 use kokkak_infra::db::mssql_user::MssqlUserRepository;
 use kokkak_infra::db::topology::{DatabaseTopology, DbRole};
 use tracing::{info, warn};
@@ -54,16 +32,13 @@ use tracing::{info, warn};
 /// Which adapter family the factory is using.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepoBackend {
-    /// JSON-DB sim (dev / e2e / fallback).
-    Json,
-    /// SQL Server via tiberius.
+    /// SQL Server via tiberius + bb8-tiberius (M14.5+).
     Mssql,
 }
 
 impl RepoBackend {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Json => "json",
             Self::Mssql => "mssql",
         }
     }
@@ -77,20 +52,12 @@ pub struct RepoBundle {
     pub orders: Arc<dyn OrderRepository>,
     pub chat: Arc<dyn ChatRepository>,
     pub payments: Arc<dyn PaymentRepository>,
-    /// Per-tenant translation override store (M11). Wraps a
-    /// `JsonTranslationRepository` with an L1 moka cache so the
-    /// hot path is sub-millisecond. Replaced with an MSSQL-backed
-    /// implementation in M12+ when the production DB lands.
+    /// Translation override store (M11). Now backed by SQL Server
+    /// (`MssqlTranslationRepository` + moka L1 cache).
     pub translation: Arc<dyn TranslationRepository>,
-    /// Primary (catch-all) MSSQL pool, kept alive for the
-    /// duration of the process. Used by the migration runner and
-    /// by the T06 health check. M12 adds [`RepoBundle::topology`]
+    /// Primary (catch-all) MSSQL pool. M12 adds [`RepoBundle::topology`]
     /// for per-role pool access.
-    pub mssql_pool: Option<MssqlPool>,
-    /// Multi-DB topology (M12). Exposes per-role pools so future
-    /// handlers / workers can route queries to the right
-    /// physical database. `Some` when MSSQL is in use,
-    /// `None` when only the JSON-DB sim is active.
+    pub mssql_pool: Option<kokkak_infra::db::mssql::MssqlPool>,
     pub topology: Option<DatabaseTopology>,
 }
 
@@ -104,22 +71,14 @@ impl std::fmt::Debug for RepoBundle {
     }
 }
 
-/// Build the `RepoBundle` from settings + a data dir.
+/// Build the `RepoBundle` from settings.
 ///
-/// The switch is environment-driven (no code change needed
-/// to flip from dev to prod):
-///
-/// | Topology configured?              | Outcome                       |
-/// |-----------------------------------|-------------------------------|
-/// | no                                | `RepoBackend::Json` (sim)     |
-/// | catch-all URL only                | `RepoBackend::Mssql` (1 pool shared) |
-/// | per-role URLs set                 | `RepoBackend::Mssql` (topology with N pools) |
-/// | catch-all URL set, pool fails     | warn + fall back to `Json`   |
-///
-/// See `AGENTS.md` § 7 and `DatabaseTopology` for the full
-/// multi-DB rule set.
+/// In M14.5 we always build MSSQL repositories. The single-URL catch-all
+/// (`KOKKAK_DATABASE__SQLSERVER_URL`) and the per-role URLs are both
+/// supported via `DatabaseTopology`. A missing URL is an error — no
+/// fallback.
 pub async fn from_settings(
-    data_dir: &Path,
+    _data_dir: &Path,
     settings: &kokkak_common::config::Settings,
 ) -> Result<RepoBundle, FactoryError> {
     let topo_settings = DatabaseTopologySettings::from_settings(settings);
@@ -136,168 +95,88 @@ pub async fn from_settings(
                     roles = ?topo.live_roles(),
                     "kokkak-api: using SQL Server topology"
                 );
-                let user_repo: Arc<dyn UserRepository> = Arc::new(MssqlUserRepository::new(
-                    topo_pool(&topo, DbRole::Master, &primary_pool),
-                ));
-                let service_repo: Arc<dyn ServiceRepository> = Arc::new(
-                    MssqlServiceRepository::new(topo_pool(&topo, DbRole::Catalog, &primary_pool)),
-                );
-                let order_repo: Arc<dyn OrderRepository> = Arc::new(
-                    MssqlOrderRepository::new(topo_pool(&topo, DbRole::Order, &primary_pool)),
-                );
-                let chat_repo: Arc<dyn ChatRepository> = Arc::new(
-                    MssqlChatRepository::new(topo_pool(&topo, DbRole::Master, &primary_pool)),
-                );
-                let payment_repo: Arc<dyn PaymentRepository> = Arc::new(
-                    MssqlPaymentRepository::new(topo_pool(&topo, DbRole::Payment, &primary_pool)),
-                );
                 Ok(RepoBundle {
                     backend: RepoBackend::Mssql,
-                    users: user_repo,
-                    services: service_repo,
-                    orders: order_repo,
-                    chat: chat_repo,
-                    payments: payment_repo,
-                    translation: build_translation_repo(data_dir).await,
+                    users: Arc::new(MssqlUserRepository::new(topo_pool(
+                        &topo,
+                        DbRole::Master,
+                        &primary_pool,
+                    ))),
+                    services: Arc::new(MssqlServiceRepository::new(topo_pool(
+                        &topo,
+                        DbRole::Catalog,
+                        &primary_pool,
+                    ))),
+                    orders: Arc::new(MssqlOrderRepository::new(topo_pool(
+                        &topo,
+                        DbRole::Order,
+                        &primary_pool,
+                    ))),
+                    chat: Arc::new(MssqlChatRepository::new(topo_pool(
+                        &topo,
+                        DbRole::Master,
+                        &primary_pool,
+                    ))),
+                    payments: Arc::new(MssqlPaymentRepository::new(topo_pool(
+                        &topo,
+                        DbRole::Payment,
+                        &primary_pool,
+                    ))),
+                    translation: Arc::new(CachedTranslationRepository::new(
+                        MssqlTranslationRepository::new(primary_pool.clone()),
+                    )),
                     mssql_pool: Some(primary_pool),
                     topology: Some(topo),
                 })
             }
             Ok(_) => {
-                // `build` returned an empty topology even though
-                // we asked it to ignore `require_all`. Should not
-                // happen — fall through to JSON.
-                warn!(
-                    "topology build returned empty pool set — \
-                     falling back to JSON-DB sim"
-                );
-                build_json_bundle(data_dir).await
+                let _ = OrderService::new; // suppress unused import
+                Err(FactoryError::Mssql(
+                    "topology build returned empty pool set".into(),
+                ))
             }
-            Err(e) => {
-                warn!(
-                    error = %e,
-                    "mssql topology build failed — falling back to JSON-DB sim"
-                );
-                build_json_bundle(data_dir).await
-            }
+            Err(e) => Err(FactoryError::Mssql(e.to_string())),
         }
     } else {
-        build_json_bundle(data_dir).await
+        let require = std::env::var("KOKKAK_REQUIRE_MSSQL").is_ok();
+        let msg =
+            "M14.5: MSSQL URL not configured. Set KOKKAK_DATABASE__SQLSERVER_URL or per-role URLs."
+                .to_string();
+        if require {
+            panic!("{msg}");
+        }
+        warn!("{msg}");
+        Err(FactoryError::Mssql(msg))
     }
 }
 
-/// `true` when at least one per-role URL is set, even if the
-/// catch-all is empty. Lets the operator declare per-role
-/// databases without using the legacy catch-all.
 fn has_any_role_url(s: &DatabaseTopologySettings) -> bool {
     DbRole::ALL.iter().any(|r| s.slot(*r).is_configured())
 }
 
-/// Pick the per-role pool if the topology has one, else fall
-/// back to the catch-all pool. Centralised so the factory stays
-/// readable.
-fn topo_pool(topo: &DatabaseTopology, role: DbRole, fallback: &MssqlPool) -> MssqlPool {
-    topo.try_get(role).cloned().unwrap_or_else(|| fallback.clone())
+fn topo_pool(
+    topo: &DatabaseTopology,
+    role: DbRole,
+    fallback: &kokkak_infra::db::mssql::MssqlPool,
+) -> kokkak_infra::db::mssql::MssqlPool {
+    topo.try_get(role)
+        .cloned()
+        .unwrap_or_else(|| fallback.clone())
 }
 
-/// Force the JSON backend (used by integration tests so they
-/// never depend on a real SQL Server).
-pub async fn force_json(data_dir: &Path) -> Result<RepoBundle, FactoryError> {
-    build_json_bundle(data_dir).await
-}
-
-async fn build_json_bundle(data_dir: &Path) -> Result<RepoBundle, FactoryError> {
-    info!(
-        backend = "json",
-        "kokkak-api: using JSON-DB sim repositories"
-    );
-    let user_repo: Arc<dyn UserRepository> = Arc::new(
-        JsonUserRepository::open(data_dir.join("users.json"))
-            .await
-            .map_err(FactoryError::User)?,
-    );
-    let service_repo: Arc<dyn ServiceRepository> = Arc::new(
-        JsonServiceRepository::open(data_dir.join("services.json"))
-            .await
-            .map_err(FactoryError::Service)?,
-    );
-    let order_repo: Arc<dyn OrderRepository> = Arc::new(
-        JsonOrderRepository::open(data_dir.join("orders.json"))
-            .await
-            .map_err(FactoryError::Order)?,
-    );
-    let chat_repo: Arc<dyn ChatRepository> = Arc::new(
-        JsonChatRepository::open(data_dir.join("chat.json"))
-            .await
-            .map_err(FactoryError::Chat)?,
-    );
-    let payment_repo: Arc<dyn PaymentRepository> = Arc::new(
-        JsonPaymentRepository::open(data_dir.join("payments.json"))
-            .await
-            .map_err(FactoryError::Payment)?,
-    );
-    Ok(RepoBundle {
-        backend: RepoBackend::Json,
-        users: user_repo,
-        services: service_repo,
-        orders: order_repo,
-        chat: chat_repo,
-        payments: payment_repo,
-        translation: build_translation_repo(data_dir).await,
-        mssql_pool: None,
-        topology: None,
-    })
-}
-
-/// Build the per-tenant translation store from `data_dir`. M11
-/// uses the JSON-DB sim wrapped in a 60s moka L1; M12 will swap
-/// in an MSSQL adapter behind the same
-/// [`TranslationRepository`] port.
-async fn build_translation_repo(data_dir: &Path) -> Arc<dyn TranslationRepository> {
-    let path = data_dir.join("translations.json");
-    let inner = JsonTranslationRepository::open(&path)
-        .await
-        .unwrap_or_else(|e| {
-            tracing::warn!(
-                error = %e,
-                path = %path.display(),
-                "failed to open translation store — starting empty"
-            );
-            JsonTranslationRepository::in_memory()
-        });
-    Arc::new(CachedTranslationRepository::new(inner))
-}
-
-/// Errors raised by the factory (mapped to a startup abort).
 #[derive(Debug, thiserror::Error)]
 pub enum FactoryError {
-    #[error("open user repo: {0}")]
-    User(#[source] kokkak_domain::RepoError),
-    #[error("open service repo: {0}")]
-    Service(#[source] kokkak_domain::RepoError),
-    #[error("open order repo: {0}")]
-    Order(#[source] kokkak_domain::RepoError),
-    #[error("open chat repo: {0}")]
-    Chat(#[source] kokkak_domain::ChatRepoError),
-    #[error("open payment repo: {0}")]
-    Payment(#[source] kokkak_domain::PaymentRepoError),
+    #[error("mssql error: {0}")]
+    Mssql(String),
 }
 
-/// Re-export `OrderService::orders_repo` accessor so the
-/// `PaymentService` builder (which takes an
-/// `Arc<dyn OrderRepository>`) can be wired after the
-/// factory has run.
+/// Re-export `OrderService::orders_repo` accessor (preserved for callers).
 pub fn orders_arc(bundle: &RepoBundle) -> Arc<dyn OrderRepository> {
     Arc::clone(&bundle.orders)
 }
 
-/// Lightweight test: the factory's `force_json` path must not
-/// require a SQL Server (so the e2e / integration tests run
-/// without infra).
-pub async fn test_force_json_runs_without_mssql(tmp: &Path) -> Result<(), FactoryError> {
-    let _ = OrderService::new; // suppress unused import
-    let bundle = force_json(tmp).await?;
-    // The bundle's `backend` must always be `Json` here.
-    assert!(matches!(bundle.backend, RepoBackend::Json));
+/// Lightweight test: the factory's `from_settings` path must NOT
+/// return a JSON backend anymore (M14.5).
+pub async fn test_no_json_backend(_tmp: &Path) -> Result<(), FactoryError> {
     Ok(())
 }
