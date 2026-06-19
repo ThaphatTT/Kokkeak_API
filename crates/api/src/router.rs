@@ -81,6 +81,14 @@ pub fn build(state: AppState) -> Router {
             post(handlers::payment::mark_payout_paid_admin),
         );
 
+    // M14.5: Admin user creation (register role split).
+    // Admin / super_admin accounts must be provisioned here, not
+    // via the public `/auth/register` endpoint.
+    let admin_users_routes = Router::new().route(
+        "/api/v1/admin/users",
+        post(handlers::admin::create_user_admin),
+    );
+
     // Merge into a single router, then attach state.
     // Layer order (LIFO: last-attached runs first):
     //   1. locale_middleware (innermost) — sets task-local locale
@@ -92,6 +100,7 @@ pub fn build(state: AppState) -> Router {
         .merge(chat_routes)
         .merge(payment_routes)
         .merge(admin_payout_routes)
+        .merge(admin_users_routes)
         .with_state(state)
         .layer(from_fn(locale_middleware))
 }

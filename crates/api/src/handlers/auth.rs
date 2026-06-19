@@ -1,6 +1,8 @@
-//! Auth HTTP handlers (M2 + M11 i18n + M14 NEW_DB).
+//! Auth HTTP handlers (M2 + M11 i18n + M14 NEW_DB + M14.5 split).
 //!
-//! - POST /api/v1/auth/register
+//! - POST /api/v1/auth/register   — PUBLIC; role restricted to
+//!   `customer` / `technician`. Admin / super_admin must go through
+//!   the admin endpoint to prevent open admin registration.
 //! - POST /api/v1/auth/login
 //! - POST /api/v1/auth/refresh
 //! - POST /api/v1/auth/logout  (stateless for now — client drops token)
@@ -16,6 +18,13 @@
 //! - `display_name` → `first_name` + `last_name`
 //! - `locale` field removed (locale is per-request via header/JWT per M11)
 //! - JSON error code `email_taken` → `username_taken`
+//!
+//! **M14.5 split** (register role security):
+//! - Public `/auth/register` accepts only `customer` / `technician`
+//!   (default `customer`). Anything else (admin/super_admin/unknown)
+//!   returns 422 with a localized `err_auth.validation` message.
+//! - Admin role creation lives at `POST /api/v1/admin/users` and
+//!   requires a JWT carrying `Admin` or `SuperAdmin`.
 
 use axum::{
     extract::State,
@@ -69,15 +78,30 @@ impl From<kokkak_application::auth::AuthOutcome> for AuthResponse {
 }
 
 /// POST /api/v1/auth/register
+///
+/// M14.5 split: public registration is restricted to `customer` /
+/// `technician`. Admin and super_admin accounts must be created via
+/// `POST /api/v1/admin/users` (which requires an admin JWT). The
+/// previous behaviour — accepting `{"role":"admin"}` from an
+/// unauthenticated client — was an open admin registration
+/// vulnerability.
 pub async fn register(
     State(state): State<AppState>,
     Json(req): Json<RegisterRequest>,
 ) -> Result<Response, Response> {
-    let role = match req.role.as_deref() {
-        Some("technician") => Role::Technician,
-        Some("admin") => Role::Admin,
-        Some("super_admin") => Role::SuperAdmin,
-        _ => Role::Customer,
+    let role = match parse_public_register_role(req.role.as_deref()) {
+        Ok(r) => r,
+        Err(PublicRoleError::Restricted(other)) => {
+            let msg = format!(
+                "role '{}' is restricted to admin endpoint; public registration accepts only customer/technician",
+                other.as_str()
+            );
+            return Err(auth_error_to_response(AuthError::Validation(msg), &state).await);
+        }
+        Err(PublicRoleError::Unknown(s)) => {
+            let msg = format!("unknown role '{s}'; expected customer or technician");
+            return Err(auth_error_to_response(AuthError::Validation(msg), &state).await);
+        }
     };
     let input = RegisterInput {
         username: req.username,
@@ -91,6 +115,37 @@ pub async fn register(
         Err(e) => return Err(auth_error_to_response(e, &state).await),
     };
     Ok((StatusCode::CREATED, created(AuthResponse::from(outcome))).into_response())
+}
+
+/// Role-parsing outcome for the public register endpoint.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum PublicRoleError {
+    /// The role is well-formed but not allowed for public
+    /// registration (admin / super_admin).
+    Restricted(Role),
+    /// The string did not match any known role.
+    Unknown(String),
+}
+
+/// Parse the optional `role` field from the public register
+/// endpoint. Defaults to `Customer` when omitted; accepts
+/// `Customer` / `Technician`; rejects `Admin` / `SuperAdmin` and
+/// unknown strings.
+///
+/// ponytail: pure function (no async, no IO) so the role-allowlist
+/// can be unit-tested without spinning up the full AppState /
+/// Router. Ceiling: if more public roles land (e.g. "staff"), add
+/// them to the allowlist here, not in the handler.
+pub(crate) fn parse_public_register_role(raw: Option<&str>) -> Result<Role, PublicRoleError> {
+    match raw {
+        None => Ok(Role::Customer),
+        Some(s) => match Role::from_code(s) {
+            Some(Role::Customer) => Ok(Role::Customer),
+            Some(Role::Technician) => Ok(Role::Technician),
+            Some(other) => Err(PublicRoleError::Restricted(other)),
+            None => Err(PublicRoleError::Unknown(s.to_string())),
+        },
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -209,4 +264,57 @@ fn envelope(status: StatusCode, code: &str, message: String) -> Response {
         meta: None,
     };
     (status, Json(envelope)).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_public_register_role_defaults_to_customer() {
+        assert_eq!(
+            parse_public_register_role(None),
+            Ok(kokkak_domain::Role::Customer)
+        );
+    }
+
+    #[test]
+    fn parse_public_register_role_accepts_customer() {
+        assert_eq!(
+            parse_public_register_role(Some("customer")),
+            Ok(kokkak_domain::Role::Customer)
+        );
+    }
+
+    #[test]
+    fn parse_public_register_role_accepts_technician() {
+        assert_eq!(
+            parse_public_register_role(Some("technician")),
+            Ok(kokkak_domain::Role::Technician)
+        );
+    }
+
+    #[test]
+    fn parse_public_register_role_rejects_admin() {
+        assert_eq!(
+            parse_public_register_role(Some("admin")),
+            Err(PublicRoleError::Restricted(kokkak_domain::Role::Admin))
+        );
+    }
+
+    #[test]
+    fn parse_public_register_role_rejects_super_admin() {
+        assert_eq!(
+            parse_public_register_role(Some("super_admin")),
+            Err(PublicRoleError::Restricted(kokkak_domain::Role::SuperAdmin))
+        );
+    }
+
+    #[test]
+    fn parse_public_register_role_rejects_unknown() {
+        assert_eq!(
+            parse_public_register_role(Some("wizard")),
+            Err(PublicRoleError::Unknown("wizard".into()))
+        );
+    }
 }
