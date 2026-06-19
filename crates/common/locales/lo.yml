@@ -1,0 +1,78 @@
+# Lao locale (primary market — sdplao.com).
+#
+# Per AGENTS.md § 13, Lao is the primary market for KOKKAK. Every
+# user-visible string in the API must have a Lao translation;
+# this file is the source of truth.
+#
+# NOTE: starter copy. Native Lao reviewers on the KOKKAK team
+# must audit every string before shipping. Translations convey
+# *meaning*, not a literal word-for-word rendering.
+
+# -- generic error envelope --
+err:
+  bad_request: "ຄຳຂໍບໍ່ຖືກຕ້ອງ: {0}"
+  unauthorized: "ບໍ່ໄດ້ຮັບອະນຸຍາດ"
+  forbidden: "ຖືກຫ້າມ: {0}"
+  not_found: "ບໍ່ພົບ: {0}"
+  conflict: "ຂັດແຍ່ງ: {0}"
+  validation: "ຂໍ້ມູນບໍ່ຜ່ານການກວດສອບ: {0}"
+  rate_limited: "ຖືກຈຳກັດຈຳນວນຄຳຂໍ"
+  internal: "ຜິດພາດພາຍໃນ: {0}"
+
+# -- AuthError / auth handlers --
+err_auth:
+  invalid_credentials: "ອີເມວຫຼືລະຫັດຜ່ານບໍ່ຖືກຕ້ອງ"
+  token_expired: "ໂທເຄັນໝົດອາຍຸແລ້ວ"
+  invalid_token: "ໂທເຄັນບໍ່ຖືກຕ້ອງ: {0}"
+  forbidden: "ຖືກຫ້າມ: {0}"
+  email_taken: "ອີເມວນີ້ຖືກໃຊ້ແລ້ວ"
+  validation: "ຂໍ້ມູນບໍ່ຜ່ານການກວດສອບ: {0}"
+  backend: "ລະບົບຢືນຢັນຕົວຕົນຂັດຂ້ອງ: {0}"
+  missing_header: "ບໍ່ພົບ ຫຼື Authorization header ບໍ່ຖືກຕ້ອງ"
+  not_access_token: "ໂທເຄັນນີ້ບໍ່ແມ່ນ access token"
+  role_required: "ຕ້ອງມີສິດ: {0}"
+  admin_required: "ຕ້ອງເປັນຜູ້ດູແລລະບົບ"
+  user_not_found: "ບໍ່ພົບຜູ້ໃຊ້: {0}"
+
+# -- RepoError (generic) --
+err_repo:
+  not_found: "ບໍ່ພົບ: {0}"
+  conflict: "ຂັດແຍ່ງ: {0}"
+  backend: "ລະບົບຈັດເກັບຂໍ້ມູນຂັດຂ້ອງ: {0}"
+
+# -- ChatError + ChatRepoError --
+err_chat:
+  not_participant: "ທ່ານບໍ່ແມ່ນສະມາຊິກຂອງຫ້ອງ {0}"
+  room_not_found: "ບໍ່ພົບຫ້ອງ {0}"
+  invalid_body: "ຂໍ້ຄວາມບໍ່ຖືກຕ້ອງ: {0}"
+  backend: "ລະບົບແຊັດຂັດຂ້ອງ: {0}"
+  not_participant_msg: "ທ່ານບໍ່ແມ່ນສະມາຊິກຂອງຫ້ອງນີ້"
+  membership_check_failed: "ກວດສອບສະມາຊິກຫ້ອງບໍ່ສຳເລັດ: {0}"
+  bad_other_role: "other_role ຕ້ອງເປັນ customer, technician ຫຼື admin ເທົ່ານັ້ນ"
+
+err_chat_repo:
+  not_found: "ບໍ່ພົບ: {0}"
+  backend: "ລະບົບແຊັດຂັດຂ້ອງ: {0}"
+
+# -- PaymentError + PaymentRepoError --
+err_payment:
+  order_not_payable: "ຄຳສັ່ງວຽກ {0} ບໍ່ສາມາດຊຳລະເງິນໄດ້ (ສະຖານະບໍ່ກົງກັນ)"
+  not_found: "ບໍ່ພົບການຊຳລະເງິນ {0}"
+  not_found_msg: "ບໍ່ພົບການຊຳລະເງິນ"
+  invalid_amount: "ຈຳນວນເງິນບໍ່ຖືກຕ້ອງ: {0}"
+  backend: "ລະບົບຊຳລະເງິນຂັດຂ້ອງ: {0}"
+  bad_amount: "ຈຳນວນເງິນຕ້ອງເປັນຕົວເລກທົດສະນິຍົມ"
+  not_yours: "ການຊຳລະເງິນນີ້ບໍ່ແມ່ນຂອງທ່ານ"
+  unknown_payout_status: "ບໍ່ຮູ້ຈັກສະຖານະການຈ່າຍເງິນ: {0}"
+
+err_payment_repo:
+  not_found: "ບໍ່ພົບ: {0}"
+  backend: "ລະບົບຊຳລະເງິນຂັດຂ້ອງ: {0}"
+
+# -- Order handlers --
+err_order:
+  invalid_total: "ຍອດເງິນບໍ່ຖືກຕ້ອງ"
+
+# -- Generic request validation --
+err_request:
+  bad_timestamp: "after ຕ້ອງເປັນ timestamp ແບບ RFC3339"
