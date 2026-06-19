@@ -51,12 +51,18 @@ async fn make_app() -> (axum::Router, Vec<PathBuf>) {
         refresh_ttl_secs: 3600,
     };
     let jwt = Arc::new(JwtService::new(&settings).unwrap());
+    let translation: Arc<dyn kokkak_domain::TranslationRepository> = Arc::new(
+        kokkak_infra::cache::translation_cache::CachedTranslationRepository::new(
+            kokkak_infra::db::json_translation::JsonTranslationRepository::in_memory(),
+        ),
+    );
     let state: AppState = build_app_state_json(
         user_repo_arc,
         service_repo_arc,
         order_repo_arc,
         jwt,
         HealthRegistry::new(),
+        translation,
     );
     let app = build_router(state);
     (app, paths)
@@ -64,11 +70,11 @@ async fn make_app() -> (axum::Router, Vec<PathBuf>) {
 
 async fn register(app: axum::Router, email: &str, password: &str, role: &str) -> String {
     let body = serde_json::json!({
-        "email": email,
+        "username": email,
         "password": password,
-        "display_name": email,
+        "first_name": email,
+        "last_name": "Tester",
         "role": role,
-        "locale": "lo",
     });
     let resp = app
         .oneshot(

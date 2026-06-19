@@ -1,0 +1,79 @@
+[
+  {
+    "label": "cargo build (api)",
+    "command": "cargo",
+    "args": ["build", "-p", "kokkak-api", "--bin", "kokkak-api"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "tags": ["build", "rust"]
+  },
+  {
+    "label": "cargo run (api)",
+    "command": "cargo",
+    "args": ["run", "-p", "kokkak-api", "--bin", "kokkak-api"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "tags": ["run", "rust"],
+    "env": {
+      "RUST_LOG": "kokkak=debug,tower_http=info,info"
+    }
+  },
+  {
+    "label": "cargo run (worker)",
+    "command": "cargo",
+    "args": ["run", "-p", "kokkak-worker", "--bin", "kokkak-worker"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "tags": ["run", "rust"],
+    "env": {
+      "RUST_LOG": "kokkak=debug,info"
+    }
+  },
+  {
+    "label": "cargo check (workspace)",
+    "command": "cargo",
+    "args": ["check", "--workspace", "--all-targets"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "tags": ["check", "rust"]
+  },
+  {
+    "label": "cargo test (workspace)",
+    "command": "cargo",
+    "args": ["test", "--workspace"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "tags": ["test", "rust"]
+  },
+  {
+    "label": "cargo test (current file)",
+    "command": "cargo",
+    "args": ["test", "--workspace", "--", "--nocapture"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "tags": ["test", "rust"],
+    "use_new_terminal": false
+  },
+  {
+    "label": "cargo clippy (strict)",
+    "command": "cargo",
+    "args": ["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "tags": ["lint", "rust"]
+  },
+  {
+    "label": "cargo fmt",
+    "command": "cargo",
+    "args": ["fmt", "--all"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "tags": ["format", "rust"]
+  },
+  {
+    "label": "cargo fmt --check",
+    "command": "cargo",
+    "args": ["fmt", "--all", "--check"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "tags": ["check", "rust"]
+  },
+  {
+    "label": "cargo watch (api) — hot reload",
+    "command": "cargo",
+    "args": ["watch", "-w", "crates", "-x", "run -p kokkak-api --bin kokkak-api"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "tags": ["run", "rust", "watch"]
+  }
+]

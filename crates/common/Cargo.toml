@@ -24,5 +24,12 @@ metrics-exporter-prometheus = { workspace = true }
 # M7: i18n
 rust-i18n = "3"
 
+# LAYERING SMELL (see AGENTS.md § 3): common normally sits below
+# domain, but `i18n::tr_with_repo` lives here and needs the
+# `TranslationRepository` port from `domain` to look up per-tenant
+# overrides. The clean fix is to move `tr_with_repo` to
+# `application/i18n.rs` and drop this dep. Tracked for follow-up.
+kokkak-domain = { path = "../domain" }
+
 [dev-dependencies]
 serde_json = { workspace = true }

@@ -9,7 +9,9 @@ use kokkak_application::chat::{BroadcastTransport, ChatService, ChatTransport};
 use kokkak_application::order::OrderService;
 use kokkak_application::payment::PaymentService;
 use kokkak_application::user::UserService;
-use kokkak_domain::{ChatMembership, ChatRepoError, ChatRepository, HealthRegistry};
+use kokkak_domain::{
+    ChatMembership, ChatRepoError, ChatRepository, HealthRegistry, TranslationRepository,
+};
 use kokkak_infra::auth::jwt::JwtService;
 
 /// Internal bridge: takes a `&dyn ChatRepository` and exposes
@@ -59,6 +61,10 @@ pub struct AppState {
     /// `users` (UserService re-exposed for handlers that need
     /// a full `User` view from the auth session, like chat).
     pub users: Arc<UserService>,
+    /// Per-tenant translation override store (M11). Looked up by
+    /// every localized error response; the locale is set by
+    /// [`crate::middleware::i18n::locale_middleware`].
+    pub translation: Arc<dyn TranslationRepository>,
 }
 
 /// Chat state bundle — the service + the local broadcast
@@ -151,7 +157,7 @@ impl ChatHandle {
 
 impl AppState {
     /// Build the AppState from its parts. Use
-    /// [`crate::build_app_state`] from `main` and tests; this
+    /// [`crate::build_app_state_with`] from `main` and tests; this
     /// constructor is kept public for advanced wiring (e.g. a
     /// test that wants to swap the chat transport).
     #[allow(clippy::too_many_arguments)]
@@ -164,6 +170,7 @@ impl AppState {
         payments: Arc<PaymentService>,
         jwt: Arc<JwtService>,
         health: HealthRegistry,
+        translation: Arc<dyn TranslationRepository>,
     ) -> Self {
         Self {
             auth,
@@ -175,10 +182,12 @@ impl AppState {
             jwt,
             health,
             users: user,
+            translation,
         }
     }
 
     /// Backwards-compat: a state without chat / payments.
+    #[allow(clippy::too_many_arguments)]
     pub fn legacy(
         auth: Arc<AuthService>,
         user: Arc<UserService>,
@@ -186,6 +195,7 @@ impl AppState {
         orders: Arc<OrderService>,
         jwt: Arc<JwtService>,
         health: HealthRegistry,
+        translation: Arc<dyn TranslationRepository>,
     ) -> Self {
         let transport: Arc<dyn ChatTransport> = Arc::new(BroadcastTransport::default());
         let repo: Arc<dyn ChatRepository> = Arc::new(
@@ -215,6 +225,7 @@ impl AppState {
             jwt,
             health,
             users: user,
+            translation,
         }
     }
 }

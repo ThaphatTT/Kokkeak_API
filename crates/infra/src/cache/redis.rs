@@ -165,4 +165,68 @@ mod tests {
             "expected not-configured error, got: {err}"
         );
     }
+
+    // ---- Live integration tests (opt-in via KOKKAK_REDIS__TEST_URL) ----
+    //
+    // These tests connect to a REAL Redis server. By default they
+    // are skipped (the env var is unset in CI). To run them
+    // against the local dev box:
+    //
+    // ```bash
+    // KOKKAK_REDIS__TEST_URL=redis://10.0.200.83:6379 \
+    //   cargo test -p kokkak-infra --lib cache::redis::tests::live_
+    // ```
+    //
+    // M13: these are the M1-deferred smoke tests for the T07
+    // wiring. They run against the operator's Redis when the
+    // test URL is provided. They never run in the default CI
+    // path (no env var = skip).
+
+    fn live_url() -> Option<String> {
+        std::env::var("KOKKAK_REDIS__TEST_URL")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+    }
+
+    #[test]
+    fn live_pool_build_succeeds() {
+        let Some(url) = live_url() else {
+            eprintln!("skipping: set KOKKAK_REDIS__TEST_URL to run");
+            return;
+        };
+        let mut s = RedisSettings::default();
+        s.url = url;
+        let cache = RedisCache::new(&s).expect("pool build against live redis must succeed");
+        // Round-trip: a key set right now must be readable. This
+        // also proves the pool actually produces working
+        // connections (the pool build alone can succeed against
+        // a closed port).
+        let rt = tokio::runtime::Runtime::new().expect("rt");
+        rt.block_on(async {
+            let key = CacheKey::new("v1", "test", "live", "pool_build");
+            let _: () = cache
+                .set(&key, b"hello", Duration::from_secs(60))
+                .await
+                .expect("set");
+            let got = cache.get(&key).await.expect("get");
+            assert_eq!(got.as_deref(), Some(b"hello".as_slice()));
+            let _ = cache.delete(&key).await;
+        });
+    }
+
+    #[test]
+    fn live_ping_roundtrips() {
+        let Some(url) = live_url() else {
+            eprintln!("skipping: set KOKKAK_REDIS__TEST_URL to run");
+            return;
+        };
+        let mut s = RedisSettings::default();
+        s.url = url;
+        let cache = RedisCache::new(&s).expect("pool build");
+        let pool = cache.pool();
+        let rt = tokio::runtime::Runtime::new().expect("rt");
+        rt.block_on(async {
+            ping(&pool).await.expect("PING must succeed");
+        });
+    }
 }

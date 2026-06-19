@@ -47,12 +47,18 @@ async fn make_app() -> (axum::Router, Vec<PathBuf>) {
         refresh_ttl_secs: 600,
     };
     let jwt = Arc::new(JwtService::new(&settings).unwrap());
+    let translation: Arc<dyn kokkak_domain::TranslationRepository> = Arc::new(
+        kokkak_infra::cache::translation_cache::CachedTranslationRepository::new(
+            kokkak_infra::db::json_translation::JsonTranslationRepository::in_memory(),
+        ),
+    );
     let state: AppState = build_app_state_json(
         user_repo_arc,
         service_repo_arc,
         order_repo_arc,
         jwt,
         HealthRegistry::new(),
+        translation,
     );
     let app = build_router(state);
     (app, paths)
@@ -65,11 +71,11 @@ async fn register_then_login_then_me_round_trip() {
 
     // 1) Register
     let reg_body = serde_json::json!({
-        "email": &email,
+        "username": &email,
         "password": "supersecret-123",
-        "display_name": "Alice",
+        "first_name": "Alice",
+        "last_name": "Wonder",
         "role": "customer",
-        "locale": "lo",
     });
     let resp = app
         .clone()
@@ -87,13 +93,13 @@ async fn register_then_login_then_me_round_trip() {
     let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(v["success"], true);
-    assert_eq!(v["data"]["user"]["email"], email);
+    assert_eq!(v["data"]["user"]["username"], email);
     let access_token = v["data"]["access_token"].as_str().unwrap().to_string();
     assert!(!access_token.is_empty());
 
     // 2) Login
     let login_body = serde_json::json!({
-        "email": &email,
+        "username": &email,
         "password": "supersecret-123",
         "scope": "mobile",
     });
@@ -131,7 +137,7 @@ async fn register_then_login_then_me_round_trip() {
     assert_eq!(resp.status(), StatusCode::OK);
     let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(v["data"]["email"], email);
+    assert_eq!(v["data"]["username"], email);
     assert_eq!(v["data"]["roles"][0], "customer");
 
     // 4) /users/me without token → 401
@@ -159,9 +165,10 @@ async fn register_duplicate_email_returns_409() {
     let (app, paths) = make_app().await;
     let email = format!("dup-{}@example.com", Uuid::new_v4());
     let body = serde_json::json!({
-        "email": &email,
+        "username": &email,
         "password": "supersecret-123",
-        "display_name": "A",
+        "first_name": "A",
+        "last_name": "B",
     });
     let resp = app
         .clone()
@@ -200,9 +207,10 @@ async fn login_with_wrong_password_returns_401() {
     let email = format!("u-{}@example.com", Uuid::new_v4());
     // Register first.
     let reg = serde_json::json!({
-        "email": &email,
+        "username": &email,
         "password": "supersecret-123",
-        "display_name": "A",
+        "first_name": "A",
+        "last_name": "B",
     });
     let _ = app
         .clone()
@@ -218,7 +226,7 @@ async fn login_with_wrong_password_returns_401() {
         .unwrap();
     // Try wrong password.
     let login = serde_json::json!({
-        "email": &email,
+        "username": &email,
         "password": "wrong-password",
     });
     let resp = app

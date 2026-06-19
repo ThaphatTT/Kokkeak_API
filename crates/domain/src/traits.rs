@@ -14,10 +14,12 @@ pub mod catalog;
 pub mod chat;
 pub mod order;
 pub mod payment;
+pub mod translation;
 pub mod user;
 
 pub use catalog::ServiceRepository;
 pub use chat::{ChatMembership, ChatRepoError, ChatRepository, MessagePage};
 pub use order::OrderRepository;
 pub use payment::{PaymentRepoError, PaymentRepository};
+pub use translation::{TranslationError, TranslationRepository};
 pub use user::UserRepository;

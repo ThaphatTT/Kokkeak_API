@@ -1,4 +1,4 @@
-//! Authentication middleware + extractor (M2).
+//! Authentication middleware + extractor (M2 + M11 i18n).
 //!
 //! `AuthnUser` is an axum `FromRequestParts` extractor: any handler
 //! that takes `AuthnUser` as a parameter requires a valid Bearer
@@ -6,6 +6,13 @@
 //! 1. Reads `Authorization: Bearer <token>`.
 //! 2. Verifies the token via the configured `JwtService`.
 //! 3. Builds an `AuthSession` with user id, roles, and expiry.
+//!
+//! User-visible error strings are rendered via
+//! `kokkak_common::i18n::tr` against the file-based catalog (the
+//! extractor is sync and runs before the i18n middleware's
+//! translation repo wiring; per-tenant overrides are still
+//! picked up by `tr` because `rust_i18n::set_locale` has already
+//! run by the time the extractor is invoked).
 
 use axum::{
     extract::FromRequestParts,
@@ -15,9 +22,9 @@ use axum::{
     Json,
 };
 use chrono::{DateTime, Utc};
+use kokkak_common::i18n::{current_locale, tr};
 use kokkak_common::response::ApiResponse;
 use kokkak_domain::{AuthError, AuthSession, Role};
-use serde_json::json;
 use uuid::Uuid;
 
 use crate::state::AppState;
@@ -56,6 +63,7 @@ impl FromRequestParts<AppState> for AuthnUser {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
+        let locale = current_locale();
         // Read the Authorization header.
         let auth_header = parts
             .headers
@@ -63,15 +71,28 @@ impl FromRequestParts<AppState> for AuthnUser {
             .and_then(|v| v.to_str().ok());
         let token = match auth_header {
             Some(s) if s.starts_with("Bearer ") => &s[7..],
-            _ => return Err(unauthorized("missing or invalid Authorization header")),
+            _ => {
+                return Err(unauthorized(
+                    tr("err_auth.missing_header", &locale, &[]),
+                    "unauthorized",
+                ));
+            }
         };
         // Verify via JWT service.
         let claims = state.jwt.verify(token).map_err(|e| match e {
-            AuthError::TokenExpired => unauthorized("token expired"),
-            _ => unauthorized(&e.to_string()),
+            AuthError::TokenExpired => {
+                unauthorized(tr("err_auth.token_expired", &locale, &[]), "token_expired")
+            }
+            _ => unauthorized(
+                tr("err_auth.invalid_token", &locale, &[&e.to_string()]),
+                "invalid_token",
+            ),
         })?;
         if claims.kind != kokkak_domain::TokenKind::Access {
-            return Err(unauthorized("not an access token"));
+            return Err(unauthorized(
+                tr("err_auth.not_access_token", &locale, &[]),
+                "invalid_token",
+            ));
         }
         // Build AuthSession.
         let expires_at = DateTime::<Utc>::from_timestamp(claims.exp, 0).unwrap_or_else(Utc::now);
@@ -85,14 +106,16 @@ impl FromRequestParts<AppState> for AuthnUser {
     }
 }
 
-/// 401 response in the standard envelope.
-fn unauthorized(msg: &str) -> Response {
+/// 401 response in the standard envelope. `message` is the
+/// pre-resolved localized string; `code` is the stable
+/// snake-case identifier.
+fn unauthorized(message: String, code: &str) -> Response {
     let envelope: ApiResponse<()> = ApiResponse {
         success: false,
         data: None,
         error: Some(kokkak_common::error::ApiErrorBody {
-            code: "unauthorized".into(),
-            message: msg.into(),
+            code: code.into(),
+            message,
         }),
         meta: None,
     };
@@ -100,13 +123,14 @@ fn unauthorized(msg: &str) -> Response {
 }
 
 /// Build a 403 response (for use in handlers that check roles).
-pub fn forbidden(msg: &str) -> Response {
+/// `message` is the pre-resolved localized string.
+pub fn forbidden(message: String) -> Response {
     let envelope: ApiResponse<()> = ApiResponse {
         success: false,
         data: None,
         error: Some(kokkak_common::error::ApiErrorBody {
             code: "forbidden".into(),
-            message: msg.into(),
+            message,
         }),
         meta: None,
     };
@@ -114,17 +138,13 @@ pub fn forbidden(msg: &str) -> Response {
 }
 
 /// RBAC helper: `assert_role` returns `Ok(())` if the user has the
-/// role, otherwise returns the 403 response.
-pub fn assert_role(user: &AuthnUser, role: Role) -> Result<(), Response> {
+/// role, otherwise returns the 403 response built from a
+/// pre-resolved localized message (the caller resolves the
+/// message via `tr_with_repo` because `assert_role` is sync).
+pub fn assert_role(user: &AuthnUser, role: Role, message: String) -> Result<(), Response> {
     if user.has_role(role) {
         Ok(())
     } else {
-        Err(forbidden(&format!("role_required={}", role.as_str())))
+        Err(forbidden(message))
     }
-}
-
-// Suppress an unused import warning.
-#[allow(dead_code)]
-fn _silence_json() -> serde_json::Value {
-    json!({})
 }

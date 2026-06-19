@@ -1,4 +1,4 @@
-//! Payment HTTP handlers (M9).
+//! Payment HTTP handlers (M9 + M11 i18n).
 //!
 //! - `POST /api/v1/payments` — open a payment intent.
 //! - `POST /api/v1/payments/:id/confirm` — capture + commission + payout.
@@ -14,8 +14,11 @@ use axum::{
     Json,
 };
 use kokkak_application::{ConfirmPaymentInput, CreatePaymentInput, PaymentService};
+use kokkak_common::i18n::{current_locale, tr, tr_with_repo};
 use kokkak_common::response::{paginated, ApiResponse, PageMeta};
-use kokkak_domain::{Commission, Payment, PaymentError, Payout, PayoutStatus};
+use kokkak_domain::{
+    Commission, LocalizedError, Payment, PaymentError, Payout, PayoutStatus, Role,
+};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -63,12 +66,23 @@ pub async fn create_payment(
     user: AuthnUser,
     Json(req): Json<CreatePaymentRequest>,
 ) -> Result<Response, Response> {
-    assert_role(&user, kokkak_domain::Role::Customer).map_err(|r| r)?;
+    let locale = current_locale();
+    let role_msg = tr_with_repo(
+        &*state.translation,
+        &locale,
+        "err_auth.role_required",
+        &[Role::Customer.as_str()],
+    )
+    .await;
+    if let Err(r) = assert_role(&user, Role::Customer, role_msg) {
+        return Err(r);
+    }
     let amount = match req.amount {
         Some(s) => match s.parse::<Decimal>() {
             Ok(d) => Some(d),
             Err(_) => {
-                return Ok(bad_request("amount must be a decimal string"));
+                let msg = tr("err_payment.bad_amount", &locale, &[]);
+                return Ok(bad_request(msg));
             }
         },
         None => None,
@@ -78,11 +92,10 @@ pub async fn create_payment(
         customer_id: user.id(),
         amount,
     };
-    let p = state
-        .payments
-        .create_payment(input)
-        .await
-        .map_err(payment_err_to_response)?;
+    let p = match state.payments.create_payment(input).await {
+        Ok(v) => v,
+        Err(e) => return Err(payment_err_to_response(e, &state).await),
+    };
     Ok((
         StatusCode::CREATED,
         Json(ApiResponse {
@@ -166,25 +179,30 @@ pub async fn confirm_payment(
     Path(id): Path<Uuid>,
     Json(req): Json<ConfirmPaymentRequest>,
 ) -> Result<Response, Response> {
-    let p = state
-        .payments
-        .find_payment(id)
-        .await
-        .map_err(payment_err_to_response)?;
-    let Some(p) = p else {
-        return Ok(not_found("payment not found"));
+    let locale = current_locale();
+    let p = match state.payments.find_payment(id).await {
+        Ok(v) => v,
+        Err(e) => return Err(payment_err_to_response(e, &state).await),
     };
-    if p.customer_id != user.id() && !user.has_role(kokkak_domain::Role::Admin) {
-        return Ok(forbidden("not your payment"));
+    let Some(p) = p else {
+        let msg = tr("err_payment.not_found_msg", &locale, &[]);
+        return Ok(not_found(msg));
+    };
+    if p.customer_id != user.id() && !user.has_role(Role::Admin) {
+        let msg = tr("err_payment.not_yours", &locale, &[]);
+        return Ok(forbidden(msg));
     }
-    let result = state
+    let result = match state
         .payments
         .confirm_payment(ConfirmPaymentInput {
             payment_id: id,
             gateway_ref: req.gateway_ref,
         })
         .await
-        .map_err(payment_err_to_response)?;
+    {
+        Ok(v) => v,
+        Err(e) => return Err(payment_err_to_response(e, &state).await),
+    };
     Ok((
         StatusCode::OK,
         Json(ApiResponse {
@@ -213,11 +231,10 @@ pub async fn list_my_payments(
     Query(q): Query<ListMyQuery>,
 ) -> Result<Response, Response> {
     let limit = q.limit.unwrap_or(20);
-    let payments = state
-        .payments
-        .list_payments_for(user.id(), limit)
-        .await
-        .map_err(payment_err_to_response)?;
+    let payments = match state.payments.list_payments_for(user.id(), limit).await {
+        Ok(v) => v,
+        Err(e) => return Err(payment_err_to_response(e, &state).await),
+    };
     let items: Vec<PaymentDto> = payments.into_iter().map(PaymentDto::from).collect();
     let meta = PageMeta {
         limit: limit as usize,
@@ -233,16 +250,18 @@ pub async fn get_payment(
     user: AuthnUser,
     Path(id): Path<Uuid>,
 ) -> Result<Response, Response> {
-    let p = state
-        .payments
-        .find_payment(id)
-        .await
-        .map_err(payment_err_to_response)?;
-    let Some(p) = p else {
-        return Ok(not_found("payment not found"));
+    let locale = current_locale();
+    let p = match state.payments.find_payment(id).await {
+        Ok(v) => v,
+        Err(e) => return Err(payment_err_to_response(e, &state).await),
     };
-    if p.customer_id != user.id() && !user.has_role(kokkak_domain::Role::Admin) {
-        return Ok(forbidden("not your payment"));
+    let Some(p) = p else {
+        let msg = tr("err_payment.not_found_msg", &locale, &[]);
+        return Ok(not_found(msg));
+    };
+    if p.customer_id != user.id() && !user.has_role(Role::Admin) {
+        let msg = tr("err_payment.not_yours", &locale, &[]);
+        return Ok(forbidden(msg));
     }
     Ok((
         StatusCode::OK,
@@ -269,10 +288,10 @@ pub async fn list_payouts_admin(
     user: AuthnUser,
     Query(q): Query<ListPayoutsQuery>,
 ) -> Result<Response, Response> {
-    if !user.has_role(kokkak_domain::Role::Admin)
-        && !user.has_role(kokkak_domain::Role::SuperAdmin)
-    {
-        return Ok(forbidden("admin required"));
+    let locale = current_locale();
+    if !user.has_role(Role::Admin) && !user.has_role(Role::SuperAdmin) {
+        let msg = tr("err_auth.admin_required", &locale, &[]);
+        return Ok(forbidden(msg));
     }
     let limit = q.limit.unwrap_or(50);
     let status = match q.status.as_deref() {
@@ -281,15 +300,20 @@ pub async fn list_payouts_admin(
         Some("paid") => Some(PayoutStatus::Paid),
         Some("failed") => Some(PayoutStatus::Failed),
         Some(other) => {
-            return Ok(bad_request(&format!("unknown payout status: {other}")));
+            let args = [other];
+            let msg = tr("err_payment.unknown_payout_status", &locale, &args);
+            return Ok(bad_request(msg));
         }
         None => None,
     };
-    let payouts = state
+    let payouts = match state
         .payments
         .list_payouts(q.technician_id, status, limit)
         .await
-        .map_err(payment_err_to_response)?;
+    {
+        Ok(v) => v,
+        Err(e) => return Err(payment_err_to_response(e, &state).await),
+    };
     let items: Vec<PayoutDto> = payouts.into_iter().map(PayoutDto::from).collect();
     let meta = PageMeta {
         limit: limit as usize,
@@ -305,16 +329,15 @@ pub async fn mark_payout_paid_admin(
     user: AuthnUser,
     Path(id): Path<Uuid>,
 ) -> Result<Response, Response> {
-    if !user.has_role(kokkak_domain::Role::Admin)
-        && !user.has_role(kokkak_domain::Role::SuperAdmin)
-    {
-        return Ok(forbidden("admin required"));
+    let locale = current_locale();
+    if !user.has_role(Role::Admin) && !user.has_role(Role::SuperAdmin) {
+        let msg = tr("err_auth.admin_required", &locale, &[]);
+        return Ok(forbidden(msg));
     }
-    let p = state
-        .payments
-        .mark_payout_paid(id)
-        .await
-        .map_err(payment_err_to_response)?;
+    let p = match state.payments.mark_payout_paid(id).await {
+        Ok(v) => v,
+        Err(e) => return Err(payment_err_to_response(e, &state).await),
+    };
     Ok((
         StatusCode::OK,
         Json(ApiResponse {
@@ -327,46 +350,46 @@ pub async fn mark_payout_paid_admin(
         .into_response())
 }
 
-fn bad_request(message: &str) -> Response {
+fn bad_request(message: String) -> Response {
     let envelope: ApiResponse<()> = ApiResponse {
         success: false,
         data: None,
         error: Some(kokkak_common::error::ApiErrorBody {
             code: "bad_request".into(),
-            message: message.into(),
+            message,
         }),
         meta: None,
     };
     (StatusCode::BAD_REQUEST, Json(envelope)).into_response()
 }
 
-fn not_found(message: &str) -> Response {
+fn not_found(message: String) -> Response {
     let envelope: ApiResponse<()> = ApiResponse {
         success: false,
         data: None,
         error: Some(kokkak_common::error::ApiErrorBody {
             code: "not_found".into(),
-            message: message.into(),
+            message,
         }),
         meta: None,
     };
     (StatusCode::NOT_FOUND, Json(envelope)).into_response()
 }
 
-fn forbidden(message: &str) -> Response {
+fn forbidden(message: String) -> Response {
     let envelope: ApiResponse<()> = ApiResponse {
         success: false,
         data: None,
         error: Some(kokkak_common::error::ApiErrorBody {
             code: "forbidden".into(),
-            message: message.into(),
+            message,
         }),
         meta: None,
     };
     (StatusCode::FORBIDDEN, Json(envelope)).into_response()
 }
 
-fn payment_err_to_response(e: PaymentError) -> Response {
+async fn payment_err_to_response(e: PaymentError, state: &AppState) -> Response {
     use PaymentError::*;
     let (status, code) = match &e {
         NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
@@ -374,12 +397,16 @@ fn payment_err_to_response(e: PaymentError) -> Response {
         OrderNotPayable(_) => (StatusCode::CONFLICT, "conflict"),
         Backend(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
     };
+    let locale = current_locale();
+    let args: Vec<String> = e.l10n_args();
+    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let message = tr_with_repo(&*state.translation, &locale, e.l10n_key(), &args_ref).await;
     let envelope: ApiResponse<()> = ApiResponse {
         success: false,
         data: None,
         error: Some(kokkak_common::error::ApiErrorBody {
             code: code.into(),
-            message: e.to_string(),
+            message,
         }),
         meta: None,
     };

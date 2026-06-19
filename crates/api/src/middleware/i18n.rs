@@ -120,8 +120,7 @@ mod tests {
 
     #[test]
     fn query_takes_priority_over_header() {
-        let req = build_request(Some("lang=lo"), Some("th,en;q=0.5"));
-        let mut req = req;
+        let mut req = build_request(Some("lang=lo"), Some("th,en;q=0.5"));
         req.extensions_mut().insert(LocaleQuery {
             lang: Some("lo".into()),
         });
@@ -130,8 +129,7 @@ mod tests {
 
     #[test]
     fn invalid_query_falls_through_to_header() {
-        let req = build_request(Some("lang=zz"), Some("th"));
-        let mut req = req;
+        let mut req = build_request(Some("lang=zz"), Some("th"));
         req.extensions_mut().insert(LocaleQuery {
             lang: Some("zz".into()),
         });

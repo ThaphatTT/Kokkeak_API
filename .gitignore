@@ -47,3 +47,5 @@ data/
 *.bak
 *.tmp
 .DS_Store
+
+graphify-out

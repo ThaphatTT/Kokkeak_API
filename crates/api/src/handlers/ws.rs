@@ -1,4 +1,4 @@
-//! WebSocket chat gateway (M8).
+//! WebSocket chat gateway (M8 + M11 i18n).
 //!
 //! `GET /api/v1/chat/ws/:room_id` upgrades the connection to a
 //! WebSocket and pipes `ChatEvent`s from the local
@@ -12,6 +12,12 @@
 //! Membership: the user must be a participant of the room.
 //! Otherwise the upgrade is rejected with 403 *before* the
 //! WS handshake — by returning a plain error response.
+//!
+//! Error responses carry localized messages via
+//! `kokkak_common::i18n::tr_with_repo`; the locale is set
+//! per request by the i18n middleware, so the WS upgrade
+//! benefits from the same per-tenant override path as the
+//! REST endpoints.
 
 use std::sync::Arc;
 
@@ -24,6 +30,9 @@ use axum::{
 };
 use futures::{SinkExt, StreamExt};
 use kokkak_application::BroadcastTransport;
+use kokkak_common::i18n::{current_locale, tr, tr_with_repo};
+use kokkak_common::response::ApiResponse;
+use kokkak_domain::{AuthError, LocalizedError};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -41,48 +50,53 @@ pub async fn ws_upgrade(
     Path(room_id): Path<Uuid>,
     Query(q): Query<WsQuery>,
 ) -> Response {
+    let locale = current_locale();
     // 1. Verify the JWT.
     let claims = match state.jwt.verify(&q.token) {
         Ok(c) => c,
         Err(e) => {
-            return (
-                axum::http::StatusCode::UNAUTHORIZED,
-                format!("invalid token: {e}"),
-            )
-                .into_response();
+            let msg = match &e {
+                AuthError::TokenExpired => tr("err_auth.token_expired", &locale, &[]),
+                _ => {
+                    let args: Vec<String> = e.l10n_args();
+                    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+                    tr_with_repo(&*state.translation, &locale, e.l10n_key(), &args_ref).await
+                }
+            };
+            return ws_error_response(axum::http::StatusCode::UNAUTHORIZED, "unauthorized", msg);
         }
     };
     if claims.kind != kokkak_domain::TokenKind::Access {
-        return (axum::http::StatusCode::UNAUTHORIZED, "not an access token").into_response();
+        let msg = tr("err_auth.not_access_token", &locale, &[]);
+        return ws_error_response(axum::http::StatusCode::UNAUTHORIZED, "unauthorized", msg);
     }
     // 2. Load the user.
     let user = match state.users.get_user(claims.sub).await {
         Ok(u) => u,
         Err(e) => {
-            return (
-                axum::http::StatusCode::UNAUTHORIZED,
-                format!("user not found: {e}"),
-            )
-                .into_response();
+            let args: Vec<String> = e.l10n_args();
+            let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            let msg = tr_with_repo(&*state.translation, &locale, e.l10n_key(), &args_ref).await;
+            return ws_error_response(axum::http::StatusCode::UNAUTHORIZED, "unauthorized", msg);
         }
     };
     // 3. Membership check.
     let is_member = match state.chat.check_membership(room_id.into(), user.id).await {
         Ok(b) => b,
         Err(e) => {
-            return (
+            let args: Vec<String> = e.l10n_args();
+            let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            let msg = tr_with_repo(&*state.translation, &locale, e.l10n_key(), &args_ref).await;
+            return ws_error_response(
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                format!("membership check failed: {e}"),
-            )
-                .into_response();
+                "internal",
+                msg,
+            );
         }
     };
     if !is_member {
-        return (
-            axum::http::StatusCode::FORBIDDEN,
-            "not a participant of this room",
-        )
-            .into_response();
+        let msg = tr("err_chat.not_participant_msg", &locale, &[]);
+        return ws_error_response(axum::http::StatusCode::FORBIDDEN, "forbidden", msg);
     }
     // 4. All checks passed: actually upgrade.
     let local = state.chat.local_transport().clone();
@@ -91,6 +105,24 @@ pub async fn ws_upgrade(
         handle_socket(socket, local, room_id_str).await;
     })
     .into_response()
+}
+
+/// Render a localized error response during the WS upgrade
+/// handshake. The response body is a JSON envelope in the
+/// standard `ApiResponse` shape; clients that can't read JSON
+/// (browsers running on the WS handshake) will surface the
+/// status code as the upgrade failure reason.
+fn ws_error_response(status: axum::http::StatusCode, code: &str, message: String) -> Response {
+    let envelope: ApiResponse<()> = ApiResponse {
+        success: false,
+        data: None,
+        error: Some(kokkak_common::error::ApiErrorBody {
+            code: code.into(),
+            message,
+        }),
+        meta: None,
+    };
+    (status, axum::Json(envelope)).into_response()
 }
 
 async fn handle_socket(socket: WebSocket, local: Arc<BroadcastTransport>, room_id_str: String) {

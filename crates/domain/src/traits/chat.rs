@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use crate::chat::{ChatMessage, ChatRoom, MessageId, RoomId, RoomSummary};
+use crate::chat::{ChatMessage, ChatRoom, RoomId, RoomSummary};
 
 /// Pagination input for message listing (keyset on `sent_at`).
 #[derive(Debug, Clone, Copy)]

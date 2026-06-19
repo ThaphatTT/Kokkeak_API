@@ -82,9 +82,7 @@ async fn unknown_accept_language_falls_back_to_english() {
                 .uri("/api/v1/auth/login")
                 .header("content-type", "application/json")
                 .header("accept-language", "fr,de;q=0.9")
-                .body(Body::from(
-                    r#"{"email":"unknown@example.com","password":"wrong-password"}"#,
-                ))
+                .body(Body::from(r#"{"username":"x","password":"x"}"#))
                 .unwrap(),
         )
         .await
@@ -118,9 +116,7 @@ async fn accept_language_th_returns_thai_message() {
                 .uri("/api/v1/auth/login")
                 .header("content-type", "application/json")
                 .header("accept-language", "th,en;q=0.5")
-                .body(Body::from(
-                    r#"{"email":"unknown@example.com","password":"wrong-password"}"#,
-                ))
+                .body(Body::from(r#"{"username":"x","password":"x"}"#))
                 .unwrap(),
         )
         .await
@@ -158,15 +154,14 @@ async fn query_lang_overrides_accept_language() {
                 .uri("/api/v1/auth/login?lang=lo")
                 .header("content-type", "application/json")
                 .header("accept-language", "th,en;q=0.5")
-                .body(Body::from(
-                    r#"{"email":"unknown@example.com","password":"wrong-password"}"#,
-                ))
+                .body(Body::from(r#"{"username":"x","password":"x"}"#))
                 .unwrap(),
         )
         .await
         .unwrap();
     let v = read_json(resp).await;
     let msg = v["error"]["message"].as_str().unwrap_or("");
+    assert!(!msg.is_empty());
     // The query said "lo", so the message must be the Lao
     // version (which differs from both the Thai and English).
     let lo_invalid = tr("err_auth.invalid_credentials", "lo", &[]);
@@ -209,9 +204,7 @@ async fn per_tenant_override_wins_over_file_catalog() {
                 .uri("/api/v1/auth/login")
                 .header("content-type", "application/json")
                 .header("accept-language", "en")
-                .body(Body::from(
-                    r#"{"email":"unknown@example.com","password":"wrong-password"}"#,
-                ))
+                .body(Body::from(r#"{"username":"x","password":"x"}"#))
                 .unwrap(),
         )
         .await
@@ -271,11 +264,11 @@ async fn e2e_register_login_runs_in_each_locale() {
         let email = format!("user-{}@example.com", Uuid::new_v4());
         // Register a fresh user.
         let reg_body = serde_json::json!({
-            "email": &email,
+            "username": &email,
             "password": "supersecret-123",
-            "display_name": "Alice",
+            "first_name": "Alice",
+            "last_name": "Wonder",
             "role": "customer",
-            "locale": "lo",
         });
         let mut req = Request::builder()
             .method("POST")
@@ -300,7 +293,7 @@ async fn e2e_register_login_runs_in_each_locale() {
         // Now log in with wrong password to trigger a localized
         // error.
         let login_body = serde_json::json!({
-            "email": &email,
+            "username": &email,
             "password": "wrong-password",
             "scope": "mobile",
         });

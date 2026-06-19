@@ -1,4 +1,4 @@
-//! Chat HTTP handlers (M8).
+//! Chat HTTP handlers (M8 + M11 i18n).
 //!
 //! - `GET  /api/v1/chat/rooms` — inbox (list rooms for user).
 //! - `POST /api/v1/chat/rooms` — open (or return existing) 1:1 room.
@@ -6,7 +6,10 @@
 //! - `POST /api/v1/chat/rooms/:id/messages` — send a message.
 //! - `POST /api/v1/chat/rooms/:id/read` — append a read receipt.
 //!
-//! The WebSocket gateway is in `super::ws`.
+//! The WebSocket gateway is in `super::ws`. User-visible error
+//! strings are rendered via `kokkak_common::i18n::tr_with_repo`
+//! against the per-tenant `TranslationRepository`; the
+//! file-based catalog is the fallback.
 
 use axum::{
     extract::{Path, Query, State},
@@ -15,8 +18,11 @@ use axum::{
     Json,
 };
 use chrono::{DateTime, Utc};
+use kokkak_common::i18n::{current_locale, tr, tr_with_repo};
 use kokkak_common::response::{paginated, ApiResponse, PageMeta};
-use kokkak_domain::{ChatError, ChatMessage, ChatRoom, Participant, RoomId, RoomSummary};
+use kokkak_domain::{
+    ChatError, ChatMessage, ChatRoom, LocalizedError, Participant, RoomId, RoomSummary,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -58,18 +64,17 @@ pub async fn list_rooms(
     let user = match state.users.get_user(user.id()).await {
         Ok(u) => u,
         Err(e) => {
-            return Ok(err_envelope(
-                StatusCode::NOT_FOUND,
-                "not_found",
-                &e.to_string(),
-            ))
+            let locale = current_locale();
+            let args: Vec<String> = e.l10n_args();
+            let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            let msg = tr_with_repo(&*state.translation, &locale, e.l10n_key(), &args_ref).await;
+            return Ok(err_envelope(StatusCode::NOT_FOUND, "not_found", msg));
         }
     };
-    let rooms = state
-        .chat
-        .list_rooms_for(&user, limit)
-        .await
-        .map_err(chat_err_to_response)?;
+    let rooms = match state.chat.list_rooms_for(&user, limit).await {
+        Ok(r) => r,
+        Err(e) => return Err(chat_err_to_response(e, &state).await),
+    };
     let items: Vec<RoomSummaryDto> = rooms.into_iter().map(RoomSummaryDto::from).collect();
     let meta = PageMeta {
         limit: limit as usize,
@@ -99,11 +104,9 @@ pub async fn open_room(
         "admin" => kokkak_domain::Role::Admin,
         "super_admin" | "superadmin" => kokkak_domain::Role::SuperAdmin,
         _ => {
-            return Ok(err_envelope(
-                StatusCode::BAD_REQUEST,
-                "bad_request",
-                "other_role must be one of: customer, technician, admin",
-            ))
+            let locale = current_locale();
+            let msg = tr("err_chat.bad_other_role", &locale, &[]);
+            return Ok(err_envelope(StatusCode::BAD_REQUEST, "bad_request", msg));
         }
     };
     let participants = vec![
@@ -116,11 +119,10 @@ pub async fn open_room(
             role: other_role,
         },
     ];
-    let room = state
-        .chat
-        .open_room(participants)
-        .await
-        .map_err(chat_err_to_response)?;
+    let room = match state.chat.open_room(participants).await {
+        Ok(r) => r,
+        Err(e) => return Err(chat_err_to_response(e, &state).await),
+    };
     Ok((
         StatusCode::CREATED,
         Json(ApiResponse {
@@ -174,11 +176,9 @@ pub async fn list_messages(
         Some(s) => match DateTime::parse_from_rfc3339(s) {
             Ok(t) => Some(t.with_timezone(&Utc)),
             Err(_) => {
-                return Ok(err_envelope(
-                    StatusCode::BAD_REQUEST,
-                    "bad_request",
-                    "after must be an RFC3339 timestamp",
-                ))
+                let locale = current_locale();
+                let msg = tr("err_request.bad_timestamp", &locale, &[]);
+                return Ok(err_envelope(StatusCode::BAD_REQUEST, "bad_request", msg));
             }
         },
         None => None,
@@ -186,18 +186,21 @@ pub async fn list_messages(
     let user = match state.users.get_user(user.id()).await {
         Ok(u) => u,
         Err(e) => {
-            return Ok(err_envelope(
-                StatusCode::NOT_FOUND,
-                "not_found",
-                &e.to_string(),
-            ))
+            let locale = current_locale();
+            let args: Vec<String> = e.l10n_args();
+            let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            let msg = tr_with_repo(&*state.translation, &locale, e.l10n_key(), &args_ref).await;
+            return Ok(err_envelope(StatusCode::NOT_FOUND, "not_found", msg));
         }
     };
-    let msgs = state
+    let msgs = match state
         .chat
         .list_messages(room_id.into(), &user, before, limit)
         .await
-        .map_err(chat_err_to_response)?;
+    {
+        Ok(m) => m,
+        Err(e) => return Err(chat_err_to_response(e, &state).await),
+    };
     let items: Vec<MessageDto> = msgs.into_iter().map(MessageDto::from).collect();
     let meta = PageMeta {
         limit: limit as usize,
@@ -219,11 +222,14 @@ pub async fn send_message(
     Path(room_id): Path<Uuid>,
     Json(req): Json<SendMessageRequest>,
 ) -> Result<Response, Response> {
-    let msg = state
+    let msg = match state
         .chat
         .send_message(room_id.into(), user.id(), req.body)
         .await
-        .map_err(chat_err_to_response)?;
+    {
+        Ok(m) => m,
+        Err(e) => return Err(chat_err_to_response(e, &state).await),
+    };
     Ok((
         StatusCode::CREATED,
         Json(ApiResponse {
@@ -245,18 +251,16 @@ pub async fn mark_read(
     let user = match state.users.get_user(user.id()).await {
         Ok(u) => u,
         Err(e) => {
-            return Ok(err_envelope(
-                StatusCode::NOT_FOUND,
-                "not_found",
-                &e.to_string(),
-            ))
+            let locale = current_locale();
+            let args: Vec<String> = e.l10n_args();
+            let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            let msg = tr_with_repo(&*state.translation, &locale, e.l10n_key(), &args_ref).await;
+            return Ok(err_envelope(StatusCode::NOT_FOUND, "not_found", msg));
         }
     };
-    state
-        .chat
-        .mark_read(room_id.into(), &user)
-        .await
-        .map_err(chat_err_to_response)?;
+    if let Err(e) = state.chat.mark_read(room_id.into(), &user).await {
+        return Err(chat_err_to_response(e, &state).await);
+    }
     Ok((
         StatusCode::OK,
         Json(ApiResponse::<()> {
@@ -281,20 +285,20 @@ fn my_role(user: &AuthnUser) -> kokkak_domain::Role {
     }
 }
 
-fn err_envelope(status: StatusCode, code: &str, message: &str) -> Response {
+fn err_envelope(status: StatusCode, code: &str, message: String) -> Response {
     let envelope: ApiResponse<()> = ApiResponse {
         success: false,
         data: None,
         error: Some(kokkak_common::error::ApiErrorBody {
             code: code.into(),
-            message: message.into(),
+            message,
         }),
         meta: None,
     };
     (status, Json(envelope)).into_response()
 }
 
-fn chat_err_to_response(e: ChatError) -> Response {
+async fn chat_err_to_response(e: ChatError, state: &AppState) -> Response {
     use ChatError::*;
     let (status, code) = match &e {
         NotParticipant(_) => (StatusCode::FORBIDDEN, "forbidden"),
@@ -302,7 +306,11 @@ fn chat_err_to_response(e: ChatError) -> Response {
         InvalidBody(_) => (StatusCode::UNPROCESSABLE_ENTITY, "validation"),
         Backend(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
     };
-    err_envelope(status, code, &e.to_string())
+    let locale = current_locale();
+    let args: Vec<String> = e.l10n_args();
+    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let message = tr_with_repo(&*state.translation, &locale, e.l10n_key(), &args_ref).await;
+    err_envelope(status, code, message)
 }
 
 /// Borrow the room id type.

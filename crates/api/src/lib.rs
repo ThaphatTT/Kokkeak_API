@@ -22,7 +22,7 @@ use kokkak_application::chat::{BroadcastTransport, ChatService, ChatTransport};
 use kokkak_application::order::OrderService;
 use kokkak_application::payment::PaymentService;
 use kokkak_application::user::UserService;
-use kokkak_domain::HealthRegistry;
+use kokkak_domain::{HealthRegistry, TranslationRepository};
 use kokkak_infra::auth::jwt::JwtService;
 
 use adapters::{JwtIssuerAdapter, PasswordHasherAdapter};
@@ -55,7 +55,18 @@ pub fn build_app_state_with(
         bundle.payments.clone(),
         bundle.orders.clone(),
     ));
-    AppState::new(auth, user, catalog, orders, chat, payments, jwt, registry)
+    let translation: Arc<dyn TranslationRepository> = bundle.translation;
+    AppState::new(
+        auth,
+        user,
+        catalog,
+        orders,
+        chat,
+        payments,
+        jwt,
+        registry,
+        translation,
+    )
 }
 
 /// Build the full `AppState` from concrete infra handles.
@@ -71,6 +82,7 @@ pub fn build_app_state(
     payment_repo: Arc<dyn kokkak_domain::PaymentRepository>,
     jwt: Arc<JwtService>,
     registry: HealthRegistry,
+    translation: Arc<dyn TranslationRepository>,
 ) -> AppState {
     let bundle = RepoBundle {
         backend: RepoBackend::Json,
@@ -79,19 +91,23 @@ pub fn build_app_state(
         orders: order_repo,
         chat: chat_repo,
         payments: payment_repo,
+        translation,
         mssql_pool: None,
+        topology: None,
     };
     build_app_state_with(bundle, jwt, registry)
 }
 
 /// Convenience builder for tests/dev: use the JSON-DB sims
 /// for chat and payment and an in-process chat transport.
+#[allow(clippy::too_many_arguments)]
 pub fn build_app_state_json(
     user_repo: Arc<dyn kokkak_domain::UserRepository>,
     service_repo: Arc<dyn kokkak_domain::ServiceRepository>,
     order_repo: Arc<dyn kokkak_domain::OrderRepository>,
     jwt: Arc<JwtService>,
     registry: HealthRegistry,
+    translation: Arc<dyn TranslationRepository>,
 ) -> AppState {
     use kokkak_infra::db::json_chat::JsonChatRepository;
     use kokkak_infra::db::json_payment::JsonPaymentRepository;
@@ -107,5 +123,6 @@ pub fn build_app_state_json(
         payment_repo,
         jwt,
         registry,
+        translation,
     )
 }

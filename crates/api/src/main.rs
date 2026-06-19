@@ -25,9 +25,9 @@ use axum::{
     body::Body,
     http::{header::CONTENT_TYPE, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, Router},
+    routing::get,
 };
-use kokkak_common::{config::Settings, telemetry};
+use kokkak_common::{config::Settings, i18n, telemetry};
 use kokkak_domain::HealthRegistry;
 use kokkak_infra::auth::jwt::JwtService;
 use kokkak_infra::cache::redis::RedisCache;
@@ -37,7 +37,6 @@ use kokkak_infra::queue::nats::NatsQueue;
 use kokkak_api::build_app_state_with;
 use kokkak_api::build_repos;
 use kokkak_api::build_router;
-use kokkak_api::RepoBackend;
 
 /// T03: serve Prometheus text-format metrics.
 async fn metrics_handler() -> impl IntoResponse {
@@ -51,6 +50,13 @@ async fn metrics_handler() -> impl IntoResponse {
 
 #[tokio::main]
 async fn main() {
+    // ---- T02: load .env (if present) into process env BEFORE
+    //   Settings::load() — figment's Env provider only reads from
+    //   std::env, not from disk. `dotenv()` is a no-op when no
+    //   .env exists (production deploys inject env vars via
+    //   docker/k8s/systemd instead). ----
+    let _ = dotenvy::dotenv();
+
     // ---- T02: load & validate configuration ----
     let settings = Settings::load().unwrap_or_else(|err| {
         eprintln!("[kokkak-api] invalid configuration: {err}");
@@ -58,6 +64,10 @@ async fn main() {
         std::process::exit(1);
     });
 
+    // ---- M11: initialize the i18n catalog (th / en / lo). The
+    //   default locale is the catalog fallback; per-request
+    //   locale is set by the locale_middleware.
+    i18n::init_i18n("en");
     // ---- T03: init tracing (JSON or pretty) + Prometheus metrics ----
     telemetry::init_tracing(settings.log.format);
     let _metrics_handle = Arc::new(telemetry::init_metrics());
@@ -113,7 +123,22 @@ async fn main() {
     let _ = (bundle.backend, bundle.mssql_pool.is_some());
 
     // ---- T05 + M1: build readiness registry ----
-    let registry = build_health_registry(&settings).await;
+    let mut registry = build_health_registry(&settings).await;
+
+    // ---- M12: register the multi-DB SQL Server health check
+    //   when the factory actually built a topology. The check
+    //   pings every live role, so /readyz shows the failing
+    //   role on a multi-DB outage. ----
+    if let Some(topo) = &bundle.topology {
+        let topo_arc = Arc::new(topo.clone());
+        registry.register(Arc::new(
+            kokkak_infra::health::sqlserver::MultiDbHealthCheck::new(topo_arc),
+        ));
+        tracing::info!(
+            roles = ?topo.live_roles(),
+            "sqlserver multi-DB health check registered"
+        );
+    }
 
     // ---- Build app state ----
     let state = build_app_state_with(bundle, jwt, registry);
@@ -195,9 +220,16 @@ async fn build_health_registry(settings: &Settings) -> HealthRegistry {
     }
 
     if settings.database.is_configured() {
-        tracing::warn!(
-            "KOKKAK_DATABASE__SQLSERVER_URL is set but the tiberius client is deferred to M1.5+ — \
-             /readyz will NOT report SQL Server. See crates/infra/src/db/mssql.rs."
+        // M12: a SQL Server URL is set but the topology has not
+        // been built yet. The actual `MultiDbHealthCheck` is
+        // wired AFTER `build_repos` (see `main` below), so this
+        // branch is only reached in dev when the URL is set but
+        // the operator's expectation is JSON-DB (e.g. the env
+        // var leaked from staging). The factory falls back to
+        // JSON when the topology build fails; we just log a
+        // hint here.
+        tracing::debug!(
+            "sqlserver_url is set; /readyz will report sqlserver once the topology is built"
         );
     }
 

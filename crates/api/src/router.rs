@@ -1,11 +1,13 @@
 //! HTTP router (composition root for routes).
 
 use axum::{
+    middleware::from_fn,
     routing::{get, post},
     Router,
 };
 
 use crate::handlers;
+use crate::middleware::i18n::locale_middleware;
 use crate::state::AppState;
 
 /// Build the full application router.
@@ -80,6 +82,9 @@ pub fn build(state: AppState) -> Router {
         );
 
     // Merge into a single router, then attach state.
+    // Layer order (LIFO: last-attached runs first):
+    //   1. locale_middleware (innermost) — sets task-local locale
+    //      from `Accept-Language` / `?lang=` before the handler runs.
     Router::new()
         .merge(health_routes)
         .merge(auth_routes)
@@ -88,4 +93,5 @@ pub fn build(state: AppState) -> Router {
         .merge(payment_routes)
         .merge(admin_payout_routes)
         .with_state(state)
+        .layer(from_fn(locale_middleware))
 }

@@ -1,7 +1,8 @@
-//! Order HTTP handlers (M3).
+//! Order HTTP handlers (M3 + M6 + M11 i18n).
 //!
 //! - GET /api/v1/orders/me  (customer: list my orders)
 //! - GET /api/v1/orders/assigned  (technician: list my assigned orders)
+//! - POST /api/v1/orders  (customer: create a new order)
 
 use axum::{
     extract::{Query, State},
@@ -9,8 +10,9 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use kokkak_common::i18n::{current_locale, tr, tr_with_repo};
 use kokkak_common::response::{paginated, ApiResponse, PageMeta};
-use kokkak_domain::Role;
+use kokkak_domain::{LocalizedError, RepoError, Role};
 use serde::{Deserialize, Serialize};
 
 use crate::middleware::auth::{assert_role, AuthnUser};
@@ -57,13 +59,26 @@ pub async fn list_my_orders(
     user: AuthnUser,
     Query(q): Query<ListQuery>,
 ) -> Result<Response, Response> {
-    assert_role(&user, Role::Customer).map_err(|r| r)?;
+    let locale = current_locale();
+    let role_msg = tr_with_repo(
+        &*state.translation,
+        &locale,
+        "err_auth.role_required",
+        &[Role::Customer.as_str()],
+    )
+    .await;
+    if let Err(r) = assert_role(&user, Role::Customer, role_msg) {
+        return Err(r);
+    }
     let limit = q.limit.unwrap_or(20);
-    let page = state
+    let page = match state
         .orders
         .list_for_customer(user.id(), q.after, limit)
         .await
-        .map_err(repo_error_to_response)?;
+    {
+        Ok(p) => p,
+        Err(e) => return Err(repo_error_to_response(e, &state).await),
+    };
     let has_next = page.next_cursor.is_some();
     let items: Vec<OrderItem> = page.items.into_iter().map(OrderItem::from).collect();
     let meta = PageMeta {
@@ -93,10 +108,36 @@ pub async fn create_order(
     user: AuthnUser,
     Json(req): Json<CreateOrderRequest>,
 ) -> Result<Response, Response> {
-    assert_role(&user, Role::Customer).map_err(|r| r)?;
-    let total: rust_decimal::Decimal = req.total.parse().map_err(|_| {
-        repo_error_to_response(kokkak_domain::RepoError::Backend("invalid total".into()))
-    })?;
+    let locale = current_locale();
+    let role_msg = tr_with_repo(
+        &*state.translation,
+        &locale,
+        "err_auth.role_required",
+        &[Role::Customer.as_str()],
+    )
+    .await;
+    if let Err(r) = assert_role(&user, Role::Customer, role_msg) {
+        return Err(r);
+    }
+    let total: rust_decimal::Decimal = match req.total.parse() {
+        Ok(d) => d,
+        Err(_) => {
+            // Localized "invalid total" message — uses the
+            // file-based `tr` because the error is a client
+            // validation problem, not a backend failure.
+            let msg = tr("err_order.invalid_total", &locale, &[]);
+            let envelope: ApiResponse<()> = ApiResponse {
+                success: false,
+                data: None,
+                error: Some(kokkak_common::error::ApiErrorBody {
+                    code: "validation".into(),
+                    message: msg,
+                }),
+                meta: None,
+            };
+            return Err((StatusCode::UNPROCESSABLE_ENTITY, Json(envelope)).into_response());
+        }
+    };
     let input = kokkak_application::order::CreateOrderInput {
         service_code: req.service_code,
         customer_id: user.id(),
@@ -106,11 +147,10 @@ pub async fn create_order(
         order_lat: req.order_lat,
         order_lon: req.order_lon,
     };
-    let order = state
-        .orders
-        .create_order(input)
-        .await
-        .map_err(repo_error_to_response)?;
+    let order = match state.orders.create_order(input).await {
+        Ok(o) => o,
+        Err(e) => return Err(repo_error_to_response(e, &state).await),
+    };
     Ok((
         StatusCode::CREATED,
         Json(ApiResponse {
@@ -129,13 +169,26 @@ pub async fn list_assigned_orders(
     user: AuthnUser,
     Query(q): Query<ListQuery>,
 ) -> Result<Response, Response> {
-    assert_role(&user, Role::Technician).map_err(|r| r)?;
+    let locale = current_locale();
+    let role_msg = tr_with_repo(
+        &*state.translation,
+        &locale,
+        "err_auth.role_required",
+        &[Role::Technician.as_str()],
+    )
+    .await;
+    if let Err(r) = assert_role(&user, Role::Technician, role_msg) {
+        return Err(r);
+    }
     let limit = q.limit.unwrap_or(20);
-    let page = state
+    let page = match state
         .orders
         .list_for_technician(user.id(), q.after, limit)
         .await
-        .map_err(repo_error_to_response)?;
+    {
+        Ok(p) => p,
+        Err(e) => return Err(repo_error_to_response(e, &state).await),
+    };
     let has_next = page.next_cursor.is_some();
     let items: Vec<OrderItem> = page.items.into_iter().map(OrderItem::from).collect();
     let meta = PageMeta {
@@ -146,19 +199,23 @@ pub async fn list_assigned_orders(
     Ok((StatusCode::OK, paginated(items, meta)).into_response())
 }
 
-fn repo_error_to_response(err: kokkak_domain::RepoError) -> Response {
-    use kokkak_domain::RepoError::*;
+async fn repo_error_to_response(err: RepoError, state: &AppState) -> Response {
+    use RepoError::*;
     let (status, code) = match &err {
         NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
         Conflict(_) => (StatusCode::CONFLICT, "conflict"),
         Backend(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
     };
+    let locale = current_locale();
+    let args: Vec<String> = err.l10n_args();
+    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let message = tr_with_repo(&*state.translation, &locale, err.l10n_key(), &args_ref).await;
     let envelope: ApiResponse<()> = ApiResponse {
         success: false,
         data: None,
         error: Some(kokkak_common::error::ApiErrorBody {
             code: code.into(),
-            message: err.to_string(),
+            message,
         }),
         meta: None,
     };

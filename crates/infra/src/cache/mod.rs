@@ -8,3 +8,4 @@
 
 pub mod layer;
 pub mod redis;
+pub mod translation_cache;

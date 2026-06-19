@@ -58,8 +58,16 @@ pub struct Settings {
 
     /// SQL Server database settings (T06).
     /// Empty by default; production MUST set `KOKKAK_DATABASE__SQLSERVER_URL`.
+    /// Acts as the **catch-all** for [`Settings::database_topology`].
     #[serde(default)]
     pub database: DatabaseSettings,
+
+    /// Multi-DB connection topology (M12). One pool per
+    /// [`DbRole`]. When a role's URL is empty it inherits from
+    /// the legacy [`Self::database`] field. See module-level
+    /// docs for the env-var contract.
+    #[serde(default)]
+    pub database_topology: DatabaseTopologySettings,
 
     /// Redis cache + pub/sub settings (T07, T07A).
     #[serde(default)]
@@ -88,6 +96,7 @@ impl Default for Settings {
             server: ServerSettings::default(),
             log: LogSettings::default(),
             database: DatabaseSettings::default(),
+            database_topology: DatabaseTopologySettings::default(),
             redis: RedisSettings::default(),
             nats: NatsSettings::default(),
             mongo: MongoSettings::default(),
@@ -135,6 +144,78 @@ impl Default for LogSettings {
     }
 }
 
+/// One slot in the multi-DB topology (M12).
+///
+/// Each role corresponds to a physical SQL Server database
+/// (`KOKKAK_MASTER`, `KOKKAK_CATALOG`, ...). Lives in the
+/// `config` module so the topology struct (which needs it)
+/// can live above `infra`. Adding a new role is a deliberate
+/// change: the compiler will guide every repository that needs
+/// updating via [`DatabaseTopologySettings::for_role`] / the
+/// matching `Mssql*Repository::new` calls.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum DbRole {
+    /// `KOKKAK_MASTER` — auth, user, RBAC, geo, config, bank, vat, commission, transport.
+    Master,
+    /// `KOKKAK_CATALOG` — services, categories, fees, warranties.
+    Catalog,
+    /// `KOKKAK_ORDER` — orders, bodies, stages, assignments, reviews, addons.
+    Order,
+    /// `KOKKAK_PAYMENT` — payments, statements, payouts.
+    Payment,
+    /// `KOKKAK_LOG` — audit, error log, login history.
+    Log,
+    /// `KOKKAK_REPORT` — read-only views for reports.
+    Report,
+    /// `KOKKAK_TEMP` — migration staging.
+    Temp,
+}
+
+impl DbRole {
+    /// Canonical env-var suffix: `KOKKAK_DATABASE__MASTER_URL`, etc.
+    pub const fn env_suffix(self) -> &'static str {
+        match self {
+            Self::Master => "MASTER_URL",
+            Self::Catalog => "CATALOG_URL",
+            Self::Order => "ORDER_URL",
+            Self::Payment => "PAYMENT_URL",
+            Self::Log => "LOG_URL",
+            Self::Report => "REPORT_URL",
+            Self::Temp => "TEMP_URL",
+        }
+    }
+
+    /// Stable string id (used in logs + health checks).
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Master => "master",
+            Self::Catalog => "catalog",
+            Self::Order => "order",
+            Self::Payment => "payment",
+            Self::Log => "log",
+            Self::Report => "report",
+            Self::Temp => "temp",
+        }
+    }
+
+    /// All roles, in stable iteration order.
+    pub const ALL: [DbRole; 7] = [
+        Self::Master,
+        Self::Catalog,
+        Self::Order,
+        Self::Payment,
+        Self::Log,
+        Self::Report,
+        Self::Temp,
+    ];
+}
+
+impl std::fmt::Display for DbRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// SQL Server database settings (T06).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DatabaseSettings {
@@ -171,6 +252,206 @@ impl Default for DatabaseSettings {
             migrations_dir: default_migrations_dir(),
         }
     }
+}
+
+/// Convenience constructor used by tests and by
+/// [`crate::config::DatabaseTopologySettings::from_settings`].
+/// Lets the caller write `DatabaseSettings::from_url("Server=...")`
+/// without juggling four `Default` fields.
+impl DatabaseSettings {
+    /// Build a `DatabaseSettings` from a single connection URL,
+    /// using the default pool size / timeout / migrations dir.
+    ///
+    /// Recognised URL forms (forwarded verbatim to
+    /// `kokkak_infra::db::mssql::parse_connection_url`):
+    /// - ADO.NET: `Server=host;Database=db;User Id=u;Password=p`
+    /// - URL:     `mssql://user:pass@host:1433/db?encrypt=true`
+    /// - JDBC:    `jdbc:sqlserver://host:1433;database=db;...`
+    pub fn from_url(url: impl Into<String>) -> Self {
+        Self {
+            sqlserver_url: url.into(),
+            ..Self::default()
+        }
+    }
+}
+
+/// Multi-DB connection topology (M12).
+///
+/// Implements the per-role connection-strings defined in
+/// `AGENTS.md` § 7.1. Each role (`master`, `catalog`, `order`, ...)
+/// has its own [`DatabaseSettings`]. Roles whose URL is empty
+/// inherit from the `catch_all` slot, which itself is populated
+/// from the legacy [`Settings::database`] field at startup.
+///
+/// ## Env-var contract
+///
+/// ```text
+/// KOKKAK_DATABASE__SQLSERVER_URL          (legacy catch-all — still works)
+/// KOKKAK_DATABASE__CATCH_ALL_URL          (new — equivalent, takes precedence)
+/// KOKKAK_DATABASE__MASTER_URL             (per-role override)
+/// KOKKAK_DATABASE__CATALOG_URL            (per-role override)
+/// KOKKAK_DATABASE__ORDER_URL              (per-role override)
+/// KOKKAK_DATABASE__PAYMENT_URL            (per-role override)
+/// KOKKAK_DATABASE__LOG_URL                (per-role override)
+/// KOKKAK_DATABASE__REPORT_URL             (per-role override)
+/// KOKKAK_DATABASE__TEMP_URL               (per-role override)
+/// ```
+///
+/// The `Migrations` / `Pool size` / `Connect timeout` fields are
+/// per-role. If you set only the URL, defaults are used.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DatabaseTopologySettings {
+    /// Fallback URL used by every role that has no per-role URL.
+    /// Mirrors the legacy `Settings.database.sqlserver_url` for
+    /// backward compat.
+    #[serde(default)]
+    pub catch_all: DatabaseSettings,
+    /// `KOKKAK_MASTER` — auth, user, RBAC, geo, config, bank, vat, commission, transport.
+    #[serde(default)]
+    pub master: DatabaseSettings,
+    /// `KOKKAK_CATALOG` — services, categories, fees, warranties.
+    #[serde(default)]
+    pub catalog: DatabaseSettings,
+    /// `KOKKAK_ORDER` — orders, bodies, stages, assignments, reviews, addons.
+    #[serde(default)]
+    pub order: DatabaseSettings,
+    /// `KOKKAK_PAYMENT` — payments, statements, payouts.
+    #[serde(default)]
+    pub payment: DatabaseSettings,
+    /// `KOKKAK_LOG` — audit, error log, login history.
+    #[serde(default)]
+    pub log: DatabaseSettings,
+    /// `KOKKAK_REPORT` — read-only views for reports.
+    #[serde(default)]
+    pub report: DatabaseSettings,
+    /// `KOKKAK_TEMP` — migration staging.
+    #[serde(default)]
+    pub temp: DatabaseSettings,
+}
+
+impl Default for DatabaseTopologySettings {
+    fn default() -> Self {
+        Self {
+            catch_all: DatabaseSettings::default(),
+            master: DatabaseSettings::default(),
+            catalog: DatabaseSettings::default(),
+            order: DatabaseSettings::default(),
+            payment: DatabaseSettings::default(),
+            log: DatabaseSettings::default(),
+            report: DatabaseSettings::default(),
+            temp: DatabaseSettings::default(),
+        }
+    }
+}
+
+impl DatabaseTopologySettings {
+    /// Synthesise a topology from the top-level [`Settings`].
+    ///
+    /// For each role:
+    /// 1. If the per-role `sqlserver_url` is set, use it.
+    /// 2. Otherwise, if the top-level `database.sqlserver_url` is
+    ///    set, inherit it (preserving M10 behaviour).
+    /// 3. Otherwise, the role is unconfigured.
+    ///
+    /// Per-role `pool_size` / `connect_timeout_secs` /
+    /// `migrations_dir` follow the same precedence: per-role
+    /// > catch-all > default.
+    pub fn from_settings(s: &Settings) -> Self {
+        let mut out = Self::default();
+        out.catch_all = s.database.clone();
+        for role in crate::config::DbRole::ALL {
+            let per_role = s.database_topology.settings_for(role);
+            let merged = merge_with_fallback(per_role, &s.database);
+            *out.slot_mut(role) = merged;
+        }
+        out
+    }
+
+    /// Borrow the settings for a role, with the catch-all fallback
+    /// applied. **Returns the slot itself, not the merged value** —
+    /// use this when the caller already knows the role is
+    /// configured and wants to inspect its own URL.
+    pub fn slot(&self, role: crate::config::DbRole) -> &DatabaseSettings {
+        match role {
+            crate::config::DbRole::Master => &self.master,
+            crate::config::DbRole::Catalog => &self.catalog,
+            crate::config::DbRole::Order => &self.order,
+            crate::config::DbRole::Payment => &self.payment,
+            crate::config::DbRole::Log => &self.log,
+            crate::config::DbRole::Report => &self.report,
+            crate::config::DbRole::Temp => &self.temp,
+        }
+    }
+
+    /// Mutable accessor — see [`Self::slot`].
+    pub fn slot_mut(&mut self, role: crate::config::DbRole) -> &mut DatabaseSettings {
+        match role {
+            crate::config::DbRole::Master => &mut self.master,
+            crate::config::DbRole::Catalog => &mut self.catalog,
+            crate::config::DbRole::Order => &mut self.order,
+            crate::config::DbRole::Payment => &mut self.payment,
+            crate::config::DbRole::Log => &mut self.log,
+            crate::config::DbRole::Report => &mut self.report,
+            crate::config::DbRole::Temp => &mut self.temp,
+        }
+    }
+
+    /// Effective `DatabaseSettings` for a role: per-role slot,
+    /// filled in with the catch-all values wherever the per-role
+    /// slot is empty. This is what the topology builder feeds to
+    /// `tiberius`.
+    pub fn for_role(&self, role: crate::config::DbRole) -> DatabaseSettings {
+        let slot = self.slot(role);
+        if !slot.sqlserver_url.trim().is_empty() {
+            return slot.clone();
+        }
+        // Per-role URL empty: inherit the catch-all.
+        if !self.catch_all.sqlserver_url.trim().is_empty() {
+            // Use the catch-all URL; keep the per-role pool size
+            // override if the operator set one.
+            let mut out = self.catch_all.clone();
+            if slot.pool_size != default_db_pool_size() {
+                out.pool_size = slot.pool_size;
+            }
+            if slot.connect_timeout_secs != default_db_connect_timeout_secs() {
+                out.connect_timeout_secs = slot.connect_timeout_secs;
+            }
+            if slot.migrations_dir != default_migrations_dir() {
+                out.migrations_dir = slot.migrations_dir.clone();
+            }
+            return out;
+        }
+        slot.clone()
+    }
+
+    /// Private helper for `from_settings`: read the per-role slot
+    /// from a `Settings.database_topology` instance.
+    fn settings_for(&self, role: crate::config::DbRole) -> &DatabaseSettings {
+        self.slot(role)
+    }
+}
+
+/// Merge a per-role slot with the legacy catch-all. The per-role
+/// slot wins wherever it has been explicitly set. This is the
+/// serde-level version of [`DatabaseTopologySettings::for_role`].
+fn merge_with_fallback(
+    per_role: &DatabaseSettings,
+    catch_all: &DatabaseSettings,
+) -> DatabaseSettings {
+    let mut out = catch_all.clone();
+    if !per_role.sqlserver_url.trim().is_empty() {
+        out.sqlserver_url = per_role.sqlserver_url.clone();
+    }
+    if per_role.pool_size != default_db_pool_size() {
+        out.pool_size = per_role.pool_size;
+    }
+    if per_role.connect_timeout_secs != default_db_connect_timeout_secs() {
+        out.connect_timeout_secs = per_role.connect_timeout_secs;
+    }
+    if per_role.migrations_dir != default_migrations_dir() {
+        out.migrations_dir = per_role.migrations_dir.clone();
+    }
+    out
 }
 
 /// Redis cache + pub/sub settings (T07, T07A).
@@ -403,6 +684,28 @@ impl Settings {
                 message: "must be >= 1".into(),
             });
         }
+        // M12: also check the per-role slots in the topology.
+        // They use the same defaults as `database` so a zero
+        // here is a misconfiguration regardless of whether the
+        // URL itself is set.
+        for role in DbRole::ALL {
+            let s = self.database_topology.slot(role);
+            if s.pool_size == 0 {
+                return Err(ConfigError::Invalid {
+                    key: format!("KOKKAK_DATABASE__{}__POOL_SIZE", role.env_suffix()),
+                    message: "must be >= 1".into(),
+                });
+            }
+            if s.connect_timeout_secs == 0 {
+                return Err(ConfigError::Invalid {
+                    key: format!(
+                        "KOKKAK_DATABASE__{}__CONNECT_TIMEOUT_SECS",
+                        role.env_suffix()
+                    ),
+                    message: "must be >= 1".into(),
+                });
+            }
+        }
         if self.redis.pool_size == 0 {
             return Err(ConfigError::Invalid {
                 key: "KOKKAK_REDIS__POOL_SIZE".into(),
@@ -448,6 +751,14 @@ mod tests {
             "KOKKAK_DATABASE__POOL_SIZE",
             "KOKKAK_DATABASE__CONNECT_TIMEOUT_SECS",
             "KOKKAK_DATABASE__MIGRATIONS_DIR",
+            "KOKKAK_DATABASE__CATCH_ALL_URL",
+            "KOKKAK_DATABASE__MASTER_URL",
+            "KOKKAK_DATABASE__CATALOG_URL",
+            "KOKKAK_DATABASE__ORDER_URL",
+            "KOKKAK_DATABASE__PAYMENT_URL",
+            "KOKKAK_DATABASE__LOG_URL",
+            "KOKKAK_DATABASE__REPORT_URL",
+            "KOKKAK_DATABASE__TEMP_URL",
             "KOKKAK_REDIS__URL",
             "KOKKAK_REDIS__POOL_SIZE",
             "KOKKAK_NATS__URL",

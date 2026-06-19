@@ -1,6 +1,7 @@
 //! Database clients (ไคลเอนต์ฐานข้อมูล).
 //!
-//! - `mssql` (T06): SQL Server via `tiberius` + `bb8-tiberius` pool — stub.
+//! - `mssql` (M5): SQL Server via `tiberius` + `bb8-tiberius` pool.
+//! - `topology` (M12): multi-DB pool registry keyed by [`DbRole`].
 //! - `mongo` (T09): MongoDB via `mongodb` driver.
 //! - `migrate` (T09): versioned SQL migration runner.
 //! - `json` (M1.5): generic JSON-file-backed store used to simulate
@@ -16,6 +17,7 @@ pub mod json_catalog;
 pub mod json_chat;
 pub mod json_order;
 pub mod json_payment;
+pub mod json_translation;
 pub mod json_user;
 pub mod migrate;
 pub mod mongo;
@@ -26,3 +28,4 @@ pub mod mssql_chat;
 pub mod mssql_order;
 pub mod mssql_payment;
 pub mod mssql_user;
+pub mod topology;

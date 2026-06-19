@@ -48,6 +48,13 @@ validator = { workspace = true }
 # M10 repo_factory
 thiserror = { workspace = true }
 
+# M_dev: auto-load `.env` so `KOKKAK_AUTH__JWT_SECRET=...` and friends
+# work without the operator having to `export` each one before
+# `cargo run`. figment 0.10's `Env` provider reads only from process
+# env (not from a file), so we use dotenvy to bridge. `.ok()` makes
+# the call a no-op in production where no `.env` exists.
+dotenvy = "0.15"
+
 [dev-dependencies]
 # Test body / JSON inspection in handler tests.
 serde_json = { workspace = true }

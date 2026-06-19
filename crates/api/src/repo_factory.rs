@@ -30,20 +30,25 @@ use std::path::Path;
 use std::sync::Arc;
 
 use kokkak_application::order::OrderService;
+use kokkak_common::config::DatabaseTopologySettings;
 use kokkak_domain::{
-    ChatRepository, OrderRepository, PaymentRepository, ServiceRepository, UserRepository,
+    ChatRepository, OrderRepository, PaymentRepository, ServiceRepository, TranslationRepository,
+    UserRepository,
 };
+use kokkak_infra::cache::translation_cache::CachedTranslationRepository;
 use kokkak_infra::db::json_catalog::JsonServiceRepository;
 use kokkak_infra::db::json_chat::JsonChatRepository;
 use kokkak_infra::db::json_order::JsonOrderRepository;
 use kokkak_infra::db::json_payment::JsonPaymentRepository;
+use kokkak_infra::db::json_translation::JsonTranslationRepository;
 use kokkak_infra::db::json_user::JsonUserRepository;
-use kokkak_infra::db::mssql::{build_pool, ping as mssql_ping, MssqlPool};
+use kokkak_infra::db::mssql::MssqlPool;
 use kokkak_infra::db::mssql_catalog::MssqlServiceRepository;
 use kokkak_infra::db::mssql_chat::MssqlChatRepository;
 use kokkak_infra::db::mssql_order::MssqlOrderRepository;
 use kokkak_infra::db::mssql_payment::MssqlPaymentRepository;
 use kokkak_infra::db::mssql_user::MssqlUserRepository;
+use kokkak_infra::db::topology::{DatabaseTopology, DbRole};
 use tracing::{info, warn};
 
 /// Which adapter family the factory is using.
@@ -72,9 +77,21 @@ pub struct RepoBundle {
     pub orders: Arc<dyn OrderRepository>,
     pub chat: Arc<dyn ChatRepository>,
     pub payments: Arc<dyn PaymentRepository>,
-    /// Kept alive for the duration of the process. M12+ uses
-    /// this to register a SQL Server health check.
+    /// Per-tenant translation override store (M11). Wraps a
+    /// `JsonTranslationRepository` with an L1 moka cache so the
+    /// hot path is sub-millisecond. Replaced with an MSSQL-backed
+    /// implementation in M12+ when the production DB lands.
+    pub translation: Arc<dyn TranslationRepository>,
+    /// Primary (catch-all) MSSQL pool, kept alive for the
+    /// duration of the process. Used by the migration runner and
+    /// by the T06 health check. M12 adds [`RepoBundle::topology`]
+    /// for per-role pool access.
     pub mssql_pool: Option<MssqlPool>,
+    /// Multi-DB topology (M12). Exposes per-role pools so future
+    /// handlers / workers can route queries to the right
+    /// physical database. `Some` when MSSQL is in use,
+    /// `None` when only the JSON-DB sim is active.
+    pub topology: Option<DatabaseTopology>,
 }
 
 impl std::fmt::Debug for RepoBundle {
@@ -82,6 +99,7 @@ impl std::fmt::Debug for RepoBundle {
         f.debug_struct("RepoBundle")
             .field("backend", &self.backend)
             .field("mssql_pool", &self.mssql_pool.as_ref().map(|_| "<pool>"))
+            .field("topology", &self.topology.as_ref().map(|t| t.live_roles()))
             .finish()
     }
 }
@@ -91,42 +109,48 @@ impl std::fmt::Debug for RepoBundle {
 /// The switch is environment-driven (no code change needed
 /// to flip from dev to prod):
 ///
-/// | `KOKKAK_DATABASE__SQLSERVER_URL` | Outcome                       |
-/// |----------------------------------|-------------------------------|
-/// | empty / "disabled"               | `RepoBackend::Json` (sim)     |
-/// | valid JDBC URL, pool builds     | `RepoBackend::Mssql` (real)   |
-/// | set but pool build fails         | warn + fall back to `Json`   |
+/// | Topology configured?              | Outcome                       |
+/// |-----------------------------------|-------------------------------|
+/// | no                                | `RepoBackend::Json` (sim)     |
+/// | catch-all URL only                | `RepoBackend::Mssql` (1 pool shared) |
+/// | per-role URLs set                 | `RepoBackend::Mssql` (topology with N pools) |
+/// | catch-all URL set, pool fails     | warn + fall back to `Json`   |
+///
+/// See `AGENTS.md` § 7 and `DatabaseTopology` for the full
+/// multi-DB rule set.
 pub async fn from_settings(
     data_dir: &Path,
     settings: &kokkak_common::config::Settings,
 ) -> Result<RepoBundle, FactoryError> {
-    let db = &settings.database;
-    if db.is_configured() {
-        match build_pool(db).await {
-            Ok(pool) => {
-                // Health probe; on failure fall back to JSON.
-                if let Err(e) = mssql_ping(&pool).await {
-                    warn!(
-                        error = %e,
-                        "mssql ping failed — falling back to JSON-DB sim"
-                    );
-                    return build_json_bundle(data_dir).await;
-                }
+    let topo_settings = DatabaseTopologySettings::from_settings(settings);
+    if topo_settings.catch_all.is_configured() || has_any_role_url(&topo_settings) {
+        match DatabaseTopology::build(&topo_settings, false).await {
+            Ok(topo) if !topo.is_empty() => {
+                let primary = topo
+                    .primary_role()
+                    .expect("non-empty topology has a primary role");
+                let primary_pool = topo.get(primary).clone();
                 info!(
                     backend = "mssql",
-                    pool_size = db.pool_size,
-                    "kokkak-api: using SQL Server repositories"
+                    primary_role = primary.as_str(),
+                    roles = ?topo.live_roles(),
+                    "kokkak-api: using SQL Server topology"
                 );
-                let user_repo: Arc<dyn UserRepository> =
-                    Arc::new(MssqlUserRepository::new(pool.clone()));
-                let service_repo: Arc<dyn ServiceRepository> =
-                    Arc::new(MssqlServiceRepository::new(pool.clone()));
-                let order_repo: Arc<dyn OrderRepository> =
-                    Arc::new(MssqlOrderRepository::new(pool.clone()));
-                let chat_repo: Arc<dyn ChatRepository> =
-                    Arc::new(MssqlChatRepository::new(pool.clone()));
-                let payment_repo: Arc<dyn PaymentRepository> =
-                    Arc::new(MssqlPaymentRepository::new(pool.clone()));
+                let user_repo: Arc<dyn UserRepository> = Arc::new(MssqlUserRepository::new(
+                    topo_pool(&topo, DbRole::Master, &primary_pool),
+                ));
+                let service_repo: Arc<dyn ServiceRepository> = Arc::new(
+                    MssqlServiceRepository::new(topo_pool(&topo, DbRole::Catalog, &primary_pool)),
+                );
+                let order_repo: Arc<dyn OrderRepository> = Arc::new(
+                    MssqlOrderRepository::new(topo_pool(&topo, DbRole::Order, &primary_pool)),
+                );
+                let chat_repo: Arc<dyn ChatRepository> = Arc::new(
+                    MssqlChatRepository::new(topo_pool(&topo, DbRole::Master, &primary_pool)),
+                );
+                let payment_repo: Arc<dyn PaymentRepository> = Arc::new(
+                    MssqlPaymentRepository::new(topo_pool(&topo, DbRole::Payment, &primary_pool)),
+                );
                 Ok(RepoBundle {
                     backend: RepoBackend::Mssql,
                     users: user_repo,
@@ -134,13 +158,25 @@ pub async fn from_settings(
                     orders: order_repo,
                     chat: chat_repo,
                     payments: payment_repo,
-                    mssql_pool: Some(pool),
+                    translation: build_translation_repo(data_dir).await,
+                    mssql_pool: Some(primary_pool),
+                    topology: Some(topo),
                 })
+            }
+            Ok(_) => {
+                // `build` returned an empty topology even though
+                // we asked it to ignore `require_all`. Should not
+                // happen — fall through to JSON.
+                warn!(
+                    "topology build returned empty pool set — \
+                     falling back to JSON-DB sim"
+                );
+                build_json_bundle(data_dir).await
             }
             Err(e) => {
                 warn!(
                     error = %e,
-                    "mssql pool build failed — falling back to JSON-DB sim"
+                    "mssql topology build failed — falling back to JSON-DB sim"
                 );
                 build_json_bundle(data_dir).await
             }
@@ -148,6 +184,20 @@ pub async fn from_settings(
     } else {
         build_json_bundle(data_dir).await
     }
+}
+
+/// `true` when at least one per-role URL is set, even if the
+/// catch-all is empty. Lets the operator declare per-role
+/// databases without using the legacy catch-all.
+fn has_any_role_url(s: &DatabaseTopologySettings) -> bool {
+    DbRole::ALL.iter().any(|r| s.slot(*r).is_configured())
+}
+
+/// Pick the per-role pool if the topology has one, else fall
+/// back to the catch-all pool. Centralised so the factory stays
+/// readable.
+fn topo_pool(topo: &DatabaseTopology, role: DbRole, fallback: &MssqlPool) -> MssqlPool {
+    topo.try_get(role).cloned().unwrap_or_else(|| fallback.clone())
 }
 
 /// Force the JSON backend (used by integration tests so they
@@ -193,8 +243,29 @@ async fn build_json_bundle(data_dir: &Path) -> Result<RepoBundle, FactoryError> 
         orders: order_repo,
         chat: chat_repo,
         payments: payment_repo,
+        translation: build_translation_repo(data_dir).await,
         mssql_pool: None,
+        topology: None,
     })
+}
+
+/// Build the per-tenant translation store from `data_dir`. M11
+/// uses the JSON-DB sim wrapped in a 60s moka L1; M12 will swap
+/// in an MSSQL adapter behind the same
+/// [`TranslationRepository`] port.
+async fn build_translation_repo(data_dir: &Path) -> Arc<dyn TranslationRepository> {
+    let path = data_dir.join("translations.json");
+    let inner = JsonTranslationRepository::open(&path)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(
+                error = %e,
+                path = %path.display(),
+                "failed to open translation store — starting empty"
+            );
+            JsonTranslationRepository::in_memory()
+        });
+    Arc::new(CachedTranslationRepository::new(inner))
 }
 
 /// Errors raised by the factory (mapped to a startup abort).

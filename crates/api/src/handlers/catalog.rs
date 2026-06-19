@@ -1,4 +1,4 @@
-//! Catalog HTTP handlers (M3).
+//! Catalog HTTP handlers (M3 + M11 i18n).
 //!
 //! - GET /api/v1/catalog/services
 
@@ -8,7 +8,9 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use kokkak_common::i18n::{current_locale, tr_with_repo};
 use kokkak_common::response::{paginated, ApiResponse, PageMeta};
+use kokkak_domain::{LocalizedError, RepoError};
 use serde::{Deserialize, Serialize};
 
 use crate::state::AppState;
@@ -48,11 +50,10 @@ pub async fn list_services(
     Query(q): Query<ListQuery>,
 ) -> Result<Response, Response> {
     let limit = q.limit.unwrap_or(20);
-    let page = state
-        .catalog
-        .list_active(q.after, limit)
-        .await
-        .map_err(repo_error_to_response)?;
+    let page = match state.catalog.list_active(q.after, limit).await {
+        Ok(p) => p,
+        Err(e) => return Err(repo_error_to_response(e, &state).await),
+    };
     let has_next = page.next_cursor.is_some();
     let items: Vec<ServiceItem> = page.items.into_iter().map(ServiceItem::from).collect();
     let resp_data = items;
@@ -61,26 +62,26 @@ pub async fn list_services(
         has_next,
         next_cursor: page.next_cursor,
     };
-    Ok((
-        StatusCode::OK,
-        paginated(resp_data, meta),
-    )
-        .into_response())
+    Ok((StatusCode::OK, paginated(resp_data, meta)).into_response())
 }
 
-fn repo_error_to_response(err: kokkak_domain::RepoError) -> Response {
-    use kokkak_domain::RepoError::*;
+async fn repo_error_to_response(err: RepoError, state: &AppState) -> Response {
+    use RepoError::*;
     let (status, code) = match &err {
         NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
         Conflict(_) => (StatusCode::CONFLICT, "conflict"),
         Backend(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
     };
+    let locale = current_locale();
+    let args: Vec<String> = err.l10n_args();
+    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let message = tr_with_repo(&*state.translation, &locale, err.l10n_key(), &args_ref).await;
     let envelope: ApiResponse<()> = ApiResponse {
         success: false,
         data: None,
         error: Some(kokkak_common::error::ApiErrorBody {
             code: code.into(),
-            message: err.to_string(),
+            message,
         }),
         meta: None,
     };
