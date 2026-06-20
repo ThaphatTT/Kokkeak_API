@@ -26,8 +26,12 @@ futures = "0.3"
 
 # Web (axum)
 axum = { version = "0.7", features = ["macros", "ws"] }
-tower = "0.5"
-tower-http = { version = "0.6", features = ["trace", "cors", "compression-br", "compression-deflate", "compression-gzip", "timeout", "set-header"] }
+# T-16: `limit` feature enables `tower_http::RequestBodyLimitLayer`.
+# (Concurrency cap uses `tokio::sync::Semaphore` directly — no
+# tower feature needed for that; `LoadShedLayer` was rejected
+# because its `BoxError` doesn't compose with axum's router.)
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["trace", "cors", "compression-br", "compression-deflate", "compression-gzip", "timeout", "set-header", "limit"] }
 hyper = "1"
 
 # Serialization

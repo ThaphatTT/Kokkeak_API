@@ -790,6 +790,24 @@ pub struct MiddlewareSettings {
     #[serde(default)]
     pub rate_limit: RateLimitSettings,
 
+    /// T-16: maximum request body size in bytes. Requests larger
+    /// than this short-circuit with HTTP 413 (`Payload Too Large`)
+    /// before the handler is ever invoked. Default 2 MiB — plenty
+    /// for JSON DTOs (typical payload < 32 KiB) and small image
+    /// uploads; raise for routes that need to accept large files
+    /// (those routes should override per-route in the router).
+    #[serde(default = "default_request_body_limit_bytes")]
+    pub request_body_limit_bytes: usize,
+
+    /// T-16: maximum number of in-flight requests the server will
+    /// handle at once. When the cap is reached, new requests are
+    /// immediately shed with HTTP 503 (`Service Unavailable`) so
+    /// the operator / load balancer can back off. Default 512
+    /// (≈ 4× the default request_timeout of 30s at ~17 rps
+    /// sustained — sized for a small 2-vCPU pod).
+    #[serde(default = "default_max_concurrency")]
+    pub max_concurrency: usize,
+
     /// HTTP idempotency cache (T-14). Disabled by default in dev
     /// (no point caching test traffic); production deployments
     /// should enable it so mobile retries on flaky networks don't
@@ -950,6 +968,8 @@ impl Default for MiddlewareSettings {
             request_timeout_secs: default_request_timeout_secs(),
             compression_enabled: default_compression_enabled(),
             rate_limit: RateLimitSettings::default(),
+            request_body_limit_bytes: default_request_body_limit_bytes(),
+            max_concurrency: default_max_concurrency(),
             idempotency: IdempotencySettings::default(),
             features: FeatureFlagSettings::default(),
         }
@@ -988,6 +1008,23 @@ fn default_request_timeout_secs() -> u64 {
 
 fn default_compression_enabled() -> bool {
     true
+}
+
+fn default_request_body_limit_bytes() -> usize {
+    // 2 MiB — fits the largest JSON DTO we expect + headroom for
+    // form-urlencoded and small image attachments. Raise per-route
+    // for upload endpoints (see T-16 spec).
+    2 * 1024 * 1024
+}
+
+fn default_max_concurrency() -> usize {
+    // 512 in-flight requests. Sized for a 2-vCPU pod: each in-flight
+    // request uses ~1 connection slot + a small heap allocation,
+    // so 512 ≈ 256 per vCPU which is comfortable headroom.
+    // ponytail: this is a global cap on the entire app (not per
+    // route). Upgrade path: per-route `ConcurrencyLimitLayer` if a
+    // single endpoint (e.g. a slow report) needs a different budget.
+    512
 }
 
 impl Settings {
@@ -1148,6 +1185,21 @@ impl Settings {
                 });
             }
         }
+        // T-16: request body limit and concurrency cap must be
+        // positive — a 0-byte limit would reject every request, a
+        // 0-concurrency cap would also reject every request.
+        if self.middleware.request_body_limit_bytes == 0 {
+            return Err(ConfigError::Invalid {
+                key: "KOKKAK_MIDDLEWARE__REQUEST_BODY_LIMIT_BYTES".into(),
+                message: "must be >= 1 (use usize::MAX to effectively disable)".into(),
+            });
+        }
+        if self.middleware.max_concurrency == 0 {
+            return Err(ConfigError::Invalid {
+                key: "KOKKAK_MIDDLEWARE__MAX_CONCURRENCY".into(),
+                message: "must be >= 1 (use usize::MAX to effectively disable)".into(),
+            });
+        }
         Ok(())
     }
 }
@@ -1201,6 +1253,8 @@ mod tests {
             "KOKKAK_MIDDLEWARE__RATE_LIMIT__ENABLED",
             "KOKKAK_MIDDLEWARE__RATE_LIMIT__REQUESTS_PER_SECOND",
             "KOKKAK_MIDDLEWARE__RATE_LIMIT__BURST_SIZE",
+            "KOKKAK_MIDDLEWARE__REQUEST_BODY_LIMIT_BYTES",
+            "KOKKAK_MIDDLEWARE__MAX_CONCURRENCY",
             "KOKKAK_MIDDLEWARE__IDEMPOTENCY__ENABLED",
             "KOKKAK_MIDDLEWARE__IDEMPOTENCY__TTL_SECS",
             "KOKKAK_MIDDLEWARE__IDEMPOTENCY__MAX_ENTRIES",
@@ -1668,7 +1722,47 @@ mod tests {
         );
         assert_eq!(s.middleware.request_timeout_secs, 30);
         assert!(s.middleware.compression_enabled);
+        // T-16: safety knobs have positive defaults.
+        assert_eq!(s.middleware.request_body_limit_bytes, 2 * 1024 * 1024);
+        assert_eq!(s.middleware.max_concurrency, 512);
         assert!(s.validate().is_ok());
+    }
+
+    // ---- T-16: safety knob validation ----
+
+    #[test]
+    fn t16_safety_knobs_default_positive() {
+        // Defaults are sized for a 2-vCPU pod; production should
+        // be able to rely on the out-of-the-box values.
+        let s = MiddlewareSettings::default();
+        assert!(s.request_body_limit_bytes >= 1024);
+        assert!(s.max_concurrency >= 1);
+    }
+
+    #[test]
+    fn t16_zero_body_limit_fails_validation() {
+        let s = Settings {
+            middleware: MiddlewareSettings {
+                request_body_limit_bytes: 0,
+                ..MiddlewareSettings::default()
+            },
+            ..Settings::default()
+        };
+        let err = s.validate().expect_err("zero body limit must be rejected");
+        assert!(err.to_string().contains("REQUEST_BODY_LIMIT_BYTES"));
+    }
+
+    #[test]
+    fn t16_zero_concurrency_fails_validation() {
+        let s = Settings {
+            middleware: MiddlewareSettings {
+                max_concurrency: 0,
+                ..MiddlewareSettings::default()
+            },
+            ..Settings::default()
+        };
+        let err = s.validate().expect_err("zero concurrency must be rejected");
+        assert!(err.to_string().contains("MAX_CONCURRENCY"));
     }
 
     #[test]

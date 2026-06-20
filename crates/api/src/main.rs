@@ -38,11 +38,13 @@ use tower_governor::key_extractor::PeerIpKeyExtractor;
 use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
+use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 
 use kokkak_api::build_app_state_with;
 use kokkak_api::build_repos;
 use kokkak_api::build_router;
+use kokkak_api::middleware::safety::ConcurrencyCap;
 use kokkak_api::redirect::redirect_router;
 use kokkak_api::tls::{build_rustls_config, hsts_layer};
 
@@ -317,6 +319,37 @@ async fn run(settings: Settings) {
         tracing::info!("idempotency cache disabled");
         app
     };
+
+    // ---- T-16: request safety layers.
+    //   Body limit and concurrency cap sit OUTERMOST in the chain
+    //   (these are the last `.layer()` calls) so oversized bodies
+    //   and excess load are shed before any other layer spends
+    //   work on them. Order between the two doesn't matter
+    //   semantically — both reject; the body limit is marginally
+    //   cheaper (a header / first-chunk peek vs a per-request
+    //   permit acquisition), so it sits one rung further out.
+    //
+    //   ponytail: we use `tower_http::RequestBodyLimitLayer` for
+    //   the body cap (returns 413) and a tiny custom
+    //   `ConcurrencyCap` middleware (returns 503) instead of
+    //   `tower::load_shed::LoadShedLayer` — the latter returns
+    //   `BoxError` which axum's `Router::layer` can't accept.
+    //   The custom middleware uses `tokio::sync::Semaphore`
+    //   directly so the error type stays `Infallible`-compatible.
+    let body_limit_bytes = settings.middleware.request_body_limit_bytes;
+    let app = app.layer(RequestBodyLimitLayer::new(body_limit_bytes));
+    tracing::info!(body_limit_bytes, "request body limit wired");
+
+    let max_concurrency = settings.middleware.max_concurrency;
+    let cap = ConcurrencyCap::new(max_concurrency);
+    let app = app.layer(axum::middleware::from_fn_with_state(
+        cap,
+        kokkak_api::middleware::safety::concurrency_cap,
+    ));
+    tracing::info!(
+        max_concurrency,
+        "concurrency cap wired (sheds 503 when at capacity)"
+    );
 
     // ---- Bind + serve with graceful shutdown ----
     if settings.tls.enabled {
