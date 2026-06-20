@@ -16,6 +16,7 @@ pub mod catalog;
 pub mod chat;
 pub mod error;
 pub mod health;
+pub mod idempotency;
 pub mod matching;
 pub mod order;
 pub mod pagination;
@@ -31,6 +32,7 @@ pub use catalog::ServiceCategory;
 pub use chat::{ChatError, ChatMessage, ChatRoom, MessageId, Participant, RoomId, RoomSummary};
 pub use error::LocalizedError;
 pub use health::{CheckOutcome, HealthCheck, HealthError, HealthRegistry, ReadyReport};
+pub use idempotency::{CachedResponse, IdempotencyStore};
 pub use order::{Order, OrderStatus};
 pub use pagination::{Cursor, CursorError};
 pub use payment::{

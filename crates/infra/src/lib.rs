@@ -14,6 +14,7 @@ pub mod auth;
 pub mod cache;
 pub mod db;
 pub mod health;
+pub mod idempotency;
 pub mod pubsub;
 pub mod queue;
 pub mod storage;
