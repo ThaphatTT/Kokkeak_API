@@ -116,7 +116,12 @@ async fn make_app() -> (axum::Router, Arc<MssqlTranslationRepository>) {
         mssql_pool: None,
         topology: None,
     };
-    let state = build_app_state_with(bundle, jwt, kokkak_domain::HealthRegistry::new());
+    let state = build_app_state_with(
+        bundle,
+        jwt,
+        kokkak_domain::HealthRegistry::new(),
+        Arc::new(Settings::default()),
+    );
     let app = build_router(state);
     (app, repo)
 }

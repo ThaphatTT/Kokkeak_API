@@ -234,7 +234,10 @@ mod tests {
         assert_eq!(AppError::Conflict("x".into()).code(), "conflict");
         assert_eq!(AppError::UsernameTaken.code(), "username_taken");
         assert_eq!(AppError::Validation("x".into()).code(), "validation");
-        assert_eq!(AppError::RoleNotAllowed("x".into()).code(), "role_not_allowed");
+        assert_eq!(
+            AppError::RoleNotAllowed("x".into()).code(),
+            "role_not_allowed"
+        );
         assert_eq!(AppError::RateLimited.code(), "rate_limited");
         assert_eq!(AppError::Internal("x".into()).code(), "internal");
     }
@@ -245,19 +248,58 @@ mod tests {
         // ErrorCode catalog (T-17). Adding a variant here requires
         // extending the catalog.
         let pairs: &[(AppError, &str)] = &[
-            (AppError::BadRequest("x".into()), crate::error_codes::ErrorCode::BAD_REQUEST),
-            (AppError::Unauthorized, crate::error_codes::ErrorCode::UNAUTHORIZED),
-            (AppError::InvalidToken("x".into()), crate::error_codes::ErrorCode::INVALID_TOKEN),
-            (AppError::TokenExpired, crate::error_codes::ErrorCode::TOKEN_EXPIRED),
-            (AppError::Forbidden("x".into()), crate::error_codes::ErrorCode::FORBIDDEN),
-            (AppError::AdminRequired, crate::error_codes::ErrorCode::ADMIN_REQUIRED),
-            (AppError::NotFound("x".into()), crate::error_codes::ErrorCode::NOT_FOUND),
-            (AppError::Conflict("x".into()), crate::error_codes::ErrorCode::CONFLICT),
-            (AppError::UsernameTaken, crate::error_codes::ErrorCode::USERNAME_TAKEN),
-            (AppError::Validation("x".into()), crate::error_codes::ErrorCode::VALIDATION),
-            (AppError::RoleNotAllowed("x".into()), crate::error_codes::ErrorCode::ROLE_NOT_ALLOWED),
-            (AppError::RateLimited, crate::error_codes::ErrorCode::RATE_LIMITED),
-            (AppError::Internal("x".into()), crate::error_codes::ErrorCode::INTERNAL),
+            (
+                AppError::BadRequest("x".into()),
+                crate::error_codes::ErrorCode::BAD_REQUEST,
+            ),
+            (
+                AppError::Unauthorized,
+                crate::error_codes::ErrorCode::UNAUTHORIZED,
+            ),
+            (
+                AppError::InvalidToken("x".into()),
+                crate::error_codes::ErrorCode::INVALID_TOKEN,
+            ),
+            (
+                AppError::TokenExpired,
+                crate::error_codes::ErrorCode::TOKEN_EXPIRED,
+            ),
+            (
+                AppError::Forbidden("x".into()),
+                crate::error_codes::ErrorCode::FORBIDDEN,
+            ),
+            (
+                AppError::AdminRequired,
+                crate::error_codes::ErrorCode::ADMIN_REQUIRED,
+            ),
+            (
+                AppError::NotFound("x".into()),
+                crate::error_codes::ErrorCode::NOT_FOUND,
+            ),
+            (
+                AppError::Conflict("x".into()),
+                crate::error_codes::ErrorCode::CONFLICT,
+            ),
+            (
+                AppError::UsernameTaken,
+                crate::error_codes::ErrorCode::USERNAME_TAKEN,
+            ),
+            (
+                AppError::Validation("x".into()),
+                crate::error_codes::ErrorCode::VALIDATION,
+            ),
+            (
+                AppError::RoleNotAllowed("x".into()),
+                crate::error_codes::ErrorCode::ROLE_NOT_ALLOWED,
+            ),
+            (
+                AppError::RateLimited,
+                crate::error_codes::ErrorCode::RATE_LIMITED,
+            ),
+            (
+                AppError::Internal("x".into()),
+                crate::error_codes::ErrorCode::INTERNAL,
+            ),
         ];
         for (err, expected) in pairs {
             assert_eq!(err.code(), *expected, "variant {:?} has code mismatch", err);
@@ -276,7 +318,10 @@ mod tests {
         );
         assert_eq!(AppError::Unauthorized.to_string(), "unauthorized");
         assert_eq!(AppError::TokenExpired.to_string(), "token expired");
-        assert_eq!(AppError::UsernameTaken.to_string(), "username already taken");
+        assert_eq!(
+            AppError::UsernameTaken.to_string(),
+            "username already taken"
+        );
     }
 
     #[test]
@@ -290,7 +335,11 @@ mod tests {
     fn with_message_wraps_into_localized_preserving_status_and_code() {
         let err = AppError::Validation("must be > 0".into()).with_message("ต้องมากกว่า 0".into());
         match &err {
-            AppError::Localized { status, code, message } => {
+            AppError::Localized {
+                status,
+                code,
+                message,
+            } => {
                 assert_eq!(*status, StatusCode::UNPROCESSABLE_ENTITY);
                 assert_eq!(*code, "validation");
                 assert_eq!(message, "ต้องมากกว่า 0");

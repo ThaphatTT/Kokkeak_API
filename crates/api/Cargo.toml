@@ -76,6 +76,8 @@ utoipa = { workspace = true, features = ["axum_extras", "chrono", "uuid", "decim
 utoipa-swagger-ui = { workspace = true, features = ["axum"] }
 
 [dev-dependencies]
+# T-31: feature_gate tests deserialize a FeatureFlagSettings via YAML.
+serde_yaml = "0.9"
 # Test body / JSON inspection in handler tests.
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }

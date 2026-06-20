@@ -35,13 +35,18 @@ use kokkak_infra::db::mssql::MssqlPool;
 use adapters::{JwtIssuerAdapter, PasswordHasherAdapter};
 
 /// Build the `AppState` from a `RepoBundle` + JWT + health
-/// registry. Use this from `main` (and from integration
-/// tests) so the wiring stays in one place.
+/// registry + settings. Use this from `main` (and from
+/// integration tests) so the wiring stays in one place.
+///
+/// `settings` is held as `Arc<Settings>` so the feature-flag
+/// gates can read it without copying the full config on every
+/// request (T-31).
 #[allow(clippy::too_many_arguments)]
 pub fn build_app_state_with(
     bundle: RepoBundle,
     jwt: Arc<JwtService>,
     registry: HealthRegistry,
+    settings: Arc<kokkak_common::config::Settings>,
 ) -> AppState {
     let auth = Arc::new(AuthService::new(
         bundle.users.clone(),
@@ -73,6 +78,7 @@ pub fn build_app_state_with(
         jwt,
         registry,
         translation,
+        settings,
     )
 }
 
@@ -80,6 +86,7 @@ pub fn build_app_state_with(
 /// Kept for backwards-compat with the integration tests that
 /// pre-date the M10 factory; new code should call
 /// [`build_app_state_with`] with a `RepoBundle`.
+// optional because build_app_state_with doesn't need them.
 #[allow(clippy::too_many_arguments)]
 pub fn build_app_state(
     user_repo: Arc<dyn kokkak_domain::UserRepository>,
@@ -88,6 +95,7 @@ pub fn build_app_state(
     chat_repo: Arc<dyn kokkak_domain::ChatRepository>,
     payment_repo: Arc<dyn kokkak_domain::PaymentRepository>,
     jwt: Arc<JwtService>,
+    settings: Arc<kokkak_common::config::Settings>,
     registry: HealthRegistry,
     translation: Arc<dyn TranslationRepository>,
 ) -> AppState {
@@ -105,7 +113,7 @@ pub fn build_app_state(
         mssql_pool: backend_marker,
         topology: None,
     };
-    build_app_state_with(bundle, jwt, registry)
+    build_app_state_with(bundle, jwt, registry, settings)
 }
 
 /// Convenience builder for tests/dev: pass chat + payments already
@@ -121,6 +129,7 @@ pub fn build_app_state_json(
     jwt: Arc<JwtService>,
     registry: HealthRegistry,
     translation: Arc<dyn TranslationRepository>,
+    settings: Arc<kokkak_common::config::Settings>,
 ) -> AppState {
     let backend_marker: Option<MssqlPool> = None;
     let bundle = RepoBundle {
@@ -134,5 +143,5 @@ pub fn build_app_state_json(
         mssql_pool: backend_marker,
         topology: None,
     };
-    build_app_state_with(bundle, jwt, registry)
+    build_app_state_with(bundle, jwt, registry, settings)
 }

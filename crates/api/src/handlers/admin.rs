@@ -16,9 +16,9 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use kokkak_application::auth::RegisterInput;
+use kokkak_common::error::AppError;
 use kokkak_common::i18n::{current_locale, tr};
 use kokkak_common::response::created;
-use kokkak_common::error::AppError;
 use kokkak_domain::Role;
 use serde::Deserialize;
 use validator::Validate;

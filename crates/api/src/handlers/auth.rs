@@ -55,11 +55,7 @@ use crate::state::AppState;
 pub struct RegisterRequest {
     /// Login username (lowercased on the server). In practice this can be
     /// an email, phone, or alphanumeric handle.
-    #[validate(length(
-        min = 3,
-        max = 64,
-        message = "username must be 3-64 characters"
-    ))]
+    #[validate(length(min = 3, max = 64, message = "username must be 3-64 characters"))]
     pub username: String,
     /// Plain-text password. Hashing happens server-side via argon2.
     /// Min length 8 enforced here; full strength policy lives in
@@ -139,9 +135,11 @@ pub async fn register(
     let role = match parse_public_register_role(req.role.as_deref()) {
         Ok(r) => r,
         Err(PublicRoleError::Restricted(other)) => {
-            return Err(ApiError::from(AppError::RoleNotAllowed(other.as_str().to_string()))
-                .into_localized_response(&state)
-                .await);
+            return Err(
+                ApiError::from(AppError::RoleNotAllowed(other.as_str().to_string()))
+                    .into_localized_response(&state)
+                    .await,
+            );
         }
         Err(PublicRoleError::Unknown(s)) => {
             return Err(ApiError::from(AppError::RoleNotAllowed(s))

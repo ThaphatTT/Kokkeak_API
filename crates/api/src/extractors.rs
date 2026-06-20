@@ -116,9 +116,7 @@ mod tests {
             .unwrap();
         let resp = app().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(resp.into_body(), 1024)
-            .await
-            .unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
         let parsed: Echo = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(parsed.name, "alice");
         assert_eq!(parsed.age, 30);

@@ -106,6 +106,7 @@ async fn make_app() -> (axum::Router, Vec<PathBuf>) {
         jwt,
         HealthRegistry::new(),
         translation,
+        Arc::new(kokkak_common::config::Settings::default()),
     );
     (build_router(state), vec![])
 }

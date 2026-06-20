@@ -9,6 +9,7 @@ use kokkak_application::chat::{BroadcastTransport, ChatService};
 use kokkak_application::order::OrderService;
 use kokkak_application::payment::PaymentService;
 use kokkak_application::user::UserService;
+use kokkak_common::config::Settings;
 use kokkak_domain::{
     ChatMembership, ChatRepoError, ChatRepository, HealthRegistry, TranslationRepository,
 };
@@ -65,6 +66,11 @@ pub struct AppState {
     /// every localized error response; the locale is set by
     /// [`crate::middleware::i18n::locale_middleware`].
     pub translation: Arc<dyn TranslationRepository>,
+    /// T-31: feature flags + middleware config that the
+    /// Strangler gates (`feature_gate::*`) read on every request.
+    /// Wrapped in Arc so the same instance is shared with the
+    /// runtime config + main loop without copying.
+    pub settings: Arc<Settings>,
 }
 
 /// Chat state bundle — the service + the local broadcast
@@ -171,6 +177,7 @@ impl AppState {
         jwt: Arc<JwtService>,
         health: HealthRegistry,
         translation: Arc<dyn TranslationRepository>,
+        settings: Arc<Settings>,
     ) -> Self {
         Self {
             auth,
@@ -183,6 +190,7 @@ impl AppState {
             health,
             users: user,
             translation,
+            settings,
         }
     }
 
@@ -200,6 +208,7 @@ impl AppState {
         jwt: Arc<JwtService>,
         health: HealthRegistry,
         translation: Arc<dyn TranslationRepository>,
+        settings: Arc<Settings>,
     ) -> Self {
         let chat_handle = ChatHandle {
             service: chat,
@@ -216,6 +225,7 @@ impl AppState {
             health,
             users: user,
             translation,
+            settings,
         }
     }
 }

@@ -92,7 +92,12 @@ async fn make_app() -> (axum::Router, Vec<PathBuf>) {
         mssql_pool: None,
         topology: None,
     };
-    let state: AppState = kokkak_api::build_app_state_with(bundle, jwt, HealthRegistry::new());
+    let state: AppState = kokkak_api::build_app_state_with(
+        bundle,
+        jwt,
+        HealthRegistry::new(),
+        Arc::new(kokkak_common::config::Settings::default()),
+    );
     (build_router(state), vec![])
 }
 

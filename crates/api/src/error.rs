@@ -41,7 +41,9 @@ use std::fmt;
 use axum::response::{IntoResponse, Response};
 use kokkak_common::error::AppError;
 use kokkak_common::i18n::{current_locale, tr_with_repo};
-use kokkak_domain::{AuthError, ChatError, ChatRepoError, PaymentError, PaymentRepoError, RepoError};
+use kokkak_domain::{
+    AuthError, ChatError, ChatRepoError, PaymentError, PaymentRepoError, RepoError,
+};
 
 use crate::state::AppState;
 
@@ -257,9 +259,15 @@ mod tests {
         // Internal is the cross-source catch-all and a per-source
         // key would force a typed AppError variant per source.
         let pairs: Vec<(AuthError, &str)> = vec![
-            (AuthError::InvalidCredentials, "err_auth.invalid_credentials"),
+            (
+                AuthError::InvalidCredentials,
+                "err_auth.invalid_credentials",
+            ),
             (AuthError::TokenExpired, "err_auth.token_expired"),
-            (AuthError::InvalidToken("bad".into()), "err_auth.invalid_token"),
+            (
+                AuthError::InvalidToken("bad".into()),
+                "err_auth.invalid_token",
+            ),
             (AuthError::Forbidden("nope".into()), "err_auth.forbidden"),
             (AuthError::UsernameTaken, "err_auth.username_taken"),
             (AuthError::Validation("x".into()), "err_auth.validation"),
