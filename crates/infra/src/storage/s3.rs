@@ -79,7 +79,12 @@ pub enum S3Error {
     Backend(String),
     /// Hash mismatch.
     #[error("s3 hash mismatch: expected {expected}, got {actual}")]
-    HashMismatch { expected: String, actual: String },
+    HashMismatch {
+        /// Digest the caller claimed (hex).
+        expected: String,
+        /// Digest computed from the bytes actually stored (hex).
+        actual: String,
+    },
 }
 
 impl From<S3Error> for StorageError {

@@ -70,6 +70,7 @@ pub struct Order {
     /// Customer note: `None` for now, future use (e.g. translated
     /// problem description per locale).
     pub created_at: DateTime<Utc>,
+    /// Last modified timestamp (set on every status transition).
     pub updated_at: DateTime<Utc>,
 }
 

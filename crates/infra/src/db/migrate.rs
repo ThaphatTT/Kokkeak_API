@@ -41,8 +41,11 @@ use thiserror::Error;
 /// One discovered migration (filename + raw SQL body).
 #[derive(Debug, Clone)]
 pub struct Migration {
+    /// `YYYYMMDDHHMMSS` prefix (sort key + applied-marker).
     pub version: String,
+    /// Absolute path to the `.sql` file on disk.
     pub path: PathBuf,
+    /// Raw SQL body (loaded once at startup).
     pub sql: String,
 }
 

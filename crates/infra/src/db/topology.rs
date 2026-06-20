@@ -45,7 +45,9 @@ pub enum TopologyError {
     /// One role's URL is set but the pool could not be built.
     #[error("role '{role}' pool build failed: {source}")]
     RoleBuild {
+        /// Role whose pool failed to build.
         role: DbRole,
+        /// Underlying MssqlError.
         #[source]
         source: MssqlError,
     },
@@ -53,7 +55,9 @@ pub enum TopologyError {
     /// A role's pool was built but the `SELECT 1` health probe failed.
     #[error("role '{role}' health probe failed: {source}")]
     RoleUnhealthy {
+        /// Role whose probe failed.
         role: DbRole,
+        /// Underlying MssqlError.
         #[source]
         source: MssqlError,
     },

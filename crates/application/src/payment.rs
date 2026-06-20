@@ -29,7 +29,9 @@ const DEFAULT_COMMISSION_RATE: Decimal = rust_decimal_macros::dec!(0.50);
 /// Input for `create_payment`.
 #[derive(Debug, Clone)]
 pub struct CreatePaymentInput {
+    /// Order this payment settles.
     pub order_id: Uuid,
+    /// Customer initiating the payment (must match the order's customer).
     pub customer_id: Uuid,
     /// Optional override (otherwise the order's total is used).
     pub amount: Option<Decimal>,
@@ -38,6 +40,7 @@ pub struct CreatePaymentInput {
 /// Input for `confirm_payment`.
 #[derive(Debug, Clone)]
 pub struct ConfirmPaymentInput {
+    /// Payment id returned by `create_payment`.
     pub payment_id: Uuid,
     /// Optional gateway reference (set by the gateway webhook
     /// in M12+; the dev flow passes `None`).
@@ -48,17 +51,22 @@ pub struct ConfirmPaymentInput {
 /// needs to render a "thank you" screen).
 #[derive(Debug, Clone)]
 pub struct ConfirmPaymentResult {
+    /// The just-confirmed payment row.
     pub payment: Payment,
+    /// Platform commission record (50% default; admin override in M12+).
     pub commission: Commission,
+    /// Technician payout row (the net portion after commission).
     pub payout: Payout,
 }
 
+/// Payment use case bundle (M9).
 pub struct PaymentService {
     payments: Arc<dyn PaymentRepository>,
     orders: Arc<dyn OrderRepository>,
 }
 
 impl PaymentService {
+    /// Construct the service with payment + order repositories.
     pub fn new(payments: Arc<dyn PaymentRepository>, orders: Arc<dyn OrderRepository>) -> Self {
         Self { payments, orders }
     }

@@ -141,6 +141,11 @@ pub fn forbidden(message: String) -> Response {
 /// role, otherwise returns the 403 response built from a
 /// pre-resolved localized message (the caller resolves the
 /// message via `tr_with_repo` because `assert_role` is sync).
+///
+/// ponytail: `Response` is ~256 B (axum::body::Body), so boxing
+/// the error would save a few bytes per call but force every
+/// caller to unbox. We keep `Response` inline + allow the lint.
+#[allow(clippy::result_large_err)]
 pub fn assert_role(user: &AuthnUser, role: Role, message: String) -> Result<(), Response> {
     if user.has_role(role) {
         Ok(())

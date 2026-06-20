@@ -127,12 +127,19 @@ impl AuthSession {
 /// - no `locale` (locale comes from JWT / Accept-Language per M11)
 #[derive(Debug, Clone, Serialize)]
 pub struct PublicUser {
+    /// Stable user id (GUID v4).
     pub id: Uuid,
+    /// Unique login name (NEW_DB schema; was `email` pre-M14).
     pub username: String,
+    /// Given name (NEW_DB schema).
     pub first_name: String,
+    /// Family name (NEW_DB schema).
     pub last_name: String,
+    /// Roles assigned via `[user_user_role]` join (M14).
     pub roles: Vec<Role>,
+    /// Account lifecycle status (0=Active, 1=Suspended, 2=Locked, 3=Disabled).
     pub status: crate::user::UserStatus,
+    /// UTC timestamp the user record was first persisted.
     pub created_at: DateTime<Utc>,
 }
 

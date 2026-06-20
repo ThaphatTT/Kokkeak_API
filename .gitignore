@@ -48,4 +48,13 @@ data/
 *.tmp
 .DS_Store
 
+# Root scaffolding (M0-M14 one-off scripts; NEVER commit)
+# Per plan T-03: root holds Rust standard files only. Real
+# scripts live under scripts/ with paths normalised.
+# Without this guard the next `_setup_m0_*.py` will land in
+# git again the moment someone runs it from the project root.
+/_setup_*.py
+/test_e2e*.sh
+/fix_*.py
+
 graphify-out

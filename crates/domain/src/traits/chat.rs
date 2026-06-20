@@ -32,6 +32,7 @@ pub struct MessagePage {
     pub before: Option<DateTime<Utc>>,
 }
 
+/// Errors a `ChatRepository` adapter can return (M8).
 #[derive(Debug, thiserror::Error)]
 pub enum ChatRepoError {
     /// The room / message does not exist.
@@ -43,6 +44,8 @@ pub enum ChatRepoError {
     Backend(String),
 }
 
+/// Chat persistence port — rooms + messages (M8).
+/// See module docs for the trait surface rationale.
 #[async_trait]
 pub trait ChatRepository: Send + Sync {
     /// Look up a room by id.

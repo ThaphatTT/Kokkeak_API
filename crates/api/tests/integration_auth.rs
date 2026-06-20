@@ -130,7 +130,7 @@ async fn register_then_login_then_me_round_trip() {
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(v["success"], true);
     assert_eq!(v["data"]["user"]["username"], username);
-    let access_token = v["data"]["access_token"].as_str().unwrap().to_string();
+    let _access_token = v["data"]["access_token"].as_str().unwrap().to_string();
 
     // 2) Login
     let login_body = serde_json::json!({

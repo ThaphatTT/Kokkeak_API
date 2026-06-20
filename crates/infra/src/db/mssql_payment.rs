@@ -5,21 +5,22 @@
 //! are scheduled for M15+ (admin payouts / commission dashboard).
 
 use async_trait::async_trait;
-use rust_decimal::Decimal;
 use tiberius::ToSql;
 use uuid::Uuid;
 
 use kokkak_domain::payment::{Commission, Payment, PaymentStatus, Payout, PayoutStatus};
 use kokkak_domain::traits::payment::{PaymentRepoError, PaymentRepository};
 
-use crate::db::mssql::{exec_sp, read_i32, read_str, read_uuid, MssqlPool};
+use crate::db::mssql::{exec_sp, MssqlPool};
 
+/// SQL Server-backed `PaymentRepository` (M14.5 — stored procedures).
 #[derive(Clone)]
 pub struct MssqlPaymentRepository {
     pool: MssqlPool,
 }
 
 impl MssqlPaymentRepository {
+    /// Construct the repository with a shared `MssqlPool`.
     pub fn new(pool: MssqlPool) -> Self {
         Self { pool }
     }

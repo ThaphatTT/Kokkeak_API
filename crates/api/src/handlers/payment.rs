@@ -74,9 +74,7 @@ pub async fn create_payment(
         &[Role::Customer.as_str()],
     )
     .await;
-    if let Err(r) = assert_role(&user, Role::Customer, role_msg) {
-        return Err(r);
-    }
+    assert_role(&user, Role::Customer, role_msg)?;
     let amount = match req.amount {
         Some(s) => match s.parse::<Decimal>() {
             Ok(d) => Some(d),

@@ -41,7 +41,9 @@ pub struct RegisterInput {
 /// Login input.
 #[derive(Debug, Clone)]
 pub struct LoginInput {
+    /// Login name (NEW_DB schema; matches `[user_username].user_username`).
     pub username: String,
+    /// Plain-text password supplied by the client. Hashed before storage.
     pub password: String,
     /// Token scope (`"mobile"` / `"web"` / `"admin"`).
     pub scope: String,
@@ -50,7 +52,9 @@ pub struct LoginInput {
 /// Result of register / login / refresh.
 #[derive(Debug, Clone)]
 pub struct AuthOutcome {
+    /// Public-safe view of the authenticated user.
     pub user: PublicUser,
+    /// Access + refresh token pair to return to the client.
     pub tokens: TokenPair,
 }
 
@@ -62,6 +66,8 @@ pub struct AuthService {
 }
 
 impl AuthService {
+    /// Construct the service bundle. All three ports are required at
+    /// startup (composition root wires the concrete adapters).
     pub fn new(
         users: Arc<dyn UserRepository>,
         hasher: Arc<dyn PasswordHasherPort>,
@@ -173,22 +179,29 @@ impl AuthService {
 
 /// Port for password hashing (decouples the use case from `argon2`).
 pub trait PasswordHasherPort: Send + Sync {
+    /// Hash a plain-text password (returns a PHC-format string).
     fn hash(&self, password: &str) -> Result<String, AuthError>;
+    /// Verify a plain-text password against a stored PHC-format hash.
     fn verify(&self, password: &str, hash: &str) -> Result<(), AuthError>;
 }
 
 /// Port for JWT issuing / verifying.
 pub trait JwtIssuerPort: Send + Sync {
+    /// Mint a short-lived access token for the given user / roles / scope.
     fn issue_access(&self, user_id: Uuid, roles: &[Role], scope: &str)
         -> Result<String, AuthError>;
+    /// Mint a long-lived refresh token for the given user / roles / scope.
     fn issue_refresh(
         &self,
         user_id: Uuid,
         roles: &[Role],
         scope: &str,
     ) -> Result<String, AuthError>;
+    /// Verify a token's signature + expiry and return its claims.
     fn verify(&self, token: &str) -> Result<Claims, AuthError>;
+    /// Access token TTL in seconds (used by the cookie `Max-Age`).
     fn access_ttl_secs(&self) -> i64;
+    /// Refresh token TTL in seconds.
     fn refresh_ttl_secs(&self) -> i64;
 }
 

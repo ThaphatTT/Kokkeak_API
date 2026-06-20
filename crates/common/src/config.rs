@@ -36,7 +36,12 @@ pub enum ConfigError {
 
     /// Semantically invalid value: a specific setting failed a post-load check.
     #[error("invalid config: key={key}, {message}")]
-    Invalid { key: String, message: String },
+    Invalid {
+        /// Config key that failed validation (e.g. `"server.addr"`).
+        key: String,
+        /// Human-readable reason (used in error messages + logs).
+        message: String,
+    },
 }
 
 impl From<figment::Error> for ConfigError {
@@ -46,7 +51,7 @@ impl From<figment::Error> for ConfigError {
 }
 
 /// Top-level settings struct (โครงสร้างตั้งค่าระดับบนสุด).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct Settings {
     /// HTTP server settings (การตั้งค่า HTTP server).
     #[serde(default)]
@@ -88,22 +93,6 @@ pub struct Settings {
     /// Auth / JWT settings (M2).
     #[serde(default)]
     pub auth: AuthSettings,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            server: ServerSettings::default(),
-            log: LogSettings::default(),
-            database: DatabaseSettings::default(),
-            database_topology: DatabaseTopologySettings::default(),
-            redis: RedisSettings::default(),
-            nats: NatsSettings::default(),
-            mongo: MongoSettings::default(),
-            data_dir: DataDirSettings::default(),
-            auth: AuthSettings::default(),
-        }
-    }
 }
 
 /// HTTP server settings.
@@ -299,7 +288,7 @@ impl DatabaseSettings {
 ///
 /// The `Migrations` / `Pool size` / `Connect timeout` fields are
 /// per-role. If you set only the URL, defaults are used.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct DatabaseTopologySettings {
     /// Fallback URL used by every role that has no per-role URL.
     /// Mirrors the legacy `Settings.database.sqlserver_url` for
@@ -329,21 +318,6 @@ pub struct DatabaseTopologySettings {
     pub temp: DatabaseSettings,
 }
 
-impl Default for DatabaseTopologySettings {
-    fn default() -> Self {
-        Self {
-            catch_all: DatabaseSettings::default(),
-            master: DatabaseSettings::default(),
-            catalog: DatabaseSettings::default(),
-            order: DatabaseSettings::default(),
-            payment: DatabaseSettings::default(),
-            log: DatabaseSettings::default(),
-            report: DatabaseSettings::default(),
-            temp: DatabaseSettings::default(),
-        }
-    }
-}
-
 impl DatabaseTopologySettings {
     /// Synthesise a topology from the top-level [`Settings`].
     ///
@@ -357,8 +331,10 @@ impl DatabaseTopologySettings {
     /// `migrations_dir` follow the same precedence: per-role
     /// > catch-all > default.
     pub fn from_settings(s: &Settings) -> Self {
-        let mut out = Self::default();
-        out.catch_all = s.database.clone();
+        let mut out = DatabaseTopologySettings {
+            catch_all: s.database.clone(),
+            ..Self::default()
+        };
         for role in crate::config::DbRole::ALL {
             let per_role = s.database_topology.settings_for(role);
             let merged = merge_with_fallback(per_role, &s.database);
@@ -467,6 +443,7 @@ pub struct RedisSettings {
 }
 
 impl RedisSettings {
+    /// `true` iff a real Redis URL is set (not the `redis://disabled` sentinel).
     pub fn is_configured(&self) -> bool {
         !self.url.trim().is_empty() && self.url != "redis://disabled"
     }
@@ -494,6 +471,7 @@ pub struct NatsSettings {
 }
 
 impl NatsSettings {
+    /// `true` iff a real NATS URL is set (not the `nats://disabled` sentinel).
     pub fn is_configured(&self) -> bool {
         !self.url.trim().is_empty() && self.url != "nats://disabled"
     }
@@ -511,14 +489,17 @@ impl Default for NatsSettings {
 /// MongoDB settings (T09).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MongoSettings {
+    /// MongoDB connection URL.
     #[serde(default = "default_mongo_url")]
     pub url: String,
 
+    /// Logical database name (e.g. `"kokkak"`).
     #[serde(default = "default_mongo_db")]
     pub database: String,
 }
 
 impl MongoSettings {
+    /// `true` iff a real MongoDB URL is set (not the `mongodb://disabled` sentinel).
     pub fn is_configured(&self) -> bool {
         !self.url.trim().is_empty() && self.url != "mongodb://disabled"
     }

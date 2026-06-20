@@ -62,7 +62,12 @@ pub enum StorageError {
     /// SHA-256 mismatch between the caller's digest and the
     /// actual bytes — surfaces tampering / corruption.
     #[error("sha256 mismatch: expected {expected}, got {actual}")]
-    HashMismatch { expected: String, actual: String },
+    HashMismatch {
+        /// Digest the caller claimed (hex).
+        expected: String,
+        /// Digest computed from the actual bytes (hex).
+        actual: String,
+    },
 }
 
 /// Result of a successful `put`.

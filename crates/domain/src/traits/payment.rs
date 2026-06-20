@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use crate::payment::{Commission, Payment, PaymentStatus, Payout, PayoutStatus};
 
+/// Errors a `PaymentRepository` adapter can return (M9).
 #[derive(Debug, thiserror::Error)]
 pub enum PaymentRepoError {
     /// The payment / payout does not exist.
@@ -21,6 +22,8 @@ pub enum PaymentRepoError {
     Backend(String),
 }
 
+/// Payment persistence port — payments, commissions, payouts (M9).
+/// See module docs for the trait surface rationale.
 #[async_trait]
 pub trait PaymentRepository: Send + Sync {
     // -- payments --

@@ -14,8 +14,8 @@ use axum::{
 use kokkak_application::auth::RegisterInput;
 use kokkak_common::i18n::{current_locale, tr, tr_with_repo};
 use kokkak_common::response::{created, ApiResponse};
-use kokkak_domain::{AuthError, LocalizedError, Role};
-use serde::{Deserialize, Serialize};
+use kokkak_domain::Role;
+use serde::Deserialize;
 
 use crate::handlers::auth::{auth_error_to_response, AuthResponse};
 use crate::middleware::auth::AuthnUser;

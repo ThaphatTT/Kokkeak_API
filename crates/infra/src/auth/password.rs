@@ -25,6 +25,8 @@ pub const MIN_PASSWORD_LEN: usize = 8;
 pub struct PasswordHasherImpl;
 
 impl PasswordHasherImpl {
+    /// Construct a stateless argon2id hasher (the algorithm state is
+    /// pulled from `Argon2::default()` on every call).
     pub fn new() -> Self {
         Self
     }

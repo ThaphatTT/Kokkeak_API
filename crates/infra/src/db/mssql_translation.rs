@@ -10,12 +10,14 @@ use kokkak_domain::traits::translation::{TranslationError, TranslationRepository
 
 use crate::db::mssql::{exec_sp, MssqlPool};
 
+/// SQL Server-backed `TranslationRepository` (M14.5 — stored procedures).
 #[derive(Clone)]
 pub struct MssqlTranslationRepository {
     pool: MssqlPool,
 }
 
 impl MssqlTranslationRepository {
+    /// Construct the repository with a shared `MssqlPool`.
     pub fn new(pool: MssqlPool) -> Self {
         Self { pool }
     }

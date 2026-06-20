@@ -195,7 +195,7 @@ pub async fn list_messages(
     };
     let msgs = match state
         .chat
-        .list_messages(room_id.into(), &user, before, limit)
+        .list_messages(room_id, &user, before, limit)
         .await
     {
         Ok(m) => m,
@@ -222,11 +222,7 @@ pub async fn send_message(
     Path(room_id): Path<Uuid>,
     Json(req): Json<SendMessageRequest>,
 ) -> Result<Response, Response> {
-    let msg = match state
-        .chat
-        .send_message(room_id.into(), user.id(), req.body)
-        .await
-    {
+    let msg = match state.chat.send_message(room_id, user.id(), req.body).await {
         Ok(m) => m,
         Err(e) => return Err(chat_err_to_response(e, &state).await),
     };
@@ -258,7 +254,7 @@ pub async fn mark_read(
             return Ok(err_envelope(StatusCode::NOT_FOUND, "not_found", msg));
         }
     };
-    if let Err(e) = state.chat.mark_read(room_id.into(), &user).await {
+    if let Err(e) = state.chat.mark_read(room_id, &user).await {
         return Err(chat_err_to_response(e, &state).await);
     }
     Ok((
