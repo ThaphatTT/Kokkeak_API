@@ -45,21 +45,36 @@ use kokkak_common::response::{created, ApiResponse};
 use kokkak_common::{error::AppError, i18n::current_locale};
 use kokkak_domain::Role;
 use serde::{Deserialize, Serialize};
+use validator::Validate;
 
 use crate::error::{ApiError, IntoLocalizedResponse};
+use crate::extractors::ValidatedJson;
 use crate::state::AppState;
 
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Deserialize, Validate, utoipa::ToSchema)]
 pub struct RegisterRequest {
     /// Login username (lowercased on the server). In practice this can be
     /// an email, phone, or alphanumeric handle.
+    #[validate(length(
+        min = 3,
+        max = 64,
+        message = "username must be 3-64 characters"
+    ))]
     pub username: String,
+    /// Plain-text password. Hashing happens server-side via argon2.
+    /// Min length 8 enforced here; full strength policy lives in
+    /// `application::auth`.
+    #[validate(length(min = 8, max = 128, message = "password must be 8-128 characters"))]
     pub password: String,
     /// First name (`[user].user_first_name`).
+    #[validate(length(min = 1, max = 100, message = "first_name must be 1-100 characters"))]
     pub first_name: String,
     /// Last name (`[user].user_last_name`).
+    #[validate(length(min = 1, max = 100, message = "last_name must be 1-100 characters"))]
     pub last_name: String,
-    /// Optional role. Defaults to `customer`.
+    /// Optional role. Defaults to `customer`. Validated structurally
+    /// here (length) and semantically in `parse_public_register_role`.
+    #[validate(length(max = 20, message = "role must be 20 characters or fewer"))]
     pub role: Option<String>,
 }
 
@@ -116,7 +131,7 @@ impl From<kokkak_application::auth::AuthOutcome> for AuthResponse {
 )]
 pub async fn register(
     State(state): State<AppState>,
-    Json(req): Json<RegisterRequest>,
+    ValidatedJson(req): ValidatedJson<RegisterRequest>,
 ) -> Result<Response, Response> {
     // M14.5: reject roles the public endpoint isn't allowed to
     // grant. Both cases share the same 422 + role_not_allowed code —
@@ -181,11 +196,14 @@ pub(crate) fn parse_public_register_role(raw: Option<&str>) -> Result<Role, Publ
     }
 }
 
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Deserialize, Validate, utoipa::ToSchema)]
 pub struct LoginRequest {
+    #[validate(length(min = 1, max = 64, message = "username must be 1-64 characters"))]
     pub username: String,
+    #[validate(length(min = 1, max = 128, message = "password must be 1-128 characters"))]
     pub password: String,
     /// Token scope (`mobile` / `web` / `admin`). Defaults to `mobile`.
+    #[validate(length(max = 16, message = "scope must be 16 characters or fewer"))]
     pub scope: Option<String>,
 }
 
@@ -203,7 +221,7 @@ pub struct LoginRequest {
 )]
 pub async fn login(
     State(state): State<AppState>,
-    Json(req): Json<LoginRequest>,
+    ValidatedJson(req): ValidatedJson<LoginRequest>,
 ) -> Result<Response, Response> {
     let input = LoginInput {
         username: req.username,
@@ -217,9 +235,13 @@ pub async fn login(
     Ok(ok(AuthResponse::from(outcome)))
 }
 
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Deserialize, Validate, utoipa::ToSchema)]
 pub struct RefreshRequest {
+    /// JWT refresh token. Min length 20 — a real HS256 token is
+    /// significantly longer; this only catches obvious garbage.
+    #[validate(length(min = 20, max = 4096, message = "refresh_token length invalid"))]
     pub refresh_token: String,
+    #[validate(length(max = 16, message = "scope must be 16 characters or fewer"))]
     pub scope: Option<String>,
 }
 
@@ -237,7 +259,7 @@ pub struct RefreshRequest {
 )]
 pub async fn refresh(
     State(state): State<AppState>,
-    Json(req): Json<RefreshRequest>,
+    ValidatedJson(req): ValidatedJson<RefreshRequest>,
 ) -> Result<Response, Response> {
     let scope = req.scope.unwrap_or_else(|| "mobile".into());
     let outcome = match state.auth.refresh(&req.refresh_token, &scope).await {
@@ -298,6 +320,7 @@ fn ok<T: Serialize>(data: T) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use validator::Validate;
 
     #[test]
     fn parse_public_register_role_defaults_to_customer() {
@@ -345,5 +368,111 @@ mod tests {
             parse_public_register_role(Some("wizard")),
             Err(PublicRoleError::Unknown("wizard".into()))
         );
+    }
+
+    // ---- T-07: structural validation on request DTOs ----
+
+    fn valid_register() -> RegisterRequest {
+        RegisterRequest {
+            username: "alice".into(),
+            password: "correct horse battery staple".into(),
+            first_name: "Alice".into(),
+            last_name: "Doe".into(),
+            role: None,
+        }
+    }
+
+    #[test]
+    fn register_request_accepts_minimum_valid_payload() {
+        assert!(valid_register().validate().is_ok());
+    }
+
+    #[test]
+    fn register_request_rejects_short_username() {
+        let mut r = valid_register();
+        r.username = "ab".into(); // min 3
+        let err = r.validate().unwrap_err().to_string();
+        assert!(err.contains("username"), "got: {err}");
+    }
+
+    #[test]
+    fn register_request_rejects_long_username() {
+        let mut r = valid_register();
+        r.username = "x".repeat(65); // max 64
+        assert!(r.validate().is_err());
+    }
+
+    #[test]
+    fn register_request_rejects_short_password() {
+        let mut r = valid_register();
+        r.password = "short".into(); // min 8
+        let err = r.validate().unwrap_err().to_string();
+        assert!(err.contains("password"), "got: {err}");
+    }
+
+    #[test]
+    fn register_request_rejects_empty_first_name() {
+        let mut r = valid_register();
+        r.first_name = String::new(); // min 1
+        assert!(r.validate().is_err());
+    }
+
+    #[test]
+    fn register_request_rejects_empty_last_name() {
+        let mut r = valid_register();
+        r.last_name = String::new();
+        assert!(r.validate().is_err());
+    }
+
+    #[test]
+    fn register_request_rejects_oversized_role() {
+        let mut r = valid_register();
+        r.role = Some("x".repeat(21)); // max 20
+        assert!(r.validate().is_err());
+    }
+
+    fn valid_login() -> LoginRequest {
+        LoginRequest {
+            username: "alice".into(),
+            password: "any".into(),
+            scope: None,
+        }
+    }
+
+    #[test]
+    fn login_request_accepts_short_password_login() {
+        // Login does NOT enforce the 8-char floor (that's a
+        // registration rule). It only needs something non-empty to
+        // attempt a hash compare.
+        assert!(valid_login().validate().is_ok());
+    }
+
+    #[test]
+    fn login_request_rejects_empty_username() {
+        let mut r = valid_login();
+        r.username = String::new();
+        assert!(r.validate().is_err());
+    }
+
+    fn valid_refresh() -> RefreshRequest {
+        RefreshRequest {
+            // A realistic HS256 refresh token is ~250+ bytes; we only
+            // check the floor here.
+            refresh_token: "x".repeat(150),
+            scope: None,
+        }
+    }
+
+    #[test]
+    fn refresh_request_accepts_realistic_token() {
+        assert!(valid_refresh().validate().is_ok());
+    }
+
+    #[test]
+    fn refresh_request_rejects_short_token() {
+        let mut r = valid_refresh();
+        r.refresh_token = "short".into(); // min 20
+        let err = r.validate().unwrap_err().to_string();
+        assert!(err.contains("refresh_token"), "got: {err}");
     }
 }
