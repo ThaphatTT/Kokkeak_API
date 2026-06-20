@@ -86,6 +86,13 @@ axum-server = { version = "0.7", features = ["tls-rustls"] }
 rustls = "0.23"
 rustls-pemfile = "2"
 
+# ---- T-07: per-IP rate limiting ----
+# Backed by the `governor` crate (GCRA algorithm). 0.4.x is the
+# release line compatible with axum 0.7 + tower 0.5; the 0.8.x
+# line bumps the internal axum dep to 0.8 and is a hard conflict
+# for us.
+tower_governor = "0.4"
+
 # Redis
 redis = { version = "0.27", default-features = false, features = ["tokio-comp", "aio"] }
 deadpool-redis = "0.18"

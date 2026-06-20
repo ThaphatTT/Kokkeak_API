@@ -768,6 +768,55 @@ pub struct MiddlewareSettings {
     /// for JSON-heavy mobile clients.
     #[serde(default = "default_compression_enabled")]
     pub compression_enabled: bool,
+
+    /// Per-IP rate limit (T-07). Disabled by default in dev so
+    /// hot-reload + integration tests don't trip the limiter;
+    /// production deployments should enable it (recommended 100
+    /// rps + burst 200, tuned per workload).
+    #[serde(default)]
+    pub rate_limit: RateLimitSettings,
+}
+
+/// Per-IP rate limit (T-07). Uses the GCRA algorithm via
+/// `tower_governor` + `governor`. Default OFF (dev mode) — the
+/// marketplace endpoints sit behind the BFF in production, so
+/// per-IP limiting at the Rust layer is a backstop rather than
+/// the primary defence.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RateLimitSettings {
+    /// Master switch. `false` (default) means no rate-limit layer
+    /// is wired — the request pipeline runs unmodified.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Sustained request rate per IP, in requests/second. Must be
+    /// >= 1 if [`Self::enabled`] is true.
+    #[serde(default = "default_rate_per_second")]
+    pub requests_per_second: u32,
+
+    /// Token-bucket burst capacity. A burst above the sustained
+    /// rate is allowed as long as the bucket has tokens. Must be
+    /// >= 1 if [`Self::enabled`] is true.
+    #[serde(default = "default_rate_burst_size")]
+    pub burst_size: u32,
+}
+
+impl Default for RateLimitSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            requests_per_second: default_rate_per_second(),
+            burst_size: default_rate_burst_size(),
+        }
+    }
+}
+
+fn default_rate_per_second() -> u32 {
+    100
+}
+
+fn default_rate_burst_size() -> u32 {
+    200
 }
 
 impl Default for MiddlewareSettings {
@@ -776,6 +825,7 @@ impl Default for MiddlewareSettings {
             cors_allow_origins: Vec::new(),
             request_timeout_secs: default_request_timeout_secs(),
             compression_enabled: default_compression_enabled(),
+            rate_limit: RateLimitSettings::default(),
         }
     }
 }
@@ -939,6 +989,22 @@ impl Settings {
                 key: "KOKKAK_MIDDLEWARE__CORS_ALLOW_ORIGINS".into(),
                 message: "must list at least one origin when KOKKAK_ENVIRONMENT=production".into(),
             });
+        }
+        // T-07: production rate-limit knobs must be positive when
+        // enabled — a 0-rps limiter would block every request.
+        if self.middleware.rate_limit.enabled {
+            if self.middleware.rate_limit.requests_per_second == 0 {
+                return Err(ConfigError::Invalid {
+                    key: "KOKKAK_MIDDLEWARE__RATE_LIMIT__REQUESTS_PER_SECOND".into(),
+                    message: "must be >= 1 when rate limiting is enabled".into(),
+                });
+            }
+            if self.middleware.rate_limit.burst_size == 0 {
+                return Err(ConfigError::Invalid {
+                    key: "KOKKAK_MIDDLEWARE__RATE_LIMIT__BURST_SIZE".into(),
+                    message: "must be >= 1 when rate limiting is enabled".into(),
+                });
+            }
         }
         Ok(())
     }
@@ -1508,6 +1574,100 @@ mod tests {
             },
             middleware: MiddlewareSettings {
                 cors_allow_origins: vec!["https://app.example.com".into()],
+                ..MiddlewareSettings::default()
+            },
+            ..Settings::default()
+        };
+        assert!(s.validate().is_ok());
+    }
+
+    // ---- T-07: rate-limit settings ----
+
+    #[test]
+    fn rate_limit_default_is_disabled() {
+        // Dev mode keeps the limiter off so hot-reload and
+        // integration tests can hammer endpoints without
+        // tripping 429s. Operators opt in via env.
+        let s = Settings::default();
+        assert!(!s.middleware.rate_limit.enabled);
+        assert_eq!(s.middleware.rate_limit.requests_per_second, 100);
+        assert_eq!(s.middleware.rate_limit.burst_size, 200);
+        assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn rate_limit_load_from_env_overrides() {
+        clear_kokkak_env();
+        std::env::set_var("KOKKAK_MIDDLEWARE__RATE_LIMIT__ENABLED", "true");
+        std::env::set_var("KOKKAK_MIDDLEWARE__RATE_LIMIT__REQUESTS_PER_SECOND", "50");
+        std::env::set_var("KOKKAK_MIDDLEWARE__RATE_LIMIT__BURST_SIZE", "75");
+
+        let s = Settings::load().expect("load should succeed");
+        assert!(s.middleware.rate_limit.enabled);
+        assert_eq!(s.middleware.rate_limit.requests_per_second, 50);
+        assert_eq!(s.middleware.rate_limit.burst_size, 75);
+
+        clear_kokkak_env();
+    }
+
+    #[test]
+    fn rate_limit_zero_per_second_fails_when_enabled() {
+        let s = Settings {
+            middleware: MiddlewareSettings {
+                rate_limit: RateLimitSettings {
+                    enabled: true,
+                    requests_per_second: 0,
+                    burst_size: 100,
+                },
+                ..MiddlewareSettings::default()
+            },
+            ..Settings::default()
+        };
+        let err = s
+            .validate()
+            .expect_err("enabled limiter with 0 rps must be rejected");
+        assert!(
+            err.to_string()
+                .contains("KOKKAK_MIDDLEWARE__RATE_LIMIT__REQUESTS_PER_SECOND"),
+            "error should point at REQUESTS_PER_SECOND, got: {err}"
+        );
+    }
+
+    #[test]
+    fn rate_limit_zero_burst_fails_when_enabled() {
+        let s = Settings {
+            middleware: MiddlewareSettings {
+                rate_limit: RateLimitSettings {
+                    enabled: true,
+                    requests_per_second: 100,
+                    burst_size: 0,
+                },
+                ..MiddlewareSettings::default()
+            },
+            ..Settings::default()
+        };
+        let err = s
+            .validate()
+            .expect_err("enabled limiter with 0 burst must be rejected");
+        assert!(
+            err.to_string()
+                .contains("KOKKAK_MIDDLEWARE__RATE_LIMIT__BURST_SIZE"),
+            "error should point at BURST_SIZE, got: {err}"
+        );
+    }
+
+    #[test]
+    fn rate_limit_disabled_with_zero_knobs_validates() {
+        // Zero knobs are fine when the limiter is OFF — operators
+        // sometimes leave defaults untouched. The validation rule
+        // only fires when `enabled = true`.
+        let s = Settings {
+            middleware: MiddlewareSettings {
+                rate_limit: RateLimitSettings {
+                    enabled: false,
+                    requests_per_second: 0,
+                    burst_size: 0,
+                },
                 ..MiddlewareSettings::default()
             },
             ..Settings::default()
