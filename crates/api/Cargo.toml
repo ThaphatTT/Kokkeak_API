@@ -63,6 +63,9 @@ rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
 anyhow = { workspace = true }
 
+# T-12: cert file watcher for LE 90-day rotation.
+notify = { workspace = true }
+
 # T-07: per-IP rate limiting (GCRA via governor).
 tower_governor = { workspace = true }
 

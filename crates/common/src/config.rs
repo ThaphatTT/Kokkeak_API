@@ -658,6 +658,16 @@ pub struct TlsSettings {
     /// Ignored when `enabled = false`.
     #[serde(default = "default_hsts_max_age_secs")]
     pub hsts_max_age_secs: u64,
+
+    /// Auto-reload on cert file change (T-12). When `true`, the
+    /// service watches `cert_path` + `key_path` for modifications
+    /// and triggers a graceful shutdown so systemd/k8s can restart
+    /// with the new chain (LE 90-day rotation). Defaults to `false`
+    /// because the restart causes a brief connection blip — operators
+    /// who can tolerate that opt in; everyone else can rely on the
+    /// periodic restart performed by their orchestrator.
+    #[serde(default)]
+    pub auto_reload: bool,
 }
 
 impl Default for TlsSettings {
@@ -668,6 +678,7 @@ impl Default for TlsSettings {
             key_path: None,
             redirect_from_port: 0,
             hsts_max_age_secs: default_hsts_max_age_secs(),
+            auto_reload: false,
         }
     }
 }
@@ -1271,6 +1282,18 @@ mod tests {
         assert_eq!(t.key_path, None);
         assert_eq!(t.redirect_from_port, 0);
         assert_eq!(t.hsts_max_age_secs, 0);
+        // T-12: auto_reload defaults to false to avoid surprise
+        // restarts; operators opt in via KOKKAK_TLS__AUTO_RELOAD=true.
+        assert!(!t.auto_reload);
+    }
+
+    #[test]
+    fn tls_auto_reload_load_from_env_overrides() {
+        clear_kokkak_env();
+        std::env::set_var("KOKKAK_TLS__AUTO_RELOAD", "true");
+        let s = Settings::load().expect("load should succeed");
+        assert!(s.tls.auto_reload);
+        clear_kokkak_env();
     }
 
     #[test]
@@ -1290,6 +1313,7 @@ mod tests {
                 key_path: Some("/etc/kokkak/key.pem".into()),
                 redirect_from_port: 0,
                 hsts_max_age_secs: 0,
+                auto_reload: false,
             },
             ..Settings::default()
         };
@@ -1309,6 +1333,7 @@ mod tests {
                 key_path: Some("/etc/kokkak/key.pem".into()),
                 redirect_from_port: 0,
                 hsts_max_age_secs: 0,
+                auto_reload: false,
             },
             ..Settings::default()
         };
@@ -1324,6 +1349,7 @@ mod tests {
                 key_path: None,
                 redirect_from_port: 0,
                 hsts_max_age_secs: 0,
+                auto_reload: false,
             },
             ..Settings::default()
         };
@@ -1343,6 +1369,7 @@ mod tests {
                 key_path: Some("/etc/kokkak/key.pem".into()),
                 redirect_from_port: 80,
                 hsts_max_age_secs: 31_536_000,
+                auto_reload: false,
             },
             ..Settings::default()
         };
@@ -1437,6 +1464,7 @@ mod tests {
                 key_path: Some("/etc/kokkak/key.pem".into()),
                 redirect_from_port: 80,
                 hsts_max_age_secs: 31_536_000,
+                auto_reload: false,
             },
             middleware: MiddlewareSettings {
                 cors_allow_origins: vec!["https://app.example.com".into()],
@@ -1461,6 +1489,7 @@ mod tests {
                 key_path: None,
                 redirect_from_port: 80,
                 hsts_max_age_secs: 31_536_000,
+                auto_reload: false,
             },
             ..Settings::default()
         };
@@ -1546,6 +1575,7 @@ mod tests {
                 key_path: Some("/etc/kokkak/key.pem".into()),
                 redirect_from_port: 80,
                 hsts_max_age_secs: 31_536_000,
+                auto_reload: false,
             },
             // cors_allow_origins: [] (default) — must fail.
             ..Settings::default()
@@ -1571,6 +1601,7 @@ mod tests {
                 key_path: Some("/etc/kokkak/key.pem".into()),
                 redirect_from_port: 80,
                 hsts_max_age_secs: 31_536_000,
+                auto_reload: false,
             },
             middleware: MiddlewareSettings {
                 cors_allow_origins: vec!["https://app.example.com".into()],

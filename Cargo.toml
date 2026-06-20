@@ -93,6 +93,13 @@ rustls-pemfile = "2"
 # for us.
 tower_governor = "0.4"
 
+# ---- T-12: cert file watcher (LE 90-day rotation) ----
+# `notify` watches cert + key paths for modification and triggers
+# a graceful reload (the service then restarts under systemd /
+# k8s to pick up the new chain). v6.x is the widely-deployed
+# stable line on crates.io.
+notify = "6"
+
 # Redis
 redis = { version = "0.27", default-features = false, features = ["tokio-comp", "aio"] }
 deadpool-redis = "0.18"

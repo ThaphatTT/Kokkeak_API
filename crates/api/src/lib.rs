@@ -4,6 +4,7 @@
 //! serves.
 
 pub mod adapters;
+pub mod cert_watcher;
 pub mod handlers;
 pub mod middleware;
 pub mod redirect;
