@@ -105,6 +105,12 @@ pub struct Settings {
     /// deployments enable TLS and supply cert + key paths.
     #[serde(default)]
     pub tls: TlsSettings,
+
+    /// HTTP middleware stack (T-06): CORS allowlist, request
+    /// timeout, response compression. Defaults are production-safe
+    /// (deny CORS, 30 s timeout, compression on).
+    #[serde(default)]
+    pub middleware: MiddlewareSettings,
 }
 
 /// HTTP server settings.
@@ -730,6 +736,84 @@ fn default_hsts_max_age_secs() -> u64 {
     0
 }
 
+/// HTTP middleware settings (T-06).
+///
+/// Loaded from env vars prefixed `KOKKAK_MIDDLEWARE__*`. Defaults
+/// are production-safe: deny all CORS origins, 30-second request
+/// timeout, compression on.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MiddlewareSettings {
+    /// Allowlist of CORS origins. Empty (default) means **deny all
+    /// cross-origin requests** — the browser will block the
+    /// request client-side. Operators MUST opt-in by setting
+    /// `KOKKAK_MIDDLEWARE__CORS_ALLOW_ORIGINS` to either a
+    /// comma-separated string (`https://app.example.com,https://admin.example.com`)
+    /// or a TOML array. The custom deserializer accepts both.
+    ///
+    /// Wildcard `*` is intentionally NOT supported because it
+    /// cannot be combined with `allow_credentials(true)`, and the
+    /// marketplace endpoints use cookies for the BFF.
+    #[serde(default, deserialize_with = "deserialize_comma_list")]
+    pub cors_allow_origins: Vec<String>,
+
+    /// Maximum request duration in seconds. `0` disables the
+    /// timeout entirely (NOT recommended for production — slow
+    /// handlers will tie up tokio workers forever).
+    #[serde(default = "default_request_timeout_secs")]
+    pub request_timeout_secs: u64,
+
+    /// Enable response compression (gzip/deflate/br based on the
+    /// client's `Accept-Encoding`). Defaults to `true` — the CPU
+    /// cost is negligible on modern hardware and saves bandwidth
+    /// for JSON-heavy mobile clients.
+    #[serde(default = "default_compression_enabled")]
+    pub compression_enabled: bool,
+}
+
+impl Default for MiddlewareSettings {
+    fn default() -> Self {
+        Self {
+            cors_allow_origins: Vec::new(),
+            request_timeout_secs: default_request_timeout_secs(),
+            compression_enabled: default_compression_enabled(),
+        }
+    }
+}
+
+/// Accept either a JSON/TOML array of strings or a single
+/// comma-separated string. figment's Env provider hands us the
+/// latter (env vars are scalars), so we split on `,` to keep the
+/// operator UX ergonomic without paying for a custom provider.
+fn deserialize_comma_list<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrVec {
+        Vec(Vec<String>),
+        Str(String),
+    }
+
+    match StringOrVec::deserialize(deserializer)? {
+        StringOrVec::Vec(v) => Ok(v),
+        StringOrVec::Str(s) => Ok(s
+            .split(',')
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(String::from)
+            .collect()),
+    }
+}
+
+fn default_request_timeout_secs() -> u64 {
+    30
+}
+
+fn default_compression_enabled() -> bool {
+    true
+}
+
 impl Settings {
     /// Load from environment variables. Fails fast on errors.
     pub fn load() -> Result<Self, ConfigError> {
@@ -843,6 +927,17 @@ impl Settings {
             return Err(ConfigError::Invalid {
                 key: "KOKKAK_TLS__ENABLED".into(),
                 message: "must be true when KOKKAK_ENVIRONMENT=production".into(),
+            });
+        }
+        // T-06: middleware defaults are all-zero / safe, but a
+        // production deployment with CORS allowlist = [] means
+        // the BFF / mobile app cannot reach the API at all.
+        // Fail loudly so operators discover it during deploy, not
+        // when users start reporting 403s.
+        if self.environment.is_production() && self.middleware.cors_allow_origins.is_empty() {
+            return Err(ConfigError::Invalid {
+                key: "KOKKAK_MIDDLEWARE__CORS_ALLOW_ORIGINS".into(),
+                message: "must list at least one origin when KOKKAK_ENVIRONMENT=production".into(),
             });
         }
         Ok(())
@@ -1265,6 +1360,9 @@ mod tests {
 
     #[test]
     fn production_with_tls_enabled_validates() {
+        // T-06: a production deployment must also have a non-empty
+        // CORS allowlist (the browser blocks cross-origin requests
+        // otherwise). The TLS-only check is no longer sufficient.
         let s = Settings {
             environment: Environment::Production,
             tls: TlsSettings {
@@ -1273,6 +1371,10 @@ mod tests {
                 key_path: Some("/etc/kokkak/key.pem".into()),
                 redirect_from_port: 80,
                 hsts_max_age_secs: 31_536_000,
+            },
+            middleware: MiddlewareSettings {
+                cors_allow_origins: vec!["https://app.example.com".into()],
+                ..MiddlewareSettings::default()
             },
             ..Settings::default()
         };
@@ -1309,6 +1411,107 @@ mod tests {
         let s = Settings::default();
         assert_eq!(s.environment, Environment::Development);
         assert!(!s.tls.enabled);
+        assert!(s.validate().is_ok());
+    }
+
+    // ---- T-06: middleware settings ----
+
+    #[test]
+    fn middleware_default_is_production_safe() {
+        let s = Settings::default();
+        assert!(
+            s.middleware.cors_allow_origins.is_empty(),
+            "default CORS allowlist must be empty (deny all)"
+        );
+        assert_eq!(s.middleware.request_timeout_secs, 30);
+        assert!(s.middleware.compression_enabled);
+        assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn middleware_load_from_env_overrides() {
+        clear_kokkak_env();
+        std::env::set_var(
+            "KOKKAK_MIDDLEWARE__CORS_ALLOW_ORIGINS",
+            "https://app.example.com,https://admin.example.com",
+        );
+        std::env::set_var("KOKKAK_MIDDLEWARE__REQUEST_TIMEOUT_SECS", "60");
+        std::env::set_var("KOKKAK_MIDDLEWARE__COMPRESSION_ENABLED", "false");
+
+        let s = Settings::load().expect("load should succeed");
+        assert_eq!(
+            s.middleware.cors_allow_origins,
+            vec![
+                "https://app.example.com".to_string(),
+                "https://admin.example.com".to_string(),
+            ]
+        );
+        assert_eq!(s.middleware.request_timeout_secs, 60);
+        assert!(!s.middleware.compression_enabled);
+
+        clear_kokkak_env();
+    }
+
+    #[test]
+    fn middleware_zero_timeout_is_allowed() {
+        // `0` means "disabled" — useful for long-running handlers
+        // like chat WebSocket upgrades. Production deployments
+        // should leave the 30 s default; opt-in to disable.
+        let s = Settings {
+            middleware: MiddlewareSettings {
+                request_timeout_secs: 0,
+                ..MiddlewareSettings::default()
+            },
+            ..Settings::default()
+        };
+        assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn production_without_cors_allowlist_fails_validation() {
+        // Mirrors the T-11 TLS rule: a prod deployment with empty
+        // CORS allowlist means the BFF / mobile app cannot reach
+        // the API at all. Fail loudly at startup.
+        let s = Settings {
+            environment: Environment::Production,
+            tls: TlsSettings {
+                enabled: true,
+                cert_path: Some("/etc/kokkak/cert.pem".into()),
+                key_path: Some("/etc/kokkak/key.pem".into()),
+                redirect_from_port: 80,
+                hsts_max_age_secs: 31_536_000,
+            },
+            // cors_allow_origins: [] (default) — must fail.
+            ..Settings::default()
+        };
+        let err = s
+            .validate()
+            .expect_err("production + empty CORS allowlist must be rejected");
+        assert!(
+            err.to_string()
+                .contains("KOKKAK_MIDDLEWARE__CORS_ALLOW_ORIGINS")
+                && err.to_string().contains("production"),
+            "error should point at CORS in a production context, got: {err}"
+        );
+    }
+
+    #[test]
+    fn production_with_cors_allowlist_validates() {
+        let s = Settings {
+            environment: Environment::Production,
+            tls: TlsSettings {
+                enabled: true,
+                cert_path: Some("/etc/kokkak/cert.pem".into()),
+                key_path: Some("/etc/kokkak/key.pem".into()),
+                redirect_from_port: 80,
+                hsts_max_age_secs: 31_536_000,
+            },
+            middleware: MiddlewareSettings {
+                cors_allow_origins: vec!["https://app.example.com".into()],
+                ..MiddlewareSettings::default()
+            },
+            ..Settings::default()
+        };
         assert!(s.validate().is_ok());
     }
 }
