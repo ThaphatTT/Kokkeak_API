@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::state::AppState;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListQuery {
     /// Cursor returned by the previous page (omit for first page).
     pub after: Option<String>,
@@ -23,7 +23,7 @@ pub struct ListQuery {
     pub limit: Option<u32>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct ServiceItem {
     pub id: uuid::Uuid,
     pub code: String,
@@ -45,6 +45,15 @@ impl From<kokkak_domain::ServiceCategory> for ServiceItem {
 }
 
 /// GET /api/v1/catalog/services
+#[utoipa::path(
+    get,
+    path = "/api/v1/catalog/services",
+    tag = "catalog",
+    params(ListQuery),
+    responses(
+        (status = 200, description = "Active service categories", body = Vec<ServiceItem>),
+    )
+)]
 pub async fn list_services(
     State(state): State<AppState>,
     Query(q): Query<ListQuery>,

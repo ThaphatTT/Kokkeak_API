@@ -16,6 +16,16 @@ use crate::middleware::auth::AuthnUser;
 use crate::state::AppState;
 
 /// GET /api/v1/users/me
+#[utoipa::path(
+    get,
+    path = "/api/v1/users/me",
+    tag = "users",
+    responses(
+        (status = 200, description = "Current user", body = kokkak_domain::PublicUser),
+        (status = 401, description = "Not authenticated", body = crate::openapi::ApiError),
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn get_me(State(state): State<AppState>, user: AuthnUser) -> Result<Response, Response> {
     let me = match state.user.get_me(user.id()).await {
         Ok(u) => u,

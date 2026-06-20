@@ -37,7 +37,22 @@ base64 = "0.22"
 # Decimal macro for the payment commission tests (no IO, no runtime).
 rust_decimal_macros = { workspace = true }
 
+# T-16: OpenAPI spec generation. Optional feature so domain
+# stays utoipa-free for callers who don't need the spec
+# (mobile team / Swagger UI consumers). The derive is
+# cfg-gated on every entity to keep zero-cost when disabled.
+utoipa = { workspace = true, optional = true, features = ["chrono", "uuid", "decimal"] }
+
+[features]
+default = []
+# Enable OpenAPI `ToSchema` derives on the entities so they
+# appear in the mobile-facing spec at /api/docs.
+openapi = ["dep:utoipa"]
+
 [dev-dependencies]
 # Test runtime only — kept out of `[dependencies]` to keep `domain`
 # runtime-pure (AGENTS.md § 6).
 tokio = { workspace = true, features = ["macros", "rt"] }
+# T-16: dev builds that exercise the OpenAPI derives need the
+# optional dep materialized.
+utoipa = { workspace = true, features = ["chrono", "uuid", "decimal"] }

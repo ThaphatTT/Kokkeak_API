@@ -126,6 +126,7 @@ impl AuthSession {
 /// - `first_name` + `last_name` (was `display_name`)
 /// - no `locale` (locale comes from JWT / Accept-Language per M11)
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct PublicUser {
     /// Stable user id (GUID v4).
     pub id: Uuid,

@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 /// One bookable service in the catalog.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ServiceCategory {
     /// Stable identifier.
     pub id: Uuid,

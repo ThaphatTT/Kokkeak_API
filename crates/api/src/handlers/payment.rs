@@ -26,7 +26,7 @@ use uuid::Uuid;
 use crate::middleware::auth::{assert_role, AuthnUser};
 use crate::state::AppState;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct CreatePaymentRequest {
     pub order_id: Uuid,
     /// Optional override (otherwise the order's total is used).
@@ -61,6 +61,23 @@ impl From<Payment> for PaymentDto {
 }
 
 /// POST /api/v1/payments — open a payment intent.
+#[utoipa::path(
+    post,
+    path = "/api/v1/payments",
+    tag = "payments",
+    request_body = CreatePaymentRequest,
+    responses(
+        (status = 201, description = "Payment intent created", body = kokkak_domain::Payment),
+        (status = 400, description = "Idempotency-Key required", body = crate::openapi::ApiError),
+        (status = 401, description = "Not authenticated", body = crate::openapi::ApiError),
+        (status = 403, description = "Not a customer", body = crate::openapi::ApiError),
+        (status = 422, description = "Validation error", body = crate::openapi::ApiError),
+    ),
+    security(("bearer_auth" = [])),
+    params(
+        ("Idempotency-Key" = String, Header, description = "Unique per-request token. Mobile retries MUST send the same key to dedupe the payment."),
+    )
+)]
 pub async fn create_payment(
     State(state): State<AppState>,
     user: AuthnUser,
@@ -106,7 +123,7 @@ pub async fn create_payment(
         .into_response())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct ConfirmPaymentRequest {
     pub gateway_ref: Option<String>,
 }
@@ -171,6 +188,22 @@ impl From<Payout> for PayoutDto {
 }
 
 /// POST /api/v1/payments/:id/confirm — capture + commission + payout.
+#[utoipa::path(
+    post,
+    path = "/api/v1/payments/{id}/confirm",
+    tag = "payments",
+    params(
+        ("id" = Uuid, Path, description = "Payment id"),
+    ),
+    request_body = ConfirmPaymentRequest,
+    responses(
+        (status = 200, description = "Payment confirmed", body = kokkak_domain::Payment),
+        (status = 401, description = "Not authenticated", body = crate::openapi::ApiError),
+        (status = 404, description = "Payment not found", body = crate::openapi::ApiError),
+        (status = 422, description = "Validation error", body = crate::openapi::ApiError),
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn confirm_payment(
     State(state): State<AppState>,
     user: AuthnUser,
@@ -217,12 +250,23 @@ pub async fn confirm_payment(
         .into_response())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListMyQuery {
     pub limit: Option<u32>,
 }
 
 /// GET /api/v1/payments/me — list my payments.
+#[utoipa::path(
+    get,
+    path = "/api/v1/payments/me",
+    tag = "payments",
+    params(ListMyQuery),
+    responses(
+        (status = 200, description = "Current user's payments", body = Vec<kokkak_domain::Payment>),
+        (status = 401, description = "Not authenticated", body = crate::openapi::ApiError),
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn list_my_payments(
     State(state): State<AppState>,
     user: AuthnUser,
@@ -243,6 +287,20 @@ pub async fn list_my_payments(
 }
 
 /// GET /api/v1/payments/:id — fetch one payment.
+#[utoipa::path(
+    get,
+    path = "/api/v1/payments/{id}",
+    tag = "payments",
+    params(
+        ("id" = Uuid, Path, description = "Payment id"),
+    ),
+    responses(
+        (status = 200, description = "Payment found", body = kokkak_domain::Payment),
+        (status = 401, description = "Not authenticated", body = crate::openapi::ApiError),
+        (status = 404, description = "Payment not found", body = crate::openapi::ApiError),
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn get_payment(
     State(state): State<AppState>,
     user: AuthnUser,
@@ -273,7 +331,7 @@ pub async fn get_payment(
         .into_response())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListPayoutsQuery {
     pub technician_id: Option<Uuid>,
     pub status: Option<String>,
@@ -281,6 +339,18 @@ pub struct ListPayoutsQuery {
 }
 
 /// GET /api/v1/admin/payouts — admin: list payouts.
+#[utoipa::path(
+    get,
+    path = "/api/v1/admin/payouts",
+    tag = "admin",
+    params(ListPayoutsQuery),
+    responses(
+        (status = 200, description = "Payouts (admin view)", body = Vec<kokkak_domain::Payout>),
+        (status = 401, description = "Not authenticated", body = crate::openapi::ApiError),
+        (status = 403, description = "Not an admin", body = crate::openapi::ApiError),
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn list_payouts_admin(
     State(state): State<AppState>,
     user: AuthnUser,
@@ -322,6 +392,21 @@ pub async fn list_payouts_admin(
 }
 
 /// POST /api/v1/admin/payouts/:id/pay — admin: mark a payout paid.
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/payouts/{id}/pay",
+    tag = "admin",
+    params(
+        ("id" = Uuid, Path, description = "Payout id"),
+    ),
+    responses(
+        (status = 200, description = "Payout marked paid", body = kokkak_domain::Payout),
+        (status = 401, description = "Not authenticated", body = crate::openapi::ApiError),
+        (status = 403, description = "Not an admin", body = crate::openapi::ApiError),
+        (status = 404, description = "Payout not found", body = crate::openapi::ApiError),
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn mark_payout_paid_admin(
     State(state): State<AppState>,
     user: AuthnUser,

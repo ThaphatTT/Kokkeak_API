@@ -30,6 +30,7 @@ pub type MessageId = Uuid;
 
 /// One participant in a room (ผู้เข้าร่วมห้องแชท).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Participant {
     /// User UUID.
     pub user_id: Uuid,
@@ -44,6 +45,7 @@ pub struct Participant {
 /// removed in a future revision. M8 keeps the participant set
 /// immutable for simplicity.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ChatRoom {
     /// Stable identifier.
     pub id: RoomId,
@@ -68,6 +70,7 @@ impl ChatRoom {
 
 /// One chat message (ข้อความแชทหนึ่งข้อความ).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ChatMessage {
     /// Stable identifier (also the dedup key in the
     /// `chat.persist` queue — see AGENTS.md § 10).
@@ -105,6 +108,7 @@ impl ChatMessage {
 /// payload so the handler can render the inbox without an extra
 /// round trip.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct RoomSummary {
     /// Room.
     pub room: ChatRoom,

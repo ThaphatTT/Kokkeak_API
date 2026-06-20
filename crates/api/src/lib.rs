@@ -7,6 +7,7 @@ pub mod adapters;
 pub mod cert_watcher;
 pub mod handlers;
 pub mod middleware;
+pub mod openapi;
 pub mod redirect;
 pub mod repo_factory;
 pub mod router;
