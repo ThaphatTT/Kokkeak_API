@@ -33,6 +33,11 @@ async fn main() {
 
     telemetry::init_tracing(settings.log.format);
     let _ = telemetry::init_metrics();
+    // T-24: opt-in OTLP bridge. No-op unless the `otel` feature
+    // is enabled and OTEL_EXPORTER_OTLP_ENDPOINT is set.
+    if telemetry::init_otel("kokkak-worker", None) {
+        info!("OTel exporter wired (traces + metrics OTLP)");
+    }
 
     info!(
         nats = %settings.nats.url,
