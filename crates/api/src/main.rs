@@ -265,6 +265,34 @@ async fn main() {
         kokkak_api::middleware::trace::trace_request,
     ));
 
+    // ---- T-14: HTTP idempotency middleware.
+    //   Construct the in-memory store when the feature is enabled.
+    //   Layer order: idempotency sits between trace (outer) and
+    //   timeout/compression/cors (inner) so the cache hit short-
+    //   circuits before the more expensive layers but after the
+    //   request is logged.
+    let app = if settings.middleware.idempotency.enabled {
+        let max_entries = settings.middleware.idempotency.max_entries;
+        let ttl = Duration::from_secs(settings.middleware.idempotency.ttl_secs);
+        let store: std::sync::Arc<dyn kokkak_domain::IdempotencyStore> = std::sync::Arc::new(
+            kokkak_infra::idempotency::InMemoryIdempotencyStore::new(max_entries),
+        );
+        tracing::info!(
+            max_entries,
+            ttl_secs = ttl.as_secs(),
+            "idempotency cache enabled (in-memory store)"
+        );
+        let store_for_layer = store.clone();
+        app.layer(axum::middleware::from_fn(move |req, next| {
+            let store = store_for_layer.clone();
+            let ttl = ttl;
+            async move { kokkak_api::middleware::idempotency::handle(req, next, store, ttl).await }
+        }))
+    } else {
+        tracing::info!("idempotency cache disabled");
+        app
+    };
+
     // ---- Bind + serve with graceful shutdown ----
     if settings.tls.enabled {
         // T-09: HTTPS path. axum-server + rustls replaces the

@@ -786,6 +786,55 @@ pub struct MiddlewareSettings {
     /// rps + burst 200, tuned per workload).
     #[serde(default)]
     pub rate_limit: RateLimitSettings,
+
+    /// HTTP idempotency cache (T-14). Disabled by default in dev
+    /// (no point caching test traffic); production deployments
+    /// should enable it so mobile retries on flaky networks don't
+    /// create duplicate orders/payments.
+    #[serde(default)]
+    pub idempotency: IdempotencySettings,
+}
+
+/// HTTP idempotency settings (T-14). See
+/// [`crate::middleware::idempotency`] for the on-the-wire contract.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IdempotencySettings {
+    /// Master switch. `false` (default) means the middleware
+    /// short-circuits to a passthrough — no cache, no overhead.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Time-to-live for cached responses. Matches the IETF
+    /// `Idempotency-Key` draft and Stripe's contract. Default
+    /// 24 hours — long enough to survive an overnight mobile
+    /// retry, short enough to bound the storage footprint.
+    #[serde(default = "default_idempotency_ttl_secs")]
+    pub ttl_secs: u64,
+
+    /// Soft cap on the number of cached entries. The in-memory
+    /// store evicts half the entries when the cap is hit
+    /// (Ponytail: half-flush is the cheapest correct policy;
+    /// swap for LRU when traffic demands).
+    #[serde(default = "default_idempotency_max_entries")]
+    pub max_entries: usize,
+}
+
+impl Default for IdempotencySettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            ttl_secs: default_idempotency_ttl_secs(),
+            max_entries: default_idempotency_max_entries(),
+        }
+    }
+}
+
+fn default_idempotency_ttl_secs() -> u64 {
+    86_400 // 24 hours
+}
+
+fn default_idempotency_max_entries() -> usize {
+    10_000
 }
 
 /// Per-IP rate limit (T-07). Uses the GCRA algorithm via
@@ -837,6 +886,7 @@ impl Default for MiddlewareSettings {
             request_timeout_secs: default_request_timeout_secs(),
             compression_enabled: default_compression_enabled(),
             rate_limit: RateLimitSettings::default(),
+            idempotency: IdempotencySettings::default(),
         }
     }
 }
@@ -1014,6 +1064,22 @@ impl Settings {
                 return Err(ConfigError::Invalid {
                     key: "KOKKAK_MIDDLEWARE__RATE_LIMIT__BURST_SIZE".into(),
                     message: "must be >= 1 when rate limiting is enabled".into(),
+                });
+            }
+        }
+        // T-14: idempotency cache must have positive knobs when
+        // enabled — a 0-ttl cache would never replay anything.
+        if self.middleware.idempotency.enabled {
+            if self.middleware.idempotency.ttl_secs == 0 {
+                return Err(ConfigError::Invalid {
+                    key: "KOKKAK_MIDDLEWARE__IDEMPOTENCY__TTL_SECS".into(),
+                    message: "must be >= 1 when idempotency is enabled".into(),
+                });
+            }
+            if self.middleware.idempotency.max_entries == 0 {
+                return Err(ConfigError::Invalid {
+                    key: "KOKKAK_MIDDLEWARE__IDEMPOTENCY__MAX_ENTRIES".into(),
+                    message: "must be >= 1 when idempotency is enabled".into(),
                 });
             }
         }
@@ -1704,5 +1770,77 @@ mod tests {
             ..Settings::default()
         };
         assert!(s.validate().is_ok());
+    }
+
+    // ---- T-14: idempotency settings ----
+
+    #[test]
+    fn idempotency_default_is_disabled() {
+        let s = Settings::default();
+        assert!(!s.middleware.idempotency.enabled);
+        assert_eq!(s.middleware.idempotency.ttl_secs, 86_400);
+        assert_eq!(s.middleware.idempotency.max_entries, 10_000);
+        assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn idempotency_load_from_env_overrides() {
+        clear_kokkak_env();
+        std::env::set_var("KOKKAK_MIDDLEWARE__IDEMPOTENCY__ENABLED", "true");
+        std::env::set_var("KOKKAK_MIDDLEWARE__IDEMPOTENCY__TTL_SECS", "3600");
+        std::env::set_var("KOKKAK_MIDDLEWARE__IDEMPOTENCY__MAX_ENTRIES", "5000");
+
+        let s = Settings::load().expect("load should succeed");
+        assert!(s.middleware.idempotency.enabled);
+        assert_eq!(s.middleware.idempotency.ttl_secs, 3600);
+        assert_eq!(s.middleware.idempotency.max_entries, 5000);
+
+        clear_kokkak_env();
+    }
+
+    #[test]
+    fn idempotency_zero_ttl_fails_when_enabled() {
+        let s = Settings {
+            middleware: MiddlewareSettings {
+                idempotency: IdempotencySettings {
+                    enabled: true,
+                    ttl_secs: 0,
+                    max_entries: 100,
+                },
+                ..MiddlewareSettings::default()
+            },
+            ..Settings::default()
+        };
+        let err = s
+            .validate()
+            .expect_err("enabled idempotency with 0 ttl must be rejected");
+        assert!(
+            err.to_string()
+                .contains("KOKKAK_MIDDLEWARE__IDEMPOTENCY__TTL_SECS"),
+            "error should point at TTL_SECS, got: {err}"
+        );
+    }
+
+    #[test]
+    fn idempotency_zero_max_entries_fails_when_enabled() {
+        let s = Settings {
+            middleware: MiddlewareSettings {
+                idempotency: IdempotencySettings {
+                    enabled: true,
+                    ttl_secs: 60,
+                    max_entries: 0,
+                },
+                ..MiddlewareSettings::default()
+            },
+            ..Settings::default()
+        };
+        let err = s
+            .validate()
+            .expect_err("enabled idempotency with 0 max_entries must be rejected");
+        assert!(
+            err.to_string()
+                .contains("KOKKAK_MIDDLEWARE__IDEMPOTENCY__MAX_ENTRIES"),
+            "error should point at MAX_ENTRIES, got: {err}"
+        );
     }
 }
