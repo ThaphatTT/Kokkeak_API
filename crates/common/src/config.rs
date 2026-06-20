@@ -93,6 +93,18 @@ pub struct Settings {
     /// Auth / JWT settings (M2).
     #[serde(default)]
     pub auth: AuthSettings,
+
+    /// Deployment environment (T-11). Defaults to `development`;
+    /// `production` enables the strict validation path
+    /// (TLS must be enabled, etc.).
+    #[serde(default)]
+    pub environment: Environment,
+
+    /// TLS / HTTPS settings (T-08). Disabled by default so dev
+    /// runs can use plain HTTP on `server.addr`. Production
+    /// deployments enable TLS and supply cert + key paths.
+    #[serde(default)]
+    pub tls: TlsSettings,
 }
 
 /// HTTP server settings.
@@ -579,6 +591,93 @@ pub enum LogFormat {
     Pretty,
 }
 
+/// Deployment environment (T-11 production enforcement builds on
+/// this). Set via `KOKKAK_ENVIRONMENT` (case-insensitive:
+/// `development` | `production`). Defaults to `development`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Environment {
+    /// Local development: relaxed validation (TLS optional,
+    /// default secrets acceptable).
+    #[default]
+    Development,
+    /// Production deployment: stricter validation enforced in
+    /// [`Settings::validate`].
+    Production,
+}
+
+impl Environment {
+    /// True when [`Self::Production`]. Convenience for the
+    /// production-only code paths.
+    pub const fn is_production(self) -> bool {
+        matches!(self, Self::Production)
+    }
+}
+
+/// TLS / HTTPS settings (T-08).
+///
+/// Layered on top of [`ServerSettings`]: when
+/// [`TlsSettings::enabled`] is `false` the API still serves plain
+/// HTTP on `server.addr` (dev mode). When `true`, the
+/// [`crate::main`](kokkak_api) entry point must construct a
+/// `rustls` server config from `cert_path` + `key_path` and bind
+/// with `axum_server` (T-09); HSTS is added by middleware (T-10);
+/// production enforcement lives in [`Settings::validate`] (T-11).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TlsSettings {
+    /// Enable HTTPS. When `true`, `cert_path` and `key_path` must
+    /// point to readable PEM files (validated at startup, not by
+    /// `Settings::validate` — see T-09).
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Path to the PEM-encoded TLS certificate (full chain).
+    /// Required only when `enabled = true`.
+    #[serde(default)]
+    pub cert_path: Option<String>,
+
+    /// Path to the PEM-encoded TLS private key.
+    /// Required only when `enabled = true`.
+    #[serde(default)]
+    pub key_path: Option<String>,
+
+    /// Plain-HTTP listener port for the HTTPS redirect server
+    /// (T-10). Typical value: `80`. Set to `0` to disable.
+    /// Ignored when `enabled = false`.
+    #[serde(default)]
+    pub redirect_from_port: u16,
+
+    /// HSTS `max-age` in seconds. `0` = HSTS disabled.
+    /// Recommended for production: `31536000` (1 year).
+    /// Ignored when `enabled = false`.
+    #[serde(default = "default_hsts_max_age_secs")]
+    pub hsts_max_age_secs: u64,
+}
+
+impl Default for TlsSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            cert_path: None,
+            key_path: None,
+            redirect_from_port: 0,
+            hsts_max_age_secs: default_hsts_max_age_secs(),
+        }
+    }
+}
+
+impl TlsSettings {
+    /// Trimmed `cert_path` (empty when unset or blank).
+    pub fn cert_path_or_empty(&self) -> &str {
+        self.cert_path.as_deref().unwrap_or("").trim()
+    }
+
+    /// Trimmed `key_path` (empty when unset or blank).
+    pub fn key_path_or_empty(&self) -> &str {
+        self.key_path.as_deref().unwrap_or("").trim()
+    }
+}
+
 fn default_addr() -> String {
     "0.0.0.0:3000".into()
 }
@@ -626,6 +725,9 @@ fn default_access_ttl() -> i64 {
 }
 fn default_refresh_ttl() -> i64 {
     2_592_000
+}
+fn default_hsts_max_age_secs() -> u64 {
+    0
 }
 
 impl Settings {
@@ -711,6 +813,26 @@ impl Settings {
                 message: "must not be empty".into(),
             });
         }
+        // T-08: when TLS is enabled, both paths must be present
+        // and non-empty. File existence + readability are checked
+        // at startup by the T-09 server bootstrap, not here, so a
+        // config-only validation pass stays fast and doesn't depend
+        // on the filesystem layout (k8s mounts the secret after
+        // process start in some deployment flows).
+        if self.tls.enabled {
+            if self.tls.cert_path_or_empty().is_empty() {
+                return Err(ConfigError::Invalid {
+                    key: "KOKKAK_TLS__CERT_PATH".into(),
+                    message: "must not be empty when KOKKAK_TLS__ENABLED=true".into(),
+                });
+            }
+            if self.tls.key_path_or_empty().is_empty() {
+                return Err(ConfigError::Invalid {
+                    key: "KOKKAK_TLS__KEY_PATH".into(),
+                    message: "must not be empty when KOKKAK_TLS__ENABLED=true".into(),
+                });
+            }
+        }
         Ok(())
     }
 }
@@ -751,6 +873,12 @@ mod tests {
             "KOKKAK_AUTH__ISSUER",
             "KOKKAK_AUTH__ACCESS_TTL_SECS",
             "KOKKAK_AUTH__REFRESH_TTL_SECS",
+            "KOKKAK_ENVIRONMENT",
+            "KOKKAK_TLS__ENABLED",
+            "KOKKAK_TLS__CERT_PATH",
+            "KOKKAK_TLS__KEY_PATH",
+            "KOKKAK_TLS__REDIRECT_FROM_PORT",
+            "KOKKAK_TLS__HSTS_MAX_AGE_SECS",
         ] {
             std::env::remove_var(key);
         }
@@ -958,5 +1086,150 @@ mod tests {
         assert_eq!(a.issuer, "kokkak-api");
         assert_eq!(a.access_ttl_secs, 900);
         assert_eq!(a.refresh_ttl_secs, 2_592_000);
+    }
+
+    // ---- T-08: TLS settings ----
+
+    #[test]
+    fn tls_default_is_disabled() {
+        let t = TlsSettings::default();
+        assert!(!t.enabled);
+        assert_eq!(t.cert_path, None);
+        assert_eq!(t.key_path, None);
+        assert_eq!(t.redirect_from_port, 0);
+        assert_eq!(t.hsts_max_age_secs, 0);
+    }
+
+    #[test]
+    fn tls_default_settings_validate() {
+        // Plain-HTTP dev default: TLS off, no cert/key required.
+        let s = Settings::default();
+        assert!(!s.tls.enabled);
+        assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn tls_enabled_without_cert_path_fails_validation() {
+        let s = Settings {
+            tls: TlsSettings {
+                enabled: true,
+                cert_path: None,
+                key_path: Some("/etc/kokkak/key.pem".into()),
+                redirect_from_port: 0,
+                hsts_max_age_secs: 0,
+            },
+            ..Settings::default()
+        };
+        let err = s.validate().expect_err("must reject missing cert_path");
+        assert!(
+            err.to_string().contains("KOKKAK_TLS__CERT_PATH"),
+            "error should mention cert_path key, got: {err}"
+        );
+    }
+
+    #[test]
+    fn tls_enabled_with_blank_cert_path_fails_validation() {
+        let s = Settings {
+            tls: TlsSettings {
+                enabled: true,
+                cert_path: Some("   ".into()),
+                key_path: Some("/etc/kokkak/key.pem".into()),
+                redirect_from_port: 0,
+                hsts_max_age_secs: 0,
+            },
+            ..Settings::default()
+        };
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn tls_enabled_without_key_path_fails_validation() {
+        let s = Settings {
+            tls: TlsSettings {
+                enabled: true,
+                cert_path: Some("/etc/kokkak/cert.pem".into()),
+                key_path: None,
+                redirect_from_port: 0,
+                hsts_max_age_secs: 0,
+            },
+            ..Settings::default()
+        };
+        let err = s.validate().expect_err("must reject missing key_path");
+        assert!(
+            err.to_string().contains("KOKKAK_TLS__KEY_PATH"),
+            "error should mention key_path key, got: {err}"
+        );
+    }
+
+    #[test]
+    fn tls_enabled_with_both_paths_validates() {
+        let s = Settings {
+            tls: TlsSettings {
+                enabled: true,
+                cert_path: Some("/etc/kokkak/cert.pem".into()),
+                key_path: Some("/etc/kokkak/key.pem".into()),
+                redirect_from_port: 80,
+                hsts_max_age_secs: 31_536_000,
+            },
+            ..Settings::default()
+        };
+        // File existence is NOT checked by validate() — that's the
+        // T-09 server bootstrap's job. The settings alone pass.
+        assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn environment_default_is_development() {
+        let s = Settings::default();
+        assert_eq!(s.environment, Environment::Development);
+        assert!(!s.environment.is_production());
+    }
+
+    #[test]
+    fn environment_parses_production_value() {
+        let e: Environment = serde_json::from_str("\"production\"").unwrap();
+        assert_eq!(e, Environment::Production);
+        assert!(e.is_production());
+    }
+
+    #[test]
+    fn tls_settings_or_empty_returns_trimmed() {
+        let t = TlsSettings {
+            cert_path: Some("  /etc/kokkak/cert.pem  ".into()),
+            key_path: Some("".into()),
+            ..TlsSettings::default()
+        };
+        assert_eq!(t.cert_path_or_empty(), "/etc/kokkak/cert.pem");
+        assert_eq!(t.key_path_or_empty(), "");
+        let t_none = TlsSettings::default();
+        assert_eq!(t_none.cert_path_or_empty(), "");
+        assert_eq!(t_none.key_path_or_empty(), "");
+    }
+
+    #[test]
+    fn tls_load_from_env_overrides() {
+        let _guard = ENV_LOCK.lock().expect("mutex poisoned");
+        clear_kokkak_env();
+        // add the new TLS keys to the clear list (next test run sees
+        // the canonical list — for now this test relies on
+        // clear_kokkak_env removing everything it knows about and
+        // the new keys being absent).
+        std::env::set_var("KOKKAK_TLS__ENABLED", "true");
+        std::env::set_var("KOKKAK_TLS__CERT_PATH", "/etc/kokkak/cert.pem");
+        std::env::set_var("KOKKAK_TLS__KEY_PATH", "/etc/kokkak/key.pem");
+        std::env::set_var("KOKKAK_TLS__REDIRECT_FROM_PORT", "80");
+        std::env::set_var("KOKKAK_TLS__HSTS_MAX_AGE_SECS", "31536000");
+        std::env::set_var("KOKKAK_ENVIRONMENT", "production");
+
+        let s = Settings::load().expect("load should succeed");
+        assert!(s.tls.enabled);
+        assert_eq!(s.tls.cert_path.as_deref(), Some("/etc/kokkak/cert.pem"));
+        assert_eq!(s.tls.key_path.as_deref(), Some("/etc/kokkak/key.pem"));
+        assert_eq!(s.tls.redirect_from_port, 80);
+        assert_eq!(s.tls.hsts_max_age_secs, 31_536_000);
+        assert_eq!(s.environment, Environment::Production);
+        assert!(s.validate().is_ok());
+
+        clear_kokkak_env();
     }
 }
