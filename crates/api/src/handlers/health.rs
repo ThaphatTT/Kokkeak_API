@@ -20,6 +20,14 @@ use kokkak_domain::HealthRegistry;
 use serde::Serialize;
 
 /// `GET /healthz` — liveness probe.
+#[utoipa::path(
+    get,
+    path = "/healthz",
+    tag = "health",
+    responses(
+        (status = 200, description = "Process is alive", body = String),
+    )
+)]
 pub async fn healthz() -> impl IntoResponse {
     (StatusCode::OK, "OK")
 }
@@ -33,6 +41,15 @@ pub async fn healthz() -> impl IntoResponse {
 ///
 /// The body always includes a per-check breakdown so the failure
 /// cause is visible without parsing logs.
+#[utoipa::path(
+    get,
+    path = "/readyz",
+    tag = "health",
+    responses(
+        (status = 200, description = "All checks passed"),
+        (status = 503, description = "One or more checks failed"),
+    )
+)]
 pub async fn readyz(State(registry): State<HealthRegistry>) -> impl IntoResponse {
     let report = registry.run_all().await;
 

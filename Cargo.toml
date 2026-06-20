@@ -100,6 +100,14 @@ tower_governor = "0.4"
 # stable line on crates.io.
 notify = "6"
 
+# ---- T-16: OpenAPI / Swagger UI ----
+# Pinned to utoipa 4.x because utoipa 5.x dropped axum 0.7
+# support (5.x requires axum 0.8). utoipa-swagger-ui 7.x is the
+# matching version line (8.x pulls in utoipa 5 and creates a
+# duplicate crate in the dependency graph).
+utoipa = "4"
+utoipa-swagger-ui = "7"
+
 # Redis
 redis = { version = "0.27", default-features = false, features = ["tokio-comp", "aio"] }
 deadpool-redis = "0.18"

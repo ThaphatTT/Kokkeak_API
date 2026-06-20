@@ -28,6 +28,7 @@ use uuid::Uuid;
 /// open-ended via `Vec<Role>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub enum Role {
     /// End user who books a handyman / technician.
     Customer,

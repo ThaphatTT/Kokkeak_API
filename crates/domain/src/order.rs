@@ -17,6 +17,7 @@ use crate::catalog::ServiceCategory;
 /// customer/technician-facing view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub enum OrderStatus {
     /// Customer created the order; waiting for technician.
     Pending,
@@ -50,6 +51,7 @@ impl OrderStatus {
 /// schema mirrors the legacy `KOKKAK_ORDER` database tables
 /// (AGENTS.md § 7.1) one-to-one for the Strangler migration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Order {
     /// Stable identifier.
     pub id: Uuid,

@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::middleware::auth::{assert_role, AuthnUser};
 use crate::state::AppState;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListQuery {
     pub after: Option<String>,
     pub limit: Option<u32>,
@@ -54,6 +54,18 @@ impl From<kokkak_domain::Order> for OrderItem {
 }
 
 /// GET /api/v1/orders/me  — list orders for the current customer.
+#[utoipa::path(
+    get,
+    path = "/api/v1/orders/me",
+    tag = "orders",
+    params(ListQuery),
+    responses(
+        (status = 200, description = "Customer's orders", body = Vec<kokkak_domain::Order>),
+        (status = 401, description = "Not authenticated", body = crate::openapi::ApiError),
+        (status = 403, description = "Not a customer", body = crate::openapi::ApiError),
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn list_my_orders(
     State(state): State<AppState>,
     user: AuthnUser,
@@ -87,7 +99,7 @@ pub async fn list_my_orders(
     Ok((StatusCode::OK, paginated(items, meta)).into_response())
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
 pub struct CreateOrderRequest {
     pub service_code: String,
     pub description: String,
@@ -101,6 +113,23 @@ pub struct CreateOrderRequest {
 ///
 /// Only customers can create orders. The persisted order is then
 /// published on `order.dispatch` for the worker to fan out.
+#[utoipa::path(
+    post,
+    path = "/api/v1/orders",
+    tag = "orders",
+    request_body = CreateOrderRequest,
+    responses(
+        (status = 201, description = "Order created", body = kokkak_domain::Order),
+        (status = 400, description = "Idempotency-Key required", body = crate::openapi::ApiError),
+        (status = 401, description = "Not authenticated", body = crate::openapi::ApiError),
+        (status = 403, description = "Not a customer", body = crate::openapi::ApiError),
+        (status = 422, description = "Validation error", body = crate::openapi::ApiError),
+    ),
+    security(("bearer_auth" = [])),
+    params(
+        ("Idempotency-Key" = String, Header, description = "Unique per-request token. Mobile retries MUST send the same key to dedupe the order."),
+    )
+)]
 pub async fn create_order(
     State(state): State<AppState>,
     user: AuthnUser,
@@ -160,6 +189,18 @@ pub async fn create_order(
 }
 
 /// GET /api/v1/orders/assigned  — list orders assigned to the current technician.
+#[utoipa::path(
+    get,
+    path = "/api/v1/orders/assigned",
+    tag = "orders",
+    params(ListQuery),
+    responses(
+        (status = 200, description = "Technician's assigned orders", body = Vec<kokkak_domain::Order>),
+        (status = 401, description = "Not authenticated", body = crate::openapi::ApiError),
+        (status = 403, description = "Not a technician", body = crate::openapi::ApiError),
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn list_assigned_orders(
     State(state): State<AppState>,
     user: AuthnUser,

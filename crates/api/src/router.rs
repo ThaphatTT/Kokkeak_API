@@ -2,13 +2,17 @@
 
 use axum::{
     middleware::from_fn,
+    response::IntoResponse,
     routing::{get, post},
-    Router,
+    Json, Router,
 };
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 use crate::handlers;
 use crate::middleware::i18n::locale_middleware;
 use crate::middleware::idempotency::require_idempotency_key;
+use crate::openapi::ApiDoc;
 use crate::state::AppState;
 
 /// Build the full application router.
@@ -125,6 +129,25 @@ pub fn build(state: AppState) -> Router {
         .merge(admin_payout_routes)
         .merge(admin_users_routes)
         .merge(idempotent_routes)
+        .merge(openapi_routes())
         .with_state(state)
         .layer(from_fn(locale_middleware))
+}
+
+/// T-16: OpenAPI spec + Swagger UI.
+///
+/// - `GET /api/openapi.json` returns the generated spec.
+/// - `GET /api/docs` serves the interactive Swagger UI.
+/// - `GET /api/docs/*` serves the Swagger UI assets.
+fn openapi_routes() -> Router<AppState> {
+    let spec = ApiDoc::openapi();
+    Router::new()
+        .route(
+            "/api/openapi.json",
+            get(move || {
+                let spec = spec.clone();
+                async move { Json(spec).into_response() }
+            }),
+        )
+        .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", ApiDoc::openapi()))
 }

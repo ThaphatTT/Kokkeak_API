@@ -33,7 +33,9 @@ jsonwebtoken = { workspace = true }
 
 # Internal
 kokkak-common = { path = "../common" }
-kokkak-domain = { path = "../domain" }
+# T-16: enable the `openapi` feature on domain so the entity
+# types derive `utoipa::ToSchema` for the mobile-facing spec.
+kokkak-domain = { path = "../domain", features = ["openapi"] }
 kokkak-infra = { path = "../infra" }
 kokkak-application = { path = "../application" }
 
@@ -68,6 +70,10 @@ notify = { workspace = true }
 
 # T-07: per-IP rate limiting (GCRA via governor).
 tower_governor = { workspace = true }
+
+# T-16: OpenAPI spec generation + Swagger UI.
+utoipa = { workspace = true, features = ["axum_extras", "chrono", "uuid", "decimal"] }
+utoipa-swagger-ui = { workspace = true, features = ["axum"] }
 
 [dev-dependencies]
 # Test body / JSON inspection in handler tests.

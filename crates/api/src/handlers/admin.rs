@@ -21,7 +21,7 @@ use crate::handlers::auth::{auth_error_to_response, AuthResponse};
 use crate::middleware::auth::AuthnUser;
 use crate::state::AppState;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct CreateUserRequest {
     pub username: String,
     pub password: String,
@@ -41,6 +41,20 @@ pub struct CreateUserRequest {
 ///
 /// Requires the caller to hold a JWT carrying `Admin` or
 /// `SuperAdmin` (mirrors the pattern in `handlers::payment::list_payouts_admin`).
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/users",
+    tag = "admin",
+    request_body = CreateUserRequest,
+    responses(
+        (status = 201, description = "User created (admin-created)", body = kokkak_domain::PublicUser),
+        (status = 401, description = "Not authenticated", body = crate::openapi::ApiError),
+        (status = 403, description = "Not an admin", body = crate::openapi::ApiError),
+        (status = 409, description = "Username already taken", body = crate::openapi::ApiError),
+        (status = 422, description = "Validation error", body = crate::openapi::ApiError),
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn create_user_admin(
     State(state): State<AppState>,
     user: AuthnUser,

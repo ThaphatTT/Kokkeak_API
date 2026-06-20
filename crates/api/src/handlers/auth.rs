@@ -40,7 +40,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::state::AppState;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct RegisterRequest {
     /// Login username (lowercased on the server). In practice this can be
     /// an email, phone, or alphanumeric handle.
@@ -54,7 +54,7 @@ pub struct RegisterRequest {
     pub role: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct AuthResponse {
     pub user: kokkak_domain::PublicUser,
     pub access_token: String,
@@ -85,6 +85,22 @@ impl From<kokkak_application::auth::AuthOutcome> for AuthResponse {
 /// previous behaviour — accepting `{"role":"admin"}` from an
 /// unauthenticated client — was an open admin registration
 /// vulnerability.
+#[utoipa::path(
+    post,
+    path = "/api/v1/auth/register",
+    tag = "auth",
+    request_body = RegisterRequest,
+    responses(
+        (status = 201, description = "Account created", body = AuthResponse),
+        (status = 400, description = "Idempotency-Key required", body = crate::openapi::ApiError),
+        (status = 409, description = "Username already taken", body = crate::openapi::ApiError),
+        (status = 422, description = "Role not allowed (admin/super_admin must use admin endpoint)", body = crate::openapi::ApiError),
+        (status = 500, description = "Internal error", body = crate::openapi::ApiError),
+    ),
+    params(
+        ("Idempotency-Key" = String, Header, description = "Unique per-request token. Mobile retries MUST send the same key to dedupe the registration."),
+    )
+)]
 pub async fn register(
     State(state): State<AppState>,
     Json(req): Json<RegisterRequest>,
@@ -148,7 +164,7 @@ pub(crate) fn parse_public_register_role(raw: Option<&str>) -> Result<Role, Publ
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct LoginRequest {
     pub username: String,
     pub password: String,
@@ -157,6 +173,17 @@ pub struct LoginRequest {
 }
 
 /// POST /api/v1/auth/login
+#[utoipa::path(
+    post,
+    path = "/api/v1/auth/login",
+    tag = "auth",
+    request_body = LoginRequest,
+    responses(
+        (status = 200, description = "Logged in", body = AuthResponse),
+        (status = 401, description = "Invalid credentials", body = crate::openapi::ApiError),
+        (status = 500, description = "Internal error", body = crate::openapi::ApiError),
+    )
+)]
 pub async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
@@ -173,13 +200,24 @@ pub async fn login(
     Ok(ok(AuthResponse::from(outcome)))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct RefreshRequest {
     pub refresh_token: String,
     pub scope: Option<String>,
 }
 
 /// POST /api/v1/auth/refresh
+#[utoipa::path(
+    post,
+    path = "/api/v1/auth/refresh",
+    tag = "auth",
+    request_body = RefreshRequest,
+    responses(
+        (status = 200, description = "Token refreshed", body = AuthResponse),
+        (status = 401, description = "Refresh token invalid or expired", body = crate::openapi::ApiError),
+        (status = 500, description = "Internal error", body = crate::openapi::ApiError),
+    )
+)]
 pub async fn refresh(
     State(state): State<AppState>,
     Json(req): Json<RefreshRequest>,
@@ -192,7 +230,7 @@ pub async fn refresh(
     Ok(ok(AuthResponse::from(outcome)))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct LogoutResponse {
     pub logged_out: bool,
 }
@@ -202,6 +240,14 @@ pub struct LogoutResponse {
 /// Stateless for now: the client discards the token. When Redis
 /// refresh-token blacklist lands, this endpoint will add the
 /// refresh-token jti to a TTL'd set.
+#[utoipa::path(
+    post,
+    path = "/api/v1/auth/logout",
+    tag = "auth",
+    responses(
+        (status = 200, description = "Logged out", body = LogoutResponse),
+    )
+)]
 pub async fn logout() -> Response {
     (
         StatusCode::OK,

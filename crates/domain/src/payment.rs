@@ -25,6 +25,7 @@ use crate::order::Order;
 /// Payment lifecycle (วงจรการชำระเงิน).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub enum PaymentStatus {
     /// Payment intent created; awaiting the gateway.
     Pending,
@@ -59,6 +60,7 @@ impl PaymentStatus {
 
 /// One payment intent (คำสั่งชำระเงินหนึ่งรายการ).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Payment {
     /// Stable identifier.
     pub id: Uuid,
@@ -105,6 +107,7 @@ pub struct Commission {
 
 /// Payout to a technician (เงินเข้าช่าง).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Payout {
     /// Stable identifier.
     pub id: Uuid,
@@ -125,6 +128,7 @@ pub struct Payout {
 /// Payout lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub enum PayoutStatus {
     /// Computed, waiting for the bank transfer.
     Pending,
