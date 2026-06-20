@@ -141,12 +141,20 @@ pub fn build(state: AppState) -> Router {
 /// - `GET /api/docs/*` serves the Swagger UI assets.
 fn openapi_routes() -> Router<AppState> {
     let spec = ApiDoc::openapi();
+    let catalog = crate::openapi::error_codes_catalog();
     Router::new()
         .route(
             "/api/openapi.json",
             get(move || {
                 let spec = spec.clone();
                 async move { Json(spec).into_response() }
+            }),
+        )
+        .route(
+            "/api/error-codes.json",
+            get(move || {
+                let catalog = catalog.clone();
+                async move { Json(catalog).into_response() }
             }),
         )
         .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", ApiDoc::openapi()))

@@ -150,3 +150,49 @@ async fn spec_documents_error_envelope() {
         "spec must include ApiErrorBody schema (the inner `error` field shape)"
     );
 }
+
+#[tokio::test]
+async fn error_codes_catalog_includes_all_published_codes() {
+    // T-17: the catalog endpoint must list every code in
+    // kokkak_common::error_codes::ErrorCode. If the catalog
+    // is out of sync with the constants, mobile devs will be
+    // missing entries.
+    use kokkak_api::openapi::error_codes_catalog;
+
+    let catalog = error_codes_catalog();
+    let catalog_codes: std::collections::HashSet<&str> = catalog.iter().map(|e| e.code).collect();
+
+    for required in [
+        kokkak_common::error_codes::ErrorCode::BAD_REQUEST,
+        kokkak_common::error_codes::ErrorCode::IDEMPOTENCY_KEY_REQUIRED,
+        kokkak_common::error_codes::ErrorCode::UNAUTHORIZED,
+        kokkak_common::error_codes::ErrorCode::FORBIDDEN,
+        kokkak_common::error_codes::ErrorCode::NOT_FOUND,
+        kokkak_common::error_codes::ErrorCode::USERNAME_TAKEN,
+        kokkak_common::error_codes::ErrorCode::VALIDATION,
+        kokkak_common::error_codes::ErrorCode::RATE_LIMITED,
+        kokkak_common::error_codes::ErrorCode::INTERNAL,
+    ] {
+        assert!(
+            catalog_codes.contains(required),
+            "error_codes_catalog() must include `{required}`. Missing!"
+        );
+    }
+}
+
+#[tokio::test]
+async fn error_codes_catalog_status_matches_semantics() {
+    use kokkak_api::openapi::error_codes_catalog;
+    let catalog = error_codes_catalog();
+    for entry in catalog {
+        // 4xx codes must be in 400-499; 5xx in 500-599. This is
+        // the contract — mobile devs rely on it to dispatch
+        // (retry on 5xx, show error on 4xx).
+        let valid_range = (400..500).contains(&entry.status) || (500..600).contains(&entry.status);
+        assert!(
+            valid_range,
+            "code `{}` has status {} which is outside 4xx/5xx",
+            entry.code, entry.status
+        );
+    }
+}
