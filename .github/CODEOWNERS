@@ -1,0 +1,56 @@
+# CODEOWNERS — Kokkeak_API
+#
+# Maps path → reviewer handle. GitHub auto-assigns reviewers when a
+# PR touches a matching path. The "fallback" rule at the bottom
+# catches everything else so no file slips through review.
+#
+# Conventions:
+#   - First match wins (GitHub reads top-down).
+#   - Owners receive review requests; team handles still optional.
+#   - Keep this file in lockstep with `crates/*` ownership.
+#
+# Update alongside CONTRIBUTING.md when teams change.
+
+# Default owner: core API team owns everything until a more
+# specific rule below matches. Acts as a safety net so PRs
+# without a closer match still get a review request.
+*                                       @kokkak/backend-core
+
+# ----- Domain & application logic -----
+# Business rules, entities, use cases. Touching these usually
+# means a domain change — needs senior review.
+/crates/domain/                         @kokkak/backend-domain
+/crates/application/                    @kokkak/backend-domain
+
+# ----- Persistence & adapters -----
+# SQL / Mongo / Redis / NATS / S3 / FCM wiring. Schema changes
+# live here too; coordinate with DBA.
+/crates/infra/                          @kokkak/backend-infra
+/migrations/                            @kokkak/backend-infra
+
+# ----- HTTP surface -----
+# Routes, handlers, middleware, OpenAPI spec, TLS config.
+/crates/api/                            @kokkak/backend-api
+/crates/api/src/openapi.rs              @kokkak/backend-api
+
+# ----- Async workers -----
+# NATS consumer / producer handlers. Coordinate with infra for
+# queue subject conventions.
+/crates/worker/                         @kokkak/backend-workers
+
+# ----- Shared cross-cutting concerns -----
+# Errors, config, telemetry, i18n. Any crate can import these,
+# so they need a broad review.
+/crates/common/                         @kokkak/backend-core
+
+# ----- Deploy & release -----
+# Anything that ships to prod: Dockerfile, compose, helm, CI/CD.
+Dockerfile                              @kokkak/platform
+.dockerignore                           @kokkak/platform
+/docker-compose.yml                     @kokkak/platform
+/deploy/                                @kokkak/platform
+/.github/workflows/                     @kokkak/platform
+
+# ----- Project-wide docs that affect everyone -----
+/CONTRIBUTING.md                        @kokkak/backend-core
+/AGENTS.md                              @kokkak/backend-core
