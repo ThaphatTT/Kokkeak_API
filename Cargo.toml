@@ -121,7 +121,7 @@ utoipa = "4"
 utoipa-swagger-ui = "7"
 
 # Redis
-redis = { version = "0.27", default-features = false, features = ["tokio-comp", "aio"] }
+redis = { version = "0.27", default-features = false, features = ["tokio-comp", "aio", "script"] }
 deadpool-redis = "0.18"
 
 # In-process L1 cache

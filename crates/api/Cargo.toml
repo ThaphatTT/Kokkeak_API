@@ -71,6 +71,13 @@ notify = { workspace = true }
 # T-07: per-IP rate limiting (GCRA via governor).
 tower_governor = { workspace = true }
 
+# R-02: Redis-backed rate limit (shared counter across replicas).
+# Shares the `redis` + `deadpool-redis` versions that `kokkak-infra`
+# already uses for the L2 cache; pinning here keeps the workspace
+# single-source-of-truth.
+redis = { workspace = true }
+deadpool-redis = { workspace = true }
+
 # T-16: OpenAPI spec generation + Swagger UI.
 utoipa = { workspace = true, features = ["axum_extras", "chrono", "uuid", "decimal"] }
 utoipa-swagger-ui = { workspace = true, features = ["axum"] }

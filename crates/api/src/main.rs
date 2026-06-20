@@ -28,7 +28,11 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use kokkak_common::{config::Settings, i18n, telemetry};
+use deadpool_redis::{Config, Pool, Runtime};
+use kokkak_common::{
+    config::{RateLimitBackend, Settings},
+    i18n, telemetry,
+};
 use kokkak_domain::HealthRegistry;
 use kokkak_infra::auth::jwt::JwtService;
 use kokkak_infra::cache::redis::RedisCache;
@@ -44,6 +48,7 @@ use tower_http::timeout::TimeoutLayer;
 use kokkak_api::build_app_state_with;
 use kokkak_api::build_repos;
 use kokkak_api::build_router;
+use kokkak_api::middleware::rate_limit_redis::{rate_limit_redis_middleware, RedisRateLimit};
 use kokkak_api::middleware::safety::ConcurrencyCap;
 use kokkak_api::redirect::redirect_router;
 use kokkak_api::tls::{build_rustls_config, hsts_layer};
@@ -211,44 +216,75 @@ async fn run(settings: Settings) {
         }
     };
 
-    // T-07: per-IP rate limit (GCRA via tower_governor).
+    // T-07 + R-02: per-IP rate limit.
+    // - backend=memory (default): per-instance `tower_governor` GCRA.
+    //   Fine for single-pod dev/test; multiplies by pod count under HPA.
+    // - backend=redis: shared counter via Lua INCR + EXPIRE. Required
+    //   before running more than one replica.
     // Sits BETWEEN cors and compression: short-circuits before
     // we pay the compression CPU cost on requests that will be
-    // dropped anyway. Uses PeerIpKeyExtractor so a noisy client
-    // gets throttled regardless of which endpoint it targets.
+    // dropped anyway.
     let app = if settings.middleware.rate_limit.enabled {
-        let rate = settings.middleware.rate_limit.requests_per_second;
         let burst = settings.middleware.rate_limit.burst_size;
-        tracing::info!(
-            rps = rate,
-            burst = burst,
-            "rate limit enabled (per-IP, GCRA)"
-        );
-        let governor_conf = std::sync::Arc::new(
-            GovernorConfigBuilder::default()
-                .per_second(u64::from(rate))
-                .burst_size(burst)
-                .key_extractor(PeerIpKeyExtractor)
-                .finish()
-                .expect("rate-limit config must build (knobs validated upstream)"),
-        );
-        // GC the limiter's key storage every 5 minutes so a busy
-        // day doesn't balloon memory with stale per-IP entries.
-        let limiter = governor_conf.limiter().clone();
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(300)).await;
-                let before = limiter.len();
-                limiter.retain_recent();
-                let after = limiter.len();
-                if before != after {
-                    tracing::debug!(before, after, "rate limiter GC swept stale entries");
-                }
+        match settings.middleware.rate_limit.backend {
+            RateLimitBackend::Memory => {
+                let rate = settings.middleware.rate_limit.requests_per_second;
+                tracing::info!(
+                    rps = rate,
+                    burst = burst,
+                    "rate limit enabled (per-IP, GCRA, in-memory)"
+                );
+                let governor_conf = std::sync::Arc::new(
+                    GovernorConfigBuilder::default()
+                        .per_second(u64::from(rate))
+                        .burst_size(burst)
+                        .key_extractor(PeerIpKeyExtractor)
+                        .finish()
+                        .expect("rate-limit config must build (knobs validated upstream)"),
+                );
+                // GC the limiter's key storage every 5 minutes so a busy
+                // day doesn't balloon memory with stale per-IP entries.
+                let limiter = governor_conf.limiter().clone();
+                tokio::spawn(async move {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                        let before = limiter.len();
+                        limiter.retain_recent();
+                        let after = limiter.len();
+                        if before != after {
+                            tracing::debug!(before, after, "rate limiter GC swept stale entries");
+                        }
+                    }
+                });
+                app.layer(GovernorLayer {
+                    config: governor_conf,
+                })
             }
-        });
-        app.layer(GovernorLayer {
-            config: governor_conf,
-        })
+            RateLimitBackend::Redis => {
+                // R-02: build a dedicated `deadpool-redis` pool for
+                // the rate limiter. The 1-second window matches the
+                // `requests_per_second` knob semantics — each
+                // `burst_size` hits are allowed per wall-clock second,
+                // then the window rolls over. A future finer-grained
+                // window (e.g. 100ms sliding) can be added by
+                // changing the constant + plumbing a setting knob.
+                const REDIS_WINDOW_SECS: u64 = 1;
+                let pool = build_rate_limit_pool(&settings).unwrap_or_else(|err| {
+                    eprintln!("[kokkak-api] rate limit redis pool build failed: {err}");
+                    std::process::exit(1);
+                });
+                let limiter = RedisRateLimit::new(pool, u64::from(burst), REDIS_WINDOW_SECS);
+                tracing::info!(
+                    burst,
+                    window_secs = REDIS_WINDOW_SECS,
+                    "rate limit enabled (per-IP, fixed window, Redis-backed)"
+                );
+                app.layer(axum::middleware::from_fn_with_state(
+                    limiter,
+                    rate_limit_redis_middleware,
+                ))
+            }
+        }
     } else {
         tracing::info!("rate limit disabled");
         app
@@ -497,7 +533,13 @@ async fn run(settings: Settings) {
             tls_config,
         )
         .handle(tls_handle)
-        .serve(app.into_make_service())
+        // R-02: `into_make_service_with_connect_info` so the
+        // Redis-backed rate-limit middleware can extract the
+        // client IP via `ConnectInfo<SocketAddr>`. The memory
+        // backend (tower_governor) reads the IP from the
+        // connection directly via its own extractor, so the
+        // extra plumbing costs nothing on that path.
+        .serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>())
         .await
         .expect("TLS server error");
     } else {
@@ -514,13 +556,41 @@ async fn run(settings: Settings) {
 
         tracing::info!(addr = %settings.server.addr, "kokkak-api listening (HTTP)");
 
-        axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal())
-            .await
-            .expect("server error");
+        // R-02: see the TLS branch above — same `ConnectInfo`
+        // wiring, same reason.
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .expect("server error");
     }
 
     tracing::info!("kokkak-api exited cleanly");
+}
+
+/// R-02: build a dedicated `deadpool-redis` pool for the rate
+/// limiter.
+///
+/// We do NOT reuse `kokkak_infra::cache::redis::RedisCache`'s
+/// pool because (a) the cache pool may be sized for big-value
+/// traffic, (b) the rate limiter has very different access
+/// patterns (1 RTT per request, no pipelining), and (c) keeping
+/// the limiter pool independent means a runaway cache cannot
+/// exhaust the limiter's connections.
+///
+/// ponytail: the URL comes from `settings.redis.url` — the same
+/// `KOKKAK_REDIS__URL` knob. If the operator wants a separate
+/// Redis instance just for rate limiting, that knob is the
+/// single seam to extend.
+fn build_rate_limit_pool(settings: &Settings) -> Result<Pool, String> {
+    if !settings.redis.is_configured() {
+        return Err("KOKKAK_REDIS__URL is not set".to_string());
+    }
+    let cfg = Config::from_url(&settings.redis.url);
+    cfg.create_pool(Some(Runtime::Tokio1))
+        .map_err(|e| e.to_string())
 }
 
 async fn build_health_registry(settings: &Settings) -> HealthRegistry {

@@ -2381,6 +2381,7 @@ dependencies = [
  "axum",
  "axum-server",
  "chrono",
+ "deadpool-redis",
  "dotenvy",
  "futures",
  "http-body-util",
@@ -2391,6 +2392,7 @@ dependencies = [
  "kokkak-infra",
  "metrics",
  "notify",
+ "redis",
  "rust_decimal",
  "rustls 0.23.40",
  "rustls-pemfile 2.2.0",
@@ -3730,6 +3732,7 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "ryu",
+ "sha1_smol",
  "tokio",
  "tokio-util 0.7.18",
  "url",
@@ -4479,6 +4482,12 @@ dependencies = [
  "cpufeatures 0.2.17",
  "digest",
 ]
+
+[[package]]
+name = "sha1_smol"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
 
 [[package]]
 name = "sha2"

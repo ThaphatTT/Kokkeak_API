@@ -919,8 +919,28 @@ fn default_idempotency_max_entries() -> usize {
     10_000
 }
 
-/// Per-IP rate limit (T-07). Uses the GCRA algorithm via
-/// `tower_governor` + `governor`. Default OFF (dev mode) — the
+/// R-02: backend for the per-IP rate limit.
+///
+/// `Memory` (default) preserves the per-instance `tower_governor`
+/// GCRA that T-07 wired — each replica counts its own traffic.
+/// This is correct for a single-pod deployment but **not** for
+/// HPA > 1, where a noisy client gets `limit × pod_count` total
+/// budget. `Redis` shares the counter across all replicas via
+/// an atomic `INCR + EXPIRE` Lua script — required before
+/// running more than one replica behind a load balancer.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RateLimitBackend {
+    /// Per-instance in-memory GCRA via `tower_governor`.
+    /// Default — same behaviour as before R-02.
+    #[default]
+    Memory,
+    /// Shared counter in Redis. Fails open if Redis is down
+    /// (per AGENTS.md §9.3 group C: rate limit is volatile).
+    Redis,
+}
+
+/// Per-IP rate limit (T-07 + R-02). Default OFF (dev mode) — the
 /// marketplace endpoints sit behind the BFF in production, so
 /// per-IP limiting at the Rust layer is a backstop rather than
 /// the primary defence.
@@ -931,14 +951,23 @@ pub struct RateLimitSettings {
     #[serde(default)]
     pub enabled: bool,
 
+    /// R-02: counter backend. `memory` (default) keeps the
+    /// per-instance `tower_governor` behaviour; `redis` shares
+    /// the counter across all replicas. Ignored when
+    /// [`Self::enabled`] is false.
+    #[serde(default)]
+    pub backend: RateLimitBackend,
+
     /// Sustained request rate per IP, in requests/second. Must be
     /// >= 1 if [`Self::enabled`] is true.
     #[serde(default = "default_rate_per_second")]
     pub requests_per_second: u32,
 
-    /// Token-bucket burst capacity. A burst above the sustained
-    /// rate is allowed as long as the bucket has tokens. Must be
-    /// >= 1 if [`Self::enabled`] is true.
+    /// Token-bucket burst capacity (memory backend) OR max
+    /// requests per window (redis backend). A burst above the
+    /// sustained rate is allowed as long as the bucket has
+    /// tokens (memory) or the window has not yet rolled over
+    /// (redis). Must be >= 1 if [`Self::enabled`] is true.
     #[serde(default = "default_rate_burst_size")]
     pub burst_size: u32,
 }
@@ -947,6 +976,7 @@ impl Default for RateLimitSettings {
     fn default() -> Self {
         Self {
             enabled: false,
+            backend: RateLimitBackend::default(),
             requests_per_second: default_rate_per_second(),
             burst_size: default_rate_burst_size(),
         }
@@ -1166,6 +1196,20 @@ impl Settings {
                 return Err(ConfigError::Invalid {
                     key: "KOKKAK_MIDDLEWARE__RATE_LIMIT__BURST_SIZE".into(),
                     message: "must be >= 1 when rate limiting is enabled".into(),
+                });
+            }
+            // R-02: `backend=redis` requires the Redis URL to be
+            // configured — otherwise the limiter cannot reach its
+            // counter. Fail loudly at startup so the operator
+            // discovers the gap during deploy, not at the first
+            // request that crosses the limit.
+            if self.middleware.rate_limit.backend == RateLimitBackend::Redis
+                && !self.redis.is_configured()
+            {
+                return Err(ConfigError::Invalid {
+                    key: "KOKKAK_MIDDLEWARE__RATE_LIMIT__BACKEND".into(),
+                    message: "rate_limit.backend=redis requires KOKKAK_REDIS__URL to be configured"
+                        .into(),
                 });
             }
         }
@@ -1891,6 +1935,7 @@ mod tests {
             middleware: MiddlewareSettings {
                 rate_limit: RateLimitSettings {
                     enabled: true,
+                    backend: RateLimitBackend::Memory,
                     requests_per_second: 0,
                     burst_size: 100,
                 },
@@ -1914,6 +1959,7 @@ mod tests {
             middleware: MiddlewareSettings {
                 rate_limit: RateLimitSettings {
                     enabled: true,
+                    backend: RateLimitBackend::Memory,
                     requests_per_second: 100,
                     burst_size: 0,
                 },
@@ -1940,6 +1986,7 @@ mod tests {
             middleware: MiddlewareSettings {
                 rate_limit: RateLimitSettings {
                     enabled: false,
+                    backend: RateLimitBackend::Memory,
                     requests_per_second: 0,
                     burst_size: 0,
                 },
@@ -1948,6 +1995,65 @@ mod tests {
             ..Settings::default()
         };
         assert!(s.validate().is_ok());
+    }
+
+    // ---- R-02: backend selection ----
+
+    #[test]
+    fn rate_limit_backend_redis_without_redis_url_fails() {
+        // backend=redis but the operator forgot to set
+        // KOKKAK_REDIS__URL — fail loudly at startup.
+        let s = Settings {
+            middleware: MiddlewareSettings {
+                rate_limit: RateLimitSettings {
+                    enabled: true,
+                    backend: RateLimitBackend::Redis,
+                    requests_per_second: 100,
+                    burst_size: 200,
+                },
+                ..MiddlewareSettings::default()
+            },
+            // No redis.url set — default `RedisSettings::is_configured()` is false.
+            ..Settings::default()
+        };
+        let err = s
+            .validate()
+            .expect_err("backend=redis without KOKKAK_REDIS__URL must be rejected");
+        assert!(
+            err.to_string()
+                .contains("KOKKAK_MIDDLEWARE__RATE_LIMIT__BACKEND"),
+            "error should point at the backend knob, got: {err}"
+        );
+        assert!(
+            err.to_string().contains("KOKKAK_REDIS__URL"),
+            "error should hint at the missing redis URL, got: {err}"
+        );
+    }
+
+    #[test]
+    fn rate_limit_backend_redis_with_redis_url_validates() {
+        // backend=redis + a valid redis URL — the existing
+        // path check confirms the limiter can reach its counter.
+        let mut s = Settings::default();
+        s.redis.url = "redis://127.0.0.1:6379".into();
+        s.middleware.rate_limit = RateLimitSettings {
+            enabled: true,
+            backend: RateLimitBackend::Redis,
+            requests_per_second: 100,
+            burst_size: 200,
+        };
+        assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn rate_limit_backend_default_is_memory() {
+        // Operators who don't set the knob must keep the
+        // single-instance `tower_governor` behaviour — changing
+        // the default would silently multiply effective limits
+        // for existing deployments.
+        assert_eq!(RateLimitBackend::default(), RateLimitBackend::Memory);
+        let s = Settings::default();
+        assert_eq!(s.middleware.rate_limit.backend, RateLimitBackend::Memory);
     }
 
     // ---- T-14: idempotency settings ----
