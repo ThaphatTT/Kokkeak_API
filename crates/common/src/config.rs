@@ -1129,6 +1129,16 @@ mod tests {
             "KOKKAK_TLS__KEY_PATH",
             "KOKKAK_TLS__REDIRECT_FROM_PORT",
             "KOKKAK_TLS__HSTS_MAX_AGE_SECS",
+            "KOKKAK_TLS__AUTO_RELOAD",
+            "KOKKAK_MIDDLEWARE__CORS_ALLOW_ORIGINS",
+            "KOKKAK_MIDDLEWARE__REQUEST_TIMEOUT_SECS",
+            "KOKKAK_MIDDLEWARE__COMPRESSION_ENABLED",
+            "KOKKAK_MIDDLEWARE__RATE_LIMIT__ENABLED",
+            "KOKKAK_MIDDLEWARE__RATE_LIMIT__REQUESTS_PER_SECOND",
+            "KOKKAK_MIDDLEWARE__RATE_LIMIT__BURST_SIZE",
+            "KOKKAK_MIDDLEWARE__IDEMPOTENCY__ENABLED",
+            "KOKKAK_MIDDLEWARE__IDEMPOTENCY__TTL_SECS",
+            "KOKKAK_MIDDLEWARE__IDEMPOTENCY__MAX_ENTRIES",
         ] {
             std::env::remove_var(key);
         }
@@ -1355,6 +1365,7 @@ mod tests {
 
     #[test]
     fn tls_auto_reload_load_from_env_overrides() {
+        let _guard = ENV_LOCK.lock().expect("mutex poisoned");
         clear_kokkak_env();
         std::env::set_var("KOKKAK_TLS__AUTO_RELOAD", "true");
         let s = Settings::load().expect("load should succeed");
@@ -1486,6 +1497,12 @@ mod tests {
         std::env::set_var("KOKKAK_TLS__REDIRECT_FROM_PORT", "80");
         std::env::set_var("KOKKAK_TLS__HSTS_MAX_AGE_SECS", "31536000");
         std::env::set_var("KOKKAK_ENVIRONMENT", "production");
+        // T-11: production requires a non-empty CORS allowlist; mirror a
+        // real deployment so validate() accepts the config.
+        std::env::set_var(
+            "KOKKAK_MIDDLEWARE__CORS_ALLOW_ORIGINS",
+            "https://app.example.com",
+        );
 
         let s = Settings::load().expect("load should succeed");
         assert!(s.tls.enabled);
@@ -1591,6 +1608,7 @@ mod tests {
 
     #[test]
     fn middleware_load_from_env_overrides() {
+        let _guard = ENV_LOCK.lock().expect("mutex poisoned");
         clear_kokkak_env();
         std::env::set_var(
             "KOKKAK_MIDDLEWARE__CORS_ALLOW_ORIGINS",
@@ -1694,6 +1712,7 @@ mod tests {
 
     #[test]
     fn rate_limit_load_from_env_overrides() {
+        let _guard = ENV_LOCK.lock().expect("mutex poisoned");
         clear_kokkak_env();
         std::env::set_var("KOKKAK_MIDDLEWARE__RATE_LIMIT__ENABLED", "true");
         std::env::set_var("KOKKAK_MIDDLEWARE__RATE_LIMIT__REQUESTS_PER_SECOND", "50");
@@ -1785,6 +1804,7 @@ mod tests {
 
     #[test]
     fn idempotency_load_from_env_overrides() {
+        let _guard = ENV_LOCK.lock().expect("mutex poisoned");
         clear_kokkak_env();
         std::env::set_var("KOKKAK_MIDDLEWARE__IDEMPOTENCY__ENABLED", "true");
         std::env::set_var("KOKKAK_MIDDLEWARE__IDEMPOTENCY__TTL_SECS", "3600");

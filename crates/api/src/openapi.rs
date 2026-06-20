@@ -40,7 +40,8 @@ use crate::handlers;
             Mobile-first JSON over HTTPS. All responses use the standard \
             envelope: `{ success, data, error, meta }`. Errors include a \
             machine-readable `error.code` for programmatic handling. \
-            Protected POSTs require `Idempotency-Key`.",
+            Protected POSTs require `Idempotency-Key`. \
+            See GET /api/error-codes.json for the full catalog.",
         contact(name = "Kokkeak Team"),
     ),
     paths(
@@ -127,6 +128,121 @@ impl Modify for SecurityAddon {
             ),
         );
     }
+}
+
+/// T-17: catalog of stable error codes. Mobile teams should fetch
+/// this on app start (or bake it into their build) so they can
+/// generate strongly-typed error handlers in the client SDK.
+#[derive(Clone, Debug, serde::Serialize, utoipa::ToSchema)]
+pub struct ErrorCodeEntry {
+    /// Stable snake_case string from `kokkak_common::error_codes`.
+    pub code: &'static str,
+    /// HTTP status code that always accompanies this error.
+    pub status: u16,
+    /// One-line description for the mobile / BFF developer.
+    pub description: &'static str,
+}
+
+/// T-17: full catalog rendered as JSON for the
+/// `GET /api/error-codes.json` endpoint.
+pub fn error_codes_catalog() -> Vec<ErrorCodeEntry> {
+    use kokkak_common::error_codes::ErrorCode;
+    vec![
+        // 400
+        (
+            ErrorCode::BAD_REQUEST,
+            400,
+            "Request is malformed (invalid JSON, missing required field).",
+        ),
+        (
+            ErrorCode::IDEMPOTENCY_KEY_REQUIRED,
+            400,
+            "`Idempotency-Key` header is missing or whitespace on a protected endpoint.",
+        ),
+        // 401
+        (
+            ErrorCode::UNAUTHORIZED,
+            401,
+            "Credentials missing, wrong, or otherwise invalid.",
+        ),
+        (
+            ErrorCode::INVALID_TOKEN,
+            401,
+            "Bearer token signature / format invalid.",
+        ),
+        (
+            ErrorCode::TOKEN_EXPIRED,
+            401,
+            "Bearer token expired (`exp` claim in the past).",
+        ),
+        (
+            ErrorCode::REFRESH_INVALID,
+            401,
+            "Refresh token rejected (revoked, malformed, or expired).",
+        ),
+        // 403
+        (
+            ErrorCode::FORBIDDEN,
+            403,
+            "Authenticated but the role is not allowed on this endpoint.",
+        ),
+        (
+            ErrorCode::ADMIN_REQUIRED,
+            403,
+            "Admin role required (admin-only endpoints).",
+        ),
+        (
+            ErrorCode::NOT_A_PARTICIPANT,
+            403,
+            "Caller is not a participant of the target chat room.",
+        ),
+        // 404
+        (ErrorCode::NOT_FOUND, 404, "Resource not found."),
+        (ErrorCode::ROOM_NOT_FOUND, 404, "Chat room not found."),
+        // 409
+        (
+            ErrorCode::CONFLICT,
+            409,
+            "State conflict (generic; prefer a more specific code).",
+        ),
+        (
+            ErrorCode::USERNAME_TAKEN,
+            409,
+            "Username already taken (registration, admin user create).",
+        ),
+        (
+            ErrorCode::PAYMENT_ALREADY_CAPTURED,
+            409,
+            "Payment already captured (cannot confirm twice).",
+        ),
+        // 422
+        (ErrorCode::VALIDATION, 422, "Semantic validation failure."),
+        (
+            ErrorCode::ROLE_NOT_ALLOWED,
+            422,
+            "Role string is not in the public-registration allow-list.",
+        ),
+        (
+            ErrorCode::INVALID_BODY,
+            422,
+            "Chat message body was empty or too long.",
+        ),
+        // 429
+        (ErrorCode::RATE_LIMITED, 429, "Per-IP rate limit hit."),
+        // 5xx
+        (
+            ErrorCode::INTERNAL,
+            500,
+            "Unexpected internal error (catch-all).",
+        ),
+    ]
+    .into_iter()
+    .map(|(code, status, description)| ErrorCodeEntry {
+        code,
+        status,
+        description,
+    })
+    .collect()
 }
 
 /// Minimal stand-in for the standard error envelope. The real
