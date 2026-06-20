@@ -37,6 +37,7 @@ use kokkak_infra::queue::nats::NatsQueue;
 use kokkak_api::build_app_state_with;
 use kokkak_api::build_repos;
 use kokkak_api::build_router;
+use kokkak_api::tls::build_rustls_config;
 
 /// T03: serve Prometheus text-format metrics.
 async fn metrics_handler() -> impl IntoResponse {
@@ -151,22 +152,70 @@ async fn main() {
         ));
 
     // ---- Bind + serve with graceful shutdown ----
-    let listener = tokio::net::TcpListener::bind(&settings.server.addr)
-        .await
-        .unwrap_or_else(|err| {
-            eprintln!(
-                "[kokkak-api] failed to bind {}: {err}",
-                settings.server.addr
-            );
+    if settings.tls.enabled {
+        // T-09: HTTPS path. axum-server + rustls replaces the
+        // plain tokio::net::TcpListener / axum::serve flow. The
+        // redirect server (T-10) and production enforcement (T-11)
+        // build on top of this branch.
+        let cert_path = std::path::PathBuf::from(settings.tls.cert_path_or_empty());
+        let key_path = std::path::PathBuf::from(settings.tls.key_path_or_empty());
+        let tls_config = build_rustls_config(&cert_path, &key_path).unwrap_or_else(|err| {
+            eprintln!("[kokkak-api] failed to build TLS config: {err:#}");
             std::process::exit(1);
         });
+        tracing::info!(
+            addr = %settings.server.addr,
+            cert = %cert_path.display(),
+            "kokkak-api listening (HTTPS)"
+        );
 
-    tracing::info!(addr = %settings.server.addr, "kokkak-api listening");
-
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        // axum-server uses its own graceful-shutdown primitive: a
+        // shared `Handle` that we signal from the same Ctrl-C / SIGTERM
+        // listener as the plain-HTTP path. The handle is wired BEFORE
+        // `.serve()` so in-flight requests drain before the listener
+        // closes.
+        let tls_handle = axum_server::Handle::new();
+        tokio::spawn({
+            let tls_handle = tls_handle.clone();
+            async move {
+                shutdown_signal().await;
+                tls_handle.shutdown();
+            }
+        });
+        axum_server::bind_rustls(
+            settings
+                .server
+                .addr
+                .parse::<std::net::SocketAddr>()
+                .unwrap_or_else(|err| {
+                    eprintln!("[kokkak-api] invalid server.addr: {err}");
+                    std::process::exit(1);
+                }),
+            tls_config,
+        )
+        .handle(tls_handle)
+        .serve(app.into_make_service())
         .await
-        .expect("server error");
+        .expect("TLS server error");
+    } else {
+        // Plain HTTP path (dev mode).
+        let listener = tokio::net::TcpListener::bind(&settings.server.addr)
+            .await
+            .unwrap_or_else(|err| {
+                eprintln!(
+                    "[kokkak-api] failed to bind {}: {err}",
+                    settings.server.addr
+                );
+                std::process::exit(1);
+            });
+
+        tracing::info!(addr = %settings.server.addr, "kokkak-api listening (HTTP)");
+
+        axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown_signal())
+            .await
+            .expect("server error");
+    }
 
     tracing::info!("kokkak-api exited cleanly");
 }

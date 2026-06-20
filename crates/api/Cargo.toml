@@ -55,6 +55,14 @@ thiserror = { workspace = true }
 # the call a no-op in production where no `.env` exists.
 dotenvy = "0.15"
 
+# T-09: HTTPS server via axum-server + rustls. The rustls config
+# builder lives in `src/tls.rs`; this binary is the only place the
+# server actually binds, so the deps stay local.
+axum-server = { workspace = true }
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+anyhow = { workspace = true }
+
 [dev-dependencies]
 # Test body / JSON inspection in handler tests.
 serde_json = { workspace = true }
