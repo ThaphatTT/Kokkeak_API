@@ -49,7 +49,6 @@ kokkak_api/
 │   ├── api/          # axum HTTP server
 │   └── worker/       # NATS consumer
 ├── migrations/       # .sql versioned (SQL Server)
-├── tests/            # integration tests
 ├── Cargo.toml        # workspace manifest
 ├── rust-toolchain.toml
 └── .gitignore
@@ -69,7 +68,7 @@ kokkak_api/
 | Auth | `jsonwebtoken` + `argon2` |
 | Decimal | `rust_decimal` (NO f64 for money) |
 
-## Build Order (see `KOKKAK_MIGRATION_PLAN/06_BUILD_PLAN_FOR_AI.md`)
+## Build Order (see `KOKKAK_MIGRATION_PLAN/06_BUILD_PLAN_FOR_AI.md` — kept outside the repo at `~/Desktop/KOKKAK_MIGRATION_PLAN/`, gitignored by `/MIGRATION_PLAN/`)
 
 | M | Status | Tasks |
 |---|--------|-------|
