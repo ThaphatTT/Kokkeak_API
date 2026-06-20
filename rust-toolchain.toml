@@ -1,4 +1,3 @@
 [toolchain]
 channel = "stable"
 components = ["rustfmt", "clippy", "rust-analyzer"]  # rust-analyzer powers Zed LSP: Ctrl+click / go-to-def / hover / auto-complete
-profile = "minimal"
