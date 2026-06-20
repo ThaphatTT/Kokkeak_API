@@ -833,6 +833,18 @@ impl Settings {
                 });
             }
         }
+        // T-11: production deployments must serve over TLS. A
+        // bare-HTTP production rollout is the #1 way to leak
+        // JWTs and PII through misconfigured reverse proxies, so
+        // fail the process at startup rather than discover it
+        // in a post-mortem. The dev path is unaffected — plain
+        // HTTP stays the default.
+        if self.environment.is_production() && !self.tls.enabled {
+            return Err(ConfigError::Invalid {
+                key: "KOKKAK_TLS__ENABLED".into(),
+                message: "must be true when KOKKAK_ENVIRONMENT=production".into(),
+            });
+        }
         Ok(())
     }
 }
@@ -1231,5 +1243,72 @@ mod tests {
         assert!(s.validate().is_ok());
 
         clear_kokkak_env();
+    }
+
+    // ---- T-11: production enforcement ----
+
+    #[test]
+    fn production_without_tls_fails_validation() {
+        let s = Settings {
+            environment: Environment::Production,
+            ..Settings::default()
+        };
+        let err = s
+            .validate()
+            .expect_err("production + plain HTTP must be rejected");
+        assert!(
+            err.to_string().contains("KOKKAK_TLS__ENABLED")
+                && err.to_string().contains("production"),
+            "error should point at TLS in a production context, got: {err}"
+        );
+    }
+
+    #[test]
+    fn production_with_tls_enabled_validates() {
+        let s = Settings {
+            environment: Environment::Production,
+            tls: TlsSettings {
+                enabled: true,
+                cert_path: Some("/etc/kokkak/cert.pem".into()),
+                key_path: Some("/etc/kokkak/key.pem".into()),
+                redirect_from_port: 80,
+                hsts_max_age_secs: 31_536_000,
+            },
+            ..Settings::default()
+        };
+        assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn production_with_tls_enabled_but_missing_key_still_fails() {
+        // The TLS-on-but-blank-paths rule from T-08 must still
+        // trip in production. This guards against a future
+        // refactor that reorders the validation checks and
+        // accidentally lets a broken prod config through.
+        let s = Settings {
+            environment: Environment::Production,
+            tls: TlsSettings {
+                enabled: true,
+                cert_path: Some("/etc/kokkak/cert.pem".into()),
+                key_path: None,
+                redirect_from_port: 80,
+                hsts_max_age_secs: 31_536_000,
+            },
+            ..Settings::default()
+        };
+        let err = s.validate().expect_err("must reject blank key path");
+        assert!(
+            err.to_string().contains("KOKKAK_TLS__KEY_PATH"),
+            "error should mention key_path, got: {err}"
+        );
+    }
+
+    #[test]
+    fn development_with_tls_disabled_still_validates() {
+        // The T-11 enforcement must not regress dev mode.
+        let s = Settings::default();
+        assert_eq!(s.environment, Environment::Development);
+        assert!(!s.tls.enabled);
+        assert!(s.validate().is_ok());
     }
 }
