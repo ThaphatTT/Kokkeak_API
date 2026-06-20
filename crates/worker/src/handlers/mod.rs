@@ -19,6 +19,7 @@ pub use noti_push::NotiPushHandler;
 pub use order_dispatch::OrderDispatchHandler;
 pub use points_recalc::PointsRecalcHandler;
 
+/// Errors raised by a handler.
 #[derive(Debug, Error)]
 pub enum HandlerError {
     /// Generic handler failure (DB / external / parse).
@@ -40,5 +41,6 @@ pub trait Handler: Send + Sync {
 /// Shared state handed to every handler.
 #[derive(Clone)]
 pub struct HandlerContext {
+    /// Idempotency cache the handler can re-check (defence in depth).
     pub idempotency: Arc<dyn Idempotency>,
 }

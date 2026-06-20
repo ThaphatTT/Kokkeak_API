@@ -9,15 +9,18 @@ use std::sync::Arc;
 use kokkak_domain::{AuthError, PublicUser, UserRepository};
 use uuid::Uuid;
 
+/// User use case bundle (M2 + M14).
 pub struct UserService {
     users: Arc<dyn UserRepository>,
 }
 
 impl UserService {
+    /// Construct the service with a `UserRepository` port.
     pub fn new(users: Arc<dyn UserRepository>) -> Self {
         Self { users }
     }
 
+    /// Fetch the public view of the given user (used by the `GET /users/me` route).
     pub async fn get_me(&self, user_id: Uuid) -> Result<PublicUser, AuthError> {
         let user = self
             .users

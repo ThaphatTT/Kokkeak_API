@@ -197,7 +197,7 @@ async fn m8_chat_open_send_and_list_rooms() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&format!("/api/v1/chat/rooms/{room_id}/messages"))
+                .uri(format!("/api/v1/chat/rooms/{room_id}/messages"))
                 .header("authorization", format!("Bearer {cust_token}"))
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_vec(&send_body).unwrap()))
@@ -318,7 +318,7 @@ async fn m9_payment_create_and_confirm() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&format!("/api/v1/payments/{payment_id}/confirm"))
+                .uri(format!("/api/v1/payments/{payment_id}/confirm"))
                 .header("authorization", format!("Bearer {cust_token}"))
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_vec(&confirm_body).unwrap()))
@@ -352,6 +352,6 @@ async fn m9_payment_create_and_confirm() {
     assert_eq!(resp.status(), StatusCode::OK);
     let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert!(v["data"].as_array().unwrap().len() >= 1);
+    assert!(!v["data"].as_array().unwrap().is_empty());
     let _ = (tech_token, admin_token, paths);
 }

@@ -12,30 +12,44 @@ use kokkak_domain::{Cursor, Order, OrderRepository, OrderStatus, QueuePort, Repo
 use rust_decimal::Decimal;
 use uuid::Uuid;
 
+/// One page of orders for the customer / technician list routes.
 #[derive(Debug, Clone)]
 pub struct OrderListPage {
+    /// Orders in this page (sorted by `created_at` desc).
     pub items: Vec<Order>,
+    /// Cursor for the next page; `None` when this is the last page.
     pub next_cursor: Option<String>,
 }
 
 /// Input for the `create_order` use case (M6).
 #[derive(Debug, Clone)]
 pub struct CreateOrderInput {
+    /// Short service category code (e.g. `"AC_REPAIR"`).
     pub service_code: String,
+    /// Customer placing the order.
     pub customer_id: Uuid,
+    /// Short description of the problem (free text).
     pub description: String,
+    /// Where the work happens (free text; full address).
     pub address: String,
+    /// Quoted / agreed total in LAK (`Decimal`, never `f64`).
     pub total: Decimal,
+    /// Work-site latitude (optional; drives Haversine distance in matching).
     pub order_lat: Option<f64>,
+    /// Work-site longitude (optional).
     pub order_lon: Option<f64>,
 }
 
+/// Order use case bundle (M6).
 pub struct OrderService {
     orders: Arc<dyn OrderRepository>,
+    /// Optional NATS producer for `order.dispatch` (set via `with_queue`).
     queue: Option<Arc<dyn QueuePort>>,
 }
 
 impl OrderService {
+    /// Construct the service with the order repository. The NATS queue
+    /// is `None` by default — use [`Self::with_queue`] to attach it.
     pub fn new(orders: Arc<dyn OrderRepository>) -> Self {
         Self {
             orders,
@@ -56,6 +70,7 @@ impl OrderService {
         self.orders.clone()
     }
 
+    /// List a customer's own orders (newest first, keyset pagination).
     pub async fn list_for_customer(
         &self,
         customer_id: Uuid,
@@ -77,8 +92,7 @@ impl OrderService {
         let next_cursor = if (items.len() as u32) == limit {
             items
                 .last()
-                .map(|o| Cursor::encode(&serde_json::json!({ "after": o.created_at })).ok())
-                .flatten()
+                .and_then(|o| Cursor::encode(&serde_json::json!({ "after": o.created_at })).ok())
                 .map(|c| c.to_string())
         } else {
             None
@@ -86,6 +100,7 @@ impl OrderService {
         Ok(OrderListPage { items, next_cursor })
     }
 
+    /// List orders assigned to a technician (newest first, keyset pagination).
     pub async fn list_for_technician(
         &self,
         technician_id: Uuid,
@@ -107,8 +122,7 @@ impl OrderService {
         let next_cursor = if (items.len() as u32) == limit {
             items
                 .last()
-                .map(|o| Cursor::encode(&serde_json::json!({ "after": o.created_at })).ok())
-                .flatten()
+                .and_then(|o| Cursor::encode(&serde_json::json!({ "after": o.created_at })).ok())
                 .map(|c| c.to_string())
         } else {
             None
@@ -198,7 +212,7 @@ mod tests {
                 .collect();
             // Production lists most-recent-first (OrderService cursor
             // keys off `created_at`); mirror that ordering here.
-            items.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+            items.sort_by_key(|b| std::cmp::Reverse(b.created_at));
             if let Some(cursor) = after {
                 if let Ok(payload) = cursor.decode::<serde_json::Value>() {
                     if let Some(s) = payload.get("after").and_then(|v| v.as_str()) {

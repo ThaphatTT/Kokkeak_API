@@ -16,10 +16,13 @@ use tracing::{error, info, warn};
 use crate::handlers::{Handler, HandlerError};
 use crate::idempotency::{Idempotency, IdempotencyKey, InMemoryIdempotency};
 
+/// Errors raised by the worker runner.
 #[derive(Debug, Error)]
 pub enum WorkerError {
+    /// NATS connect / subscribe failed.
     #[error("nats connect failed: {0}")]
     Nats(String),
+    /// Worker startup config is invalid (e.g. NATS URL unset).
     #[error("invalid worker config: {0}")]
     Config(String),
 }
@@ -158,11 +161,11 @@ impl Worker {
                 let pull_cfg = pull::Config {
                     durable_name: Some(durable_name.clone()),
                     name: Some(durable_name),
-                    filter_subject: subject.clone().into(),
+                    filter_subject: subject.clone(),
                     ack_policy: AckPolicy::Explicit,
                     ..Default::default()
                 };
-                let mut pull = match stream.get_or_create_consumer(&subject, pull_cfg).await {
+                let pull = match stream.get_or_create_consumer(&subject, pull_cfg).await {
                     Ok(p) => p,
                     Err(e) => {
                         warn!(subject = %subject, error = %e, "create consumer failed; will skip");

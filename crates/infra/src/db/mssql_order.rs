@@ -12,12 +12,14 @@ use kokkak_domain::{Order, OrderRepository, RepoError};
 
 use crate::db::mssql::{exec_sp, read_i32, read_str, read_uuid, MssqlPool};
 
+/// SQL Server-backed `OrderRepository` (M14.5 — stored procedures).
 #[derive(Clone)]
 pub struct MssqlOrderRepository {
     pool: MssqlPool,
 }
 
 impl MssqlOrderRepository {
+    /// Construct the repository with a shared `MssqlPool`.
     pub fn new(pool: MssqlPool) -> Self {
         Self { pool }
     }

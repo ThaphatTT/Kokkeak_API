@@ -194,8 +194,10 @@ mod tests {
             eprintln!("skipping: set KOKKAK_REDIS__TEST_URL to run");
             return;
         };
-        let mut s = RedisSettings::default();
-        s.url = url;
+        let s = RedisSettings {
+            url,
+            ..RedisSettings::default()
+        };
         let cache = RedisCache::new(&s).expect("pool build against live redis must succeed");
         // Round-trip: a key set right now must be readable. This
         // also proves the pool actually produces working
@@ -220,8 +222,10 @@ mod tests {
             eprintln!("skipping: set KOKKAK_REDIS__TEST_URL to run");
             return;
         };
-        let mut s = RedisSettings::default();
-        s.url = url;
+        let s = RedisSettings {
+            url,
+            ..RedisSettings::default()
+        };
         let cache = RedisCache::new(&s).expect("pool build");
         let pool = cache.pool();
         let rt = tokio::runtime::Runtime::new().expect("rt");

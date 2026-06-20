@@ -20,7 +20,6 @@
 //! - `error_code = 3` → `Backend` (validation / unknown)
 
 use async_trait::async_trait;
-use futures::TryStreamExt;
 use tiberius::ToSql;
 
 use kokkak_domain::{RepoError, Role, User, UserRepository, UserStatus};
@@ -28,13 +27,14 @@ use uuid::Uuid;
 
 use crate::db::mssql::{exec_sp, read_i32, read_str, MssqlPool, SpError};
 
-/// Repository handle. Cheap to clone (the pool is `Arc`-shared).
+/// SQL Server-backed `UserRepository` (M14.5 — stored procedures).
 #[derive(Clone)]
 pub struct MssqlUserRepository {
     pool: MssqlPool,
 }
 
 impl MssqlUserRepository {
+    /// Construct the repository with a shared `MssqlPool`.
     pub fn new(pool: MssqlPool) -> Self {
         Self { pool }
     }
@@ -57,7 +57,7 @@ impl UserRepository for MssqlUserRepository {
         let roles = rows
             .get(1)
             .and_then(|r| read_str(r, 0))
-            .map(|s| parse_role_codes(&s))
+            .map(parse_role_codes)
             .unwrap_or_default();
         Ok(Some(User { roles, ..user }))
     }
@@ -65,7 +65,7 @@ impl UserRepository for MssqlUserRepository {
     async fn find_by_username(&self, username: &str) -> Result<Option<User>, RepoError> {
         let rows = exec_sp(
             &self.pool,
-            "EXEC dbo.API_USER_FIND_BY_USERNAME @p_username = @P1",
+            "EXEC dbo.SP_USER_FIND_BY_USERNAME @p_username = @P1",
             &[&username as &dyn ToSql],
         )
         .await?;
@@ -78,7 +78,7 @@ impl UserRepository for MssqlUserRepository {
         let roles = rows
             .get(1)
             .and_then(|r| read_str(r, 0))
-            .map(|s| parse_role_codes(&s))
+            .map(parse_role_codes)
             .unwrap_or_default();
         Ok(Some(User { roles, ..user }))
     }
@@ -115,7 +115,7 @@ impl UserRepository for MssqlUserRepository {
             .ok_or_else(|| RepoError::Backend("API_USER_REGISTER returned no row".into()))?;
         let err = read_i32(reg_row, 1).unwrap_or(3);
         let msg = read_str(reg_row, 2).unwrap_or_default();
-        match SpError::from_code(err, &msg) {
+        match SpError::from_code(err, msg) {
             SpError::None => Ok(()),
             SpError::Conflict => Err(RepoError::Conflict(msg.to_string())),
             SpError::NotFound => Err(RepoError::Backend(format!("USER_REGISTER: {}", msg))),
@@ -161,7 +161,7 @@ impl UserRepository for MssqlUserRepository {
             .ok_or_else(|| RepoError::Backend("API_USER_UPDATE returned no row".into()))?;
         let err = read_i32(row, 1).unwrap_or(0);
         let msg = read_str(row, 2).unwrap_or_default();
-        match SpError::from_code(err, &msg) {
+        match SpError::from_code(err, msg) {
             SpError::None => Ok(()),
             SpError::NotFound => Err(RepoError::NotFound(msg.to_string())),
             _ => Err(RepoError::Backend(msg.to_string())),
@@ -174,28 +174,28 @@ impl UserRepository for MssqlUserRepository {
 /// second result set.
 fn row_to_user(row: &tiberius::Row) -> Result<User, RepoError> {
     let id: Uuid = row
-        .get::<Uuid, _>(0)
+        .get::<Uuid, _>("user_guid")
         .ok_or_else(|| RepoError::Backend("missing id".into()))?;
     let first_name: &str = row
-        .get::<&str, _>(1)
+        .get::<&str, _>("user_first_name")
         .ok_or_else(|| RepoError::Backend("missing first_name".into()))?;
     let last_name: &str = row
-        .get::<&str, _>(2)
+        .get::<&str, _>("user_last_name")
         .ok_or_else(|| RepoError::Backend("missing last_name".into()))?;
     let username: &str = row
-        .get::<&str, _>(3)
+        .get::<&str, _>("user_username_username")
         .ok_or_else(|| RepoError::Backend("missing username".into()))?;
     let password_hash: &str = row
-        .get::<&str, _>(4)
+        .get::<&str, _>("user_password")
         .ok_or_else(|| RepoError::Backend("missing password_hash".into()))?;
     let status_i32: i32 = row
-        .get::<i32, _>(5)
+        .get::<i32, _>("user_status")
         .ok_or_else(|| RepoError::Backend("missing status".into()))?;
     let created_at = row
-        .get::<chrono::DateTime<chrono::Utc>, _>(6)
+        .get::<chrono::DateTime<chrono::Utc>, _>("user_username_create_at")
         .ok_or_else(|| RepoError::Backend("missing created_at".into()))?;
     let updated_at = row
-        .get::<chrono::DateTime<chrono::Utc>, _>(7)
+        .get::<chrono::DateTime<chrono::Utc>, _>("user_username_update_by")
         .ok_or_else(|| RepoError::Backend("missing updated_at".into()))?;
     let status = UserStatus::from_i32(status_i32)
         .ok_or_else(|| RepoError::Backend(format!("unknown status: {status_i32}")))?;

@@ -10,12 +10,15 @@ use tracing::info;
 
 use super::{Handler, HandlerContext, HandlerError};
 
+/// `order.dispatch` handler (M4) — fan-out to candidate technicians.
+/// Log-only stub today; production wires the matching algorithm in M6+.
 pub struct OrderDispatchHandler {
     #[allow(dead_code)]
     ctx: HandlerContext,
 }
 
 impl OrderDispatchHandler {
+    /// Build a handler with the shared context.
     pub fn new(ctx: HandlerContext) -> Self {
         Self { ctx }
     }

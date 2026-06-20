@@ -32,6 +32,10 @@ use tokio::sync::Mutex;
 
 use super::redis::RedisCache;
 
+/// Single-flight loader slot: `None` while the leader is still running,
+/// `Some(value)` once the leader has finished and waiters can read.
+type InflightVal = Arc<tokio::sync::Mutex<Option<Vec<u8>>>>;
+
 /// Two-tier cache: moka (L1) in front of redis (L2).
 ///
 /// Cheap clones — both backings are `Arc`-wrapped internally.
@@ -39,21 +43,19 @@ use super::redis::RedisCache;
 pub struct LayeredCache {
     l1: MokaCache<String, Vec<u8>>,
     l2: Option<Arc<RedisCache>>,
-    /// Cap on L1 TTL even when the caller asks for longer (moka handles
-    /// eviction; this is a soft cap so a typo'd 24h TTL does not
-    /// linger in memory for 24h).
-    l1_max_ttl: Duration,
     /// Single-flight map: in-flight loaders keyed by cache key. Each
     /// entry is a per-key Mutex holding the loader's result (or
     /// `None` while the leader is still running). Waiters queue at
     /// the Mutex and pick up the leader's value when the lock is
     /// released.
-    inflight: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<Option<Vec<u8>>>>>>>,
+    inflight: Arc<Mutex<HashMap<String, InflightVal>>>,
 }
 
 impl LayeredCache {
     /// Build a layered cache with an in-process moka L1 and an
-    /// optional Redis L2.
+    /// optional Redis L2. The `l1_max_ttl` is consumed here to
+    /// set the moka cache TTL; the L1 cap is the same value (moka
+    /// handles eviction internally).
     pub fn new(l1_capacity: u64, l1_max_ttl: Duration) -> Self {
         let l1 = MokaCache::builder()
             .max_capacity(l1_capacity)
@@ -62,7 +64,6 @@ impl LayeredCache {
         Self {
             l1,
             l2: None,
-            l1_max_ttl,
             inflight: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -71,11 +72,6 @@ impl LayeredCache {
     pub fn with_redis(mut self, redis: Arc<RedisCache>) -> Self {
         self.l2 = Some(redis);
         self
-    }
-
-    /// Cap an incoming TTL to `l1_max_ttl` (L1 is a soft cache).
-    fn l1_ttl(&self, ttl: Duration) -> Duration {
-        std::cmp::min(ttl, self.l1_max_ttl)
     }
 
     /// Single-flight cache-aside (M1.5).
@@ -341,7 +337,7 @@ mod tests {
         // OnceCell result.
         let runs = counter.load(Ordering::SeqCst);
         assert!(
-            runs >= 1 && runs <= 3,
+            (1..=3).contains(&runs),
             "expected 1..3 loader runs, got {runs}"
         );
     }

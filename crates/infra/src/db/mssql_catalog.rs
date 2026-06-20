@@ -13,12 +13,14 @@ use kokkak_domain::{RepoError, ServiceCategory, ServiceRepository};
 
 use crate::db::mssql::{exec_sp, read_i32, read_str, read_uuid, MssqlPool};
 
+/// SQL Server-backed `ServiceRepository` (M14.5 — stored procedures).
 #[derive(Clone)]
 pub struct MssqlServiceRepository {
     pool: MssqlPool,
 }
 
 impl MssqlServiceRepository {
+    /// Construct the repository with a shared `MssqlPool`.
     pub fn new(pool: MssqlPool) -> Self {
         Self { pool }
     }

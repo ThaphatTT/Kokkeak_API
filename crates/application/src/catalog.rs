@@ -9,19 +9,24 @@ use kokkak_domain::{Cursor, RepoError, ServiceCategory, ServiceRepository};
 /// One page of active service categories.
 #[derive(Debug, Clone)]
 pub struct ServiceListPage {
+    /// Service categories in this page (sorted by `sort_order`).
     pub items: Vec<ServiceCategory>,
+    /// Cursor for the next page; `None` when this is the last page.
     pub next_cursor: Option<String>,
 }
 
+/// Catalog use case bundle (M3 — read-mostly).
 pub struct CatalogService {
     services: Arc<dyn ServiceRepository>,
 }
 
 impl CatalogService {
+    /// Construct the service with a `ServiceRepository` port.
     pub fn new(services: Arc<dyn ServiceRepository>) -> Self {
         Self { services }
     }
 
+    /// List active service categories with keyset pagination on `sort_order`.
     pub async fn list_active(
         &self,
         after: Option<String>,
@@ -50,6 +55,7 @@ impl CatalogService {
         Ok(ServiceListPage { items, next_cursor })
     }
 
+    /// Look up a single service category by its short code (e.g. `"AC_REPAIR"`).
     pub async fn find_by_code(&self, code: &str) -> Result<Option<ServiceCategory>, RepoError> {
         self.services.find_by_code(code).await
     }

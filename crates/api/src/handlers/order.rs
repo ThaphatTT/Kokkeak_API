@@ -67,9 +67,7 @@ pub async fn list_my_orders(
         &[Role::Customer.as_str()],
     )
     .await;
-    if let Err(r) = assert_role(&user, Role::Customer, role_msg) {
-        return Err(r);
-    }
+    assert_role(&user, Role::Customer, role_msg)?;
     let limit = q.limit.unwrap_or(20);
     let page = match state
         .orders
@@ -116,9 +114,7 @@ pub async fn create_order(
         &[Role::Customer.as_str()],
     )
     .await;
-    if let Err(r) = assert_role(&user, Role::Customer, role_msg) {
-        return Err(r);
-    }
+    assert_role(&user, Role::Customer, role_msg)?;
     let total: rust_decimal::Decimal = match req.total.parse() {
         Ok(d) => d,
         Err(_) => {
@@ -177,9 +173,7 @@ pub async fn list_assigned_orders(
         &[Role::Technician.as_str()],
     )
     .await;
-    if let Err(r) = assert_role(&user, Role::Technician, role_msg) {
-        return Err(r);
-    }
+    assert_role(&user, Role::Technician, role_msg)?;
     let limit = q.limit.unwrap_or(20);
     let page = match state
         .orders

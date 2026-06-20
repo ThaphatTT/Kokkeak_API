@@ -81,7 +81,7 @@ pub async fn ws_upgrade(
         }
     };
     // 3. Membership check.
-    let is_member = match state.chat.check_membership(room_id.into(), user.id).await {
+    let is_member = match state.chat.check_membership(room_id, user.id).await {
         Ok(b) => b,
         Err(e) => {
             let args: Vec<String> = e.l10n_args();

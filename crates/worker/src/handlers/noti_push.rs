@@ -16,6 +16,7 @@ pub struct NotiPushHandler {
 }
 
 impl NotiPushHandler {
+    /// Build a handler with the shared context.
     pub fn new(ctx: HandlerContext) -> Self {
         Self { ctx }
     }

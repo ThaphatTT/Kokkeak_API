@@ -28,6 +28,7 @@ pub struct IdempotencyKey {
 }
 
 impl IdempotencyKey {
+    /// Build a new key from the consumer name + upstream message id.
     pub fn new(consumer: impl Into<String>, message_id: impl Into<String>) -> Self {
         Self {
             consumer: consumer.into(),
@@ -42,9 +43,10 @@ impl IdempotencyKey {
     }
 }
 
+/// Errors raised by the idempotency cache backend.
 #[derive(Debug, Error)]
 pub enum IdempotencyError {
-    /// Cache backend failure.
+    /// Cache backend failure (Redis down, etc.).
     #[error("idempotency backend error: {0}")]
     Backend(String),
 }
@@ -66,6 +68,8 @@ pub struct InMemoryIdempotency {
 }
 
 impl InMemoryIdempotency {
+    /// Construct with a soft cap on cache size (`max_entries`); eviction
+    /// is naive (drops half) — see M4 note about LRU.
     pub fn new(max_entries: usize) -> Self {
         Self {
             seen: Arc::new(Mutex::new(std::collections::HashSet::new())),
@@ -100,6 +104,7 @@ pub struct RedisIdempotency {
 }
 
 impl RedisIdempotency {
+    /// Wrap a deadpool-redis pool (production multi-instance cache).
     pub fn new(pool: deadpool_redis::Pool) -> Self {
         Self { pool }
     }
@@ -114,7 +119,7 @@ impl Idempotency for RedisIdempotency {
             .await
             .map_err(|e| IdempotencyError::Backend(e.to_string()))?;
         let cache_key = key.cache_key();
-        let ttl_secs = ttl.as_secs().max(1) as u64;
+        let ttl_secs = ttl.as_secs().max(1);
         let result: Option<String> = redis::cmd("SET")
             .arg(&cache_key)
             .arg("1")

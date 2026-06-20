@@ -15,21 +15,32 @@ use serde::{Deserialize, Serialize};
 /// One candidate technician.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Candidate {
+    /// Technician user id.
     pub id: uuid::Uuid,
+    /// Last known latitude (degrees).
     pub lat: f64,
+    /// Last known longitude (degrees).
     pub lon: f64,
+    /// Average rating 0.0–5.0 (rolling 30 days).
     pub rating: f64,
+    /// Skill level 1–10 (newest = 1).
     pub level: i32,
+    /// In-flight orders right now.
     pub current_load: i32,
+    /// Concurrent-order ceiling.
     pub max_load: i32,
 }
 
-/// Weights for the rank score.
+/// Weights for the rank score (`w1..w4` in AGENTS.md §20.1).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Weights {
+    /// Weight on `1 / distance`.
     pub distance: f64,
+    /// Weight on `rating`.
     pub rating: f64,
+    /// Weight on `level`.
     pub level: f64,
+    /// Penalty weight on `current_load`.
     pub load: f64,
 }
 

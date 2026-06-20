@@ -30,7 +30,6 @@ use kokkak_application::{
 };
 use redis::AsyncCommands;
 use thiserror::Error;
-use tokio::sync::broadcast;
 
 const CHANNEL_PREFIX: &str = "chat:room:";
 
@@ -89,7 +88,12 @@ impl RedisChatPubSub {
         // The pool's MultiplexedConnection cannot drive a
         // pubsub stream; we open a fresh async connection
         // here from the dedicated client.
-        let mut conn = self.client.get_async_connection().await?;
+        // `get_async_connection` is deprecated in favour of the
+        // multiplexed variant, but the multiplexed connection
+        // cannot drive a pubsub stream — so we pin the deprecated
+        // API here intentionally.
+        #[allow(deprecated)]
+        let conn = self.client.get_async_connection().await?;
         let mut pubsub = conn.into_pubsub();
         // Subscribe to every chat:* channel via PSUBSCRIBE so
         // we get one connection for the whole fleet.

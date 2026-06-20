@@ -17,11 +17,14 @@ use kokkak_domain::RepoError;
 use bb8::Pool;
 use bb8_tiberius::ConnectionManager;
 
+/// Errors raised by the SQL Server pool + helpers.
 #[derive(Debug, thiserror::Error)]
 pub enum MssqlError {
+    /// Connection-string parse failed.
     #[error("invalid sqlserver url: {0}")]
     InvalidUrl(String),
 
+    /// bb8 could not build the connection pool.
     #[error("pool build failed: {0}")]
     PoolBuild(String),
 
@@ -29,9 +32,11 @@ pub enum MssqlError {
     #[error("tiberius error: {0}")]
     Tiberius(String),
 
+    /// Health probe (`SELECT 1`) failed.
     #[error("health probe failed: {0}")]
     HealthProbe(String),
 
+    /// Pool requested but `KOKKAK_DATABASE__SQLSERVER_URL` is unset.
     #[error("sqlserver not configured (set KOKKAK_DATABASE__SQLSERVER_URL)")]
     NotConfigured,
 }
@@ -70,6 +75,8 @@ pub async fn ping(pool: &MssqlPool) -> Result<(), MssqlError> {
     Ok(())
 }
 
+/// Parse a JDBC-style connection URL into a tiberius `Config`.
+/// Returns `NotConfigured` when the URL is empty or the `disabled` sentinel.
 pub fn parse_connection_url(raw: &str) -> Result<Config, MssqlError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() || trimmed == "disabled" {
@@ -148,7 +155,7 @@ pub fn read_i32(row: &tiberius::Row, idx: usize) -> Option<i32> {
 }
 
 /// Read a `&str` column by index. Returns `None` when NULL.
-pub fn read_str<'a>(row: &'a tiberius::Row, idx: usize) -> Option<&'a str> {
+pub fn read_str(row: &tiberius::Row, idx: usize) -> Option<&str> {
     row.get::<&str, _>(idx)
 }
 
@@ -162,18 +169,25 @@ pub fn read_datetime(row: &tiberius::Row, idx: usize) -> Option<chrono::DateTime
     row.get::<chrono::DateTime<chrono::Utc>, _>(idx)
 }
 
-/// Standardized error triple returned by every API_* SP.
+/// Standardized error code returned by every API_* stored procedure.
 /// `error_code`: 0 = ok, 1 = not found, 2 = conflict, 3 = bad input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpError {
+    /// Operation succeeded.
     None,
+    /// Row / entity does not exist.
     NotFound,
+    /// Uniqueness violation (e.g. username already taken).
     Conflict,
+    /// Input validation failed inside the SP.
     BadInput,
+    /// Any other non-zero error_code (mapped to `Backend`).
     Other,
 }
 
 impl SpError {
+    /// Map a SP's integer error code to the enum (the message is kept
+    /// for future structured logging but is currently unused).
     pub fn from_code(code: i32, _msg: &str) -> Self {
         match code {
             0 => Self::None,

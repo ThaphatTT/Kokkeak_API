@@ -5,7 +5,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use kokkak_application::auth::AuthService;
 use kokkak_application::catalog::CatalogService;
-use kokkak_application::chat::{BroadcastTransport, ChatService, ChatTransport};
+use kokkak_application::chat::{BroadcastTransport, ChatService};
 use kokkak_application::order::OrderService;
 use kokkak_application::payment::PaymentService;
 use kokkak_application::user::UserService;

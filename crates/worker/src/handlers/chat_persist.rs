@@ -48,12 +48,16 @@ pub fn set_chat_repo(repo: Arc<dyn ChatRepository>) {
     }
 }
 
+/// `chat.persist` handler (M8) — idempotently writes a chat
+/// message to the chat repository as a durability backstop.
 pub struct ChatPersistHandler {
     #[allow(dead_code)]
     ctx: HandlerContext,
 }
 
 impl ChatPersistHandler {
+    /// Build a handler with the shared context (the chat repository is
+    /// installed globally via [`set_chat_repo`]).
     pub fn new(ctx: HandlerContext) -> Self {
         Self { ctx }
     }

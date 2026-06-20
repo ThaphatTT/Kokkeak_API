@@ -6,12 +6,15 @@ use tracing::info;
 
 use super::{Handler, HandlerContext, HandlerError};
 
+/// `points.recalc` handler — recompute technician points after an
+/// order closes (M4). Log-only stub today.
 pub struct PointsRecalcHandler {
     #[allow(dead_code)]
     ctx: HandlerContext,
 }
 
 impl PointsRecalcHandler {
+    /// Build a handler with the shared context.
     pub fn new(ctx: HandlerContext) -> Self {
         Self { ctx }
     }

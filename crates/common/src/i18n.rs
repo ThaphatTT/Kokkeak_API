@@ -83,6 +83,7 @@ impl Locale {
         Locale("en".to_string())
     }
 
+    /// Return the locale as a `&str` (e.g. `"en"`, `"th"`, `"lo"`).
     pub fn as_str(&self) -> &str {
         &self.0
     }
