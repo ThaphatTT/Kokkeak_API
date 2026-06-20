@@ -13,7 +13,7 @@
 # Toolchain pinning:
 #   - dtolnay/rust-toolchain reads rust-toolchain.toml automatically
 #     (no manual channel duplication here).
-#   - Swatinem/rust-cache@v4 keys on rust-toolchain.toml so cache
+#   - Swatinem/rust-cache@v2 keys on rust-toolchain.toml so cache
 #     invalidates automatically when the toolchain file changes.
 #
 # Fail-fast: any step failing aborts the run.
@@ -55,7 +55,7 @@ jobs:
           components: rustfmt
 
       - name: Restore cargo cache
-        uses: Swatinem/rust-cache@v4
+        uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
 
@@ -78,7 +78,7 @@ jobs:
           components: clippy
 
       - name: Restore cargo cache
-        uses: Swatinem/rust-cache@v4
+        uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
 
@@ -101,7 +101,7 @@ jobs:
         uses: dtolnay/rust-toolchain@v1
 
       - name: Restore cargo cache
-        uses: Swatinem/rust-cache@v4
+        uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
 
@@ -125,7 +125,7 @@ jobs:
         uses: dtolnay/rust-toolchain@v1
 
       - name: Restore cargo cache
-        uses: Swatinem/rust-cache@v4
+        uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
 
