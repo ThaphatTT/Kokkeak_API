@@ -37,7 +37,8 @@ use kokkak_infra::queue::nats::NatsQueue;
 use kokkak_api::build_app_state_with;
 use kokkak_api::build_repos;
 use kokkak_api::build_router;
-use kokkak_api::tls::build_rustls_config;
+use kokkak_api::redirect::redirect_router;
+use kokkak_api::tls::{build_rustls_config, hsts_layer};
 
 /// T03: serve Prometheus text-format metrics.
 async fn metrics_handler() -> impl IntoResponse {
@@ -163,6 +164,49 @@ async fn main() {
             eprintln!("[kokkak-api] failed to build TLS config: {err:#}");
             std::process::exit(1);
         });
+
+        // T-10: HSTS header. Applied LAST in the layer chain so
+        // it runs FIRST on the response (layers form a LIFO
+        // stack). `if_not_present` so handlers can opt-out per
+        // response if they ever need to.
+        let app = if let Some(layer) = hsts_layer(settings.tls.hsts_max_age_secs) {
+            tracing::info!(
+                max_age_secs = settings.tls.hsts_max_age_secs,
+                "HSTS enabled"
+            );
+            app.layer(layer)
+        } else {
+            tracing::info!("HSTS disabled (max-age = 0)");
+            app
+        };
+
+        // T-10: optional plain-HTTP → HTTPS redirect listener.
+        // Lives in its own tokio task so the main HTTPS server
+        // is unaffected. If the port is in use (e.g. another
+        // service on :80) we log a warning rather than abort so
+        // the HTTPS server still comes up — operators can then
+        // decide whether to stop the conflicting service.
+        if settings.tls.redirect_from_port > 0 {
+            let redirect_addr = format!("0.0.0.0:{}", settings.tls.redirect_from_port);
+            tokio::spawn(async move {
+                match tokio::net::TcpListener::bind(&redirect_addr).await {
+                    Ok(listener) => {
+                        tracing::info!(addr = %redirect_addr, "HTTPS redirect listener up");
+                        if let Err(err) = axum::serve(listener, redirect_router()).await {
+                            tracing::error!(error = %err, "HTTPS redirect listener exited");
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            addr = %redirect_addr,
+                            error = %err,
+                            "failed to bind HTTPS redirect listener; HTTPS-only deployment continues"
+                        );
+                    }
+                }
+            });
+        }
+
         tracing::info!(
             addr = %settings.server.addr,
             cert = %cert_path.display(),
