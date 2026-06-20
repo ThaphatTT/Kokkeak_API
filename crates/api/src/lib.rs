@@ -6,6 +6,7 @@
 pub mod adapters;
 pub mod handlers;
 pub mod middleware;
+pub mod redirect;
 pub mod repo_factory;
 pub mod router;
 pub mod state;

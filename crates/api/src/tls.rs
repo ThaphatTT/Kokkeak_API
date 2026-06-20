@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use axum_server::tls_rustls::RustlsConfig;
+use tower_http::set_header::SetResponseHeaderLayer;
 
 /// Build a [`RustlsConfig`] from a PEM-encoded certificate chain
 /// and private key on disk.
@@ -77,6 +78,33 @@ pub fn build_rustls_config(cert_path: &Path, key_path: &Path) -> Result<RustlsCo
     // the same config can be shared across workers without a
     // clone of the (relatively expensive) rustls state.
     Ok(RustlsConfig::from_config(Arc::new(server_config)))
+}
+
+/// Build the HSTS middleware layer for the TLS-enabled path
+/// (T-10). When `max_age_secs == 0` we return `None` so the
+/// caller can skip applying the layer — adding
+/// `Strict-Transport-Security: max-age=0` would actively tell
+/// browsers to drop cached HSTS, which is the wrong default for
+/// a fresh deployment.
+///
+/// The header value uses the `max-age` directive only. We do
+/// NOT add `; includeSubDomains` by default — enabling that
+/// without auditing every subdomain (staging, dev, internal
+/// admin) is a footgun. Operators who need it can layer a
+/// second `SetResponseHeaderLayer` over the same response.
+pub fn hsts_layer(max_age_secs: u64) -> Option<SetResponseHeaderLayer<axum::http::HeaderValue>> {
+    if max_age_secs == 0 {
+        return None;
+    }
+    let value = format!("max-age={max_age_secs}");
+    // `max-age=<number>` is always valid HeaderValue syntax —
+    // the only ASCII chars involved are digits and the hyphen.
+    let header =
+        axum::http::HeaderValue::from_str(&value).expect("max-age header value is always valid");
+    Some(SetResponseHeaderLayer::if_not_present(
+        axum::http::header::STRICT_TRANSPORT_SECURITY,
+        header,
+    ))
 }
 
 #[cfg(test)]
@@ -166,5 +194,23 @@ mod tests {
             msg.contains("no private key") || msg.contains("parse"),
             "error should mention empty key content, got: {msg}"
         );
+    }
+
+    // ---- T-10: HSTS layer ----
+
+    #[test]
+    fn hsts_layer_returns_none_for_zero_max_age() {
+        // max-age=0 would tell browsers to drop cached HSTS;
+        // we refuse to emit that header.
+        assert!(hsts_layer(0).is_none());
+    }
+
+    #[test]
+    fn hsts_layer_returns_some_for_positive_max_age() {
+        let layer = hsts_layer(31_536_000).expect("non-zero must produce a layer");
+        // Smoke-test that the layer is constructible; the
+        // header value is internal so we just verify the layer
+        // is non-trivially built (no panic, no error).
+        let _ = format!("{:?}", layer);
     }
 }
