@@ -69,3 +69,6 @@ serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
 tower = { workspace = true, features = ["util"] }
 uuid = { workspace = true }
+# T-06: middleware integration tests need to read the response
+# body bytes to verify gzip encoding and uncompressed size.
+http-body-util = "0.1"

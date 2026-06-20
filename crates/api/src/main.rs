@@ -20,10 +20,11 @@
 //! - M9: payment + commission + payout + admin RBAC
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{
     body::Body,
-    http::{header::CONTENT_TYPE, StatusCode},
+    http::{header::CONTENT_TYPE, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -33,6 +34,9 @@ use kokkak_infra::auth::jwt::JwtService;
 use kokkak_infra::cache::redis::RedisCache;
 use kokkak_infra::db::mongo::MongoClient;
 use kokkak_infra::queue::nats::NatsQueue;
+use tower_http::compression::CompressionLayer;
+use tower_http::cors::CorsLayer;
+use tower_http::timeout::TimeoutLayer;
 
 use kokkak_api::build_app_state_with;
 use kokkak_api::build_repos;
@@ -146,11 +150,75 @@ async fn main() {
     let state = build_app_state_with(bundle, jwt, registry);
 
     // ---- Routes ----
-    let app = build_router(state)
-        .route("/metrics", get(metrics_handler))
-        .layer(axum::middleware::from_fn(
-            kokkak_api::middleware::trace::trace_request,
-        ));
+    let app = build_router(state).route("/metrics", get(metrics_handler));
+
+    // ---- T-06: wire the middleware stack.
+    //   Layer order (outermost first) is the REVERSE of the
+    //   apply order — `.layer(X)` wraps the service in X, so
+    //   the LAST `.layer` call ends up CLOSEST to the handler.
+    //
+    //   Final request flow: trace → timeout → compression → cors
+    //   → locale_middleware (inside router) → handler.
+    //
+    //   - trace_request is OUTERMOST so request-start logs and
+    //     metrics fire before any short-circuit (CORS preflight,
+    //     timeout, etc.).
+    //   - cors is INNERMOST so preflight OPTIONS requests
+    //     short-circuit at the CORS layer without paying for
+    //     compression / timeout machinery on what is effectively
+    //     a metadata exchange.
+    let cors = build_cors_layer(&settings.middleware.cors_allow_origins);
+    let app = match cors {
+        Some(layer) => {
+            tracing::info!(
+                origins = ?settings.middleware.cors_allow_origins,
+                "CORS layer wired"
+            );
+            app.layer(layer)
+        }
+        None => {
+            tracing::info!("CORS allowlist empty — cross-origin requests denied");
+            app
+        }
+    };
+
+    let app = if settings.middleware.compression_enabled {
+        tracing::info!("response compression enabled (gzip/deflate/br)");
+        app.layer(CompressionLayer::new())
+    } else {
+        tracing::info!("response compression disabled");
+        app
+    };
+
+    if settings.middleware.request_timeout_secs > 0 {
+        tracing::info!(
+            secs = settings.middleware.request_timeout_secs,
+            "request timeout wired"
+        );
+    } else {
+        tracing::warn!(
+            "request timeout DISABLED — slow handlers will tie up tokio workers indefinitely"
+        );
+    }
+    // T-06: TimeoutLayer::new is deprecated in tower-http 0.6 in
+    // favour of `with_status_code(408)`. The current API returns
+    // HTTP 500 on timeout, which is acceptable for now — the
+    // client-visible behaviour matters more than the exact code.
+    // Upgrade path: swap to `with_status_code(StatusCode::REQUEST_TIMEOUT)`
+    // once we commit to standardising 408 across all routes.
+    #[allow(deprecated)]
+    let app = if settings.middleware.request_timeout_secs > 0 {
+        app.layer(TimeoutLayer::new(Duration::from_secs(
+            settings.middleware.request_timeout_secs,
+        )))
+    } else {
+        app
+    };
+
+    // trace_request stays OUTERMOST (existing behaviour).
+    let app = app.layer(axum::middleware::from_fn(
+        kokkak_api::middleware::trace::trace_request,
+    ));
 
     // ---- Bind + serve with graceful shutdown ----
     if settings.tls.enabled {
@@ -359,4 +427,46 @@ async fn shutdown_signal() {
         _ = ctrl_c => {}
         _ = terminate => {}
     }
+}
+
+/// T-06: build a [`CorsLayer`] from the configured allowlist.
+///
+/// Returns `None` if the allowlist is empty — the absence of a
+/// CORS layer is the safest default (cross-origin requests are
+/// rejected by the browser before they reach the server).
+fn build_cors_layer(allow_origins: &[String]) -> Option<CorsLayer> {
+    if allow_origins.is_empty() {
+        return None;
+    }
+    let origins: Vec<HeaderValue> = allow_origins
+        .iter()
+        .filter_map(|o| match HeaderValue::from_str(o) {
+            Ok(v) => Some(v),
+            Err(err) => {
+                eprintln!("[kokkak-api] invalid CORS origin {}: {err} — skipping", o);
+                None
+            }
+        })
+        .collect();
+    if origins.is_empty() {
+        return None;
+    }
+    Some(
+        CorsLayer::new()
+            .allow_origin(origins)
+            .allow_methods([
+                Method::GET,
+                Method::POST,
+                Method::PUT,
+                Method::PATCH,
+                Method::DELETE,
+                Method::OPTIONS,
+            ])
+            .allow_headers([
+                axum::http::header::CONTENT_TYPE,
+                axum::http::header::AUTHORIZATION,
+                axum::http::HeaderName::from_static("x-request-id"),
+            ])
+            .allow_credentials(true),
+    )
 }
