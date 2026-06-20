@@ -14,7 +14,6 @@ use axum::{
     extract::State,
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
 use kokkak_application::auth::RegisterInput;
 use kokkak_common::i18n::{current_locale, tr};
@@ -22,20 +21,27 @@ use kokkak_common::response::created;
 use kokkak_common::error::AppError;
 use kokkak_domain::Role;
 use serde::Deserialize;
+use validator::Validate;
 
 use crate::error::{ApiError, IntoLocalizedResponse};
+use crate::extractors::ValidatedJson;
 use crate::handlers::auth::AuthResponse;
 use crate::middleware::auth::AuthnUser;
 use crate::state::AppState;
 
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Deserialize, Validate, utoipa::ToSchema)]
 pub struct CreateUserRequest {
+    #[validate(length(min = 3, max = 64, message = "username must be 3-64 characters"))]
     pub username: String,
+    #[validate(length(min = 8, max = 128, message = "password must be 8-128 characters"))]
     pub password: String,
+    #[validate(length(min = 1, max = 100, message = "first_name must be 1-100 characters"))]
     pub first_name: String,
+    #[validate(length(min = 1, max = 100, message = "last_name must be 1-100 characters"))]
     pub last_name: String,
     /// Required for the admin endpoint: must be one of
     /// `customer` / `technician` / `admin` / `super_admin`.
+    #[validate(length(min = 1, max = 20, message = "role must be 1-20 characters"))]
     pub role: String,
 }
 
@@ -65,7 +71,7 @@ pub struct CreateUserRequest {
 pub async fn create_user_admin(
     State(state): State<AppState>,
     user: AuthnUser,
-    Json(req): Json<CreateUserRequest>,
+    ValidatedJson(req): ValidatedJson<CreateUserRequest>,
 ) -> Result<Response, Response> {
     // 1. RBAC: only admins / super_admins may create accounts here.
     if !user.has_role(Role::Admin) && !user.has_role(Role::SuperAdmin) {
