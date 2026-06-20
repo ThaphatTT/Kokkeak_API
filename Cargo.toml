@@ -42,6 +42,14 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
+# T-24: OpenTelemetry (OTLP trace + metrics export). Behind the
+# `otel` feature flag on `kokkak-common` so the default build
+# stays fast — operators opt in via `--features kokkak-common/otel`.
+opentelemetry = "0.27"
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", default-features = false, features = ["grpc-tonic", "trace", "metrics"] }
+tracing-opentelemetry = "0.28"
+
 # Metrics
 metrics = "0.23"
 metrics-exporter-prometheus = { version = "0.15", default-features = false }
@@ -125,6 +133,9 @@ bson = { version = "2.13", features = ["chrono-0_4"] }
 # ---- M2/M3: Password verification needs a constant-time compare ----
 subtle = "2"
 
+# ---- T-27: Micro-benchmarks via Criterion ----
+criterion = { version = "0.5", features = ["html_reports"] }
+
 # ---- Profile-specific ----
 [profile.dev]
 opt-level = 0
@@ -137,3 +148,8 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 strip = true
+# T-20: abort on panic to shrink the binary and skip unwind
+# tables. The Dockerfile runtime image is distroless/static,
+# so there's no debugger to attach anyway. Backtraces from
+# `RUST_BACKTRACE=full` still print the active frames.
+panic = "abort"

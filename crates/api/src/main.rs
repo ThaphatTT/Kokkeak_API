@@ -56,8 +56,7 @@ async fn metrics_handler() -> impl IntoResponse {
         .expect("failed to build metrics response")
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     // ---- T02: load .env (if present) into process env BEFORE
     //   Settings::load() — figment's Env provider only reads from
     //   std::env, not from disk. `dotenv()` is a no-op when no
@@ -72,6 +71,27 @@ async fn main() {
         std::process::exit(1);
     });
 
+    // ---- T-19: build the tokio runtime with `settings.server.workers`
+    //   as the worker count. `#[tokio::main]` defaults to num_cpus,
+    //   which is fine on a dev box but wasteful on a 2-CPU pod and
+    //   insufficient on a 32-core production node. Constructing the
+    //   runtime by hand lets us honour the operator's choice.
+    //
+    //   Settings validation already rejects `workers == 0` (see
+    //   `Settings::validate()` in `common/src/config.rs`), so the
+    //   `.max(1)` here is defensive, not load-bearing.
+    let worker_threads = settings.server.workers.max(1);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(worker_threads)
+        .enable_all()
+        .thread_name("kokkak-api")
+        .build()
+        .expect("failed to build tokio runtime");
+
+    runtime.block_on(run(settings));
+}
+
+async fn run(settings: Settings) {
     // ---- M11: initialize the i18n catalog (th / en / lo). The
     //   default locale is the catalog fallback; per-request
     //   locale is set by the locale_middleware.
@@ -79,6 +99,11 @@ async fn main() {
     // ---- T03: init tracing (JSON or pretty) + Prometheus metrics ----
     telemetry::init_tracing(settings.log.format);
     let _metrics_handle = Arc::new(telemetry::init_metrics());
+    // ---- T-24: opt-in OTLP bridge. No-op unless the `otel`
+    //   feature is enabled and OTEL_EXPORTER_OTLP_ENDPOINT is set.
+    if telemetry::init_otel("kokkak-api", None) {
+        tracing::info!("OTel exporter wired (traces + metrics OTLP)");
+    }
 
     tracing::info!(
         addr = %settings.server.addr,
@@ -149,7 +174,7 @@ async fn main() {
     }
 
     // ---- Build app state ----
-    let state = build_app_state_with(bundle, jwt, registry);
+    let state = build_app_state_with(bundle, jwt, registry, Arc::new(settings.clone()));
 
     // ---- Routes ----
     let app = build_router(state).route("/metrics", get(metrics_handler));

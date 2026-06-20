@@ -1,4 +1,4 @@
-//! TLS (HTTPS) bootstrap for the API server (T-09).
+//! TLS (HTTPS) bootstrap for the API server (T-09, T-19).
 //!
 //! Pure helpers — no I/O beyond reading the PEM files on disk the
 //! operator configured. The single public surface is
@@ -69,10 +69,19 @@ pub fn build_rustls_config(cert_path: &Path, key_path: &Path) -> Result<RustlsCo
         .with_context(|| format!("failed to parse PEM private key in {}", key_path.display()))?
         .ok_or_else(|| anyhow!("no private key found in {}", key_path.display()))?;
 
-    let server_config = rustls::ServerConfig::builder()
+    let mut server_config = rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, key)
         .context("rustls rejected the certificate chain / private key pair")?;
+
+    // T-19: advertise both h2 and http/1.1 via ALPN so the TLS
+    // handshake selects the right protocol. h2 brings connection
+    // multiplexing (lower latency for mobile clients on flaky
+    // networks) and header compression; we keep http/1.1 in the
+    // list because not every client speaks h2 (curl <7.43, some
+    // legacy SDKs). The order matters only for the server's
+    // preference — most clients ignore it and pick by capability.
+    server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
 
     // axum-server 0.7 takes ownership of an Arc<ServerConfig> so
     // the same config can be shared across workers without a

@@ -120,8 +120,11 @@ pub struct ServerSettings {
     #[serde(default = "default_addr")]
     pub addr: String,
 
-    /// Number of Tokio worker threads (currently informational — `axum::serve`
-    /// runs on a single thread; multi-worker requires a process manager).
+    /// Number of Tokio worker threads the API runtime spawns.
+    /// T-19: wired into the runtime by `crates/api/src/main.rs` via
+    /// `tokio::runtime::Builder::new_multi_thread().worker_threads(...)`.
+    /// Default `4`. Raise it on boxes with more CPU headroom; on
+    /// containerised deploys match the pod's CPU limit.
     #[serde(default = "default_workers")]
     pub workers: usize,
 }
@@ -793,6 +796,67 @@ pub struct MiddlewareSettings {
     /// create duplicate orders/payments.
     #[serde(default)]
     pub idempotency: IdempotencySettings,
+
+    /// Feature flags for the Strangler migration (T-31).
+    /// Each flag corresponds to an endpoint group; flipping
+    /// `false` returns 404 from the Rust service and the
+    /// upstream proxy / BFF routes the request to the legacy
+    /// ASP.NET service. All flags default to `true` (Rust
+    /// serves traffic) — operators flip specific ones when
+    /// they're not ready to migrate a route group.
+    #[serde(default)]
+    pub features: FeatureFlagSettings,
+}
+
+/// Feature flag toggles for the Strangler migration (T-31).
+///
+/// Each flag is a switchable endpoint group. While migrating
+/// from ASP.NET, operators disable a flag to send a route
+/// group back to the legacy service — no Rust redeploy
+/// required (settings reload picks it up next request).
+///
+/// Per-flag notes:
+///   - `auth`        — login / register / refresh / logout
+///   - `orders`      — create / get / list / track
+///   - `payments`    — confirm / payout / statement
+///   - `chat`        — REST + WebSocket
+///   - `admin`       — RBAC, content mgmt, audit
+///
+/// Adding a new flag: add a field here, default `true`, then
+/// wrap the route(s) with [`crate::middleware::feature_gate`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FeatureFlagSettings {
+    /// `/api/v1/auth/*` — login / register / refresh / logout.
+    #[serde(default = "default_flag_enabled")]
+    pub auth: bool,
+    /// `/api/v1/orders/*` — create / get / list / track.
+    #[serde(default = "default_flag_enabled")]
+    pub orders: bool,
+    /// `/api/v1/payments/*` — confirm / payout / statement.
+    #[serde(default = "default_flag_enabled")]
+    pub payments: bool,
+    /// `/api/v1/chat/*` — REST + WebSocket.
+    #[serde(default = "default_flag_enabled")]
+    pub chat: bool,
+    /// `/api/v1/admin/*` — RBAC, content mgmt, audit.
+    #[serde(default = "default_flag_enabled")]
+    pub admin: bool,
+}
+
+impl Default for FeatureFlagSettings {
+    fn default() -> Self {
+        Self {
+            auth: default_flag_enabled(),
+            orders: default_flag_enabled(),
+            payments: default_flag_enabled(),
+            chat: default_flag_enabled(),
+            admin: default_flag_enabled(),
+        }
+    }
+}
+
+fn default_flag_enabled() -> bool {
+    true
 }
 
 /// HTTP idempotency settings (T-14). See
@@ -887,6 +951,7 @@ impl Default for MiddlewareSettings {
             compression_enabled: default_compression_enabled(),
             rate_limit: RateLimitSettings::default(),
             idempotency: IdempotencySettings::default(),
+            features: FeatureFlagSettings::default(),
         }
     }
 }
