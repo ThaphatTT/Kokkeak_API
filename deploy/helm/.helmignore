@@ -1,0 +1,29 @@
+# Default Helm ignore patterns. Anything not listed here is
+# shipped as part of the chart tarball — including the
+# _helpers.tpl which is the most common thing to forget.
+
+# VCS
+.git/
+.gitignore
+.gitattributes
+
+# CI
+.github/
+
+# IDE
+.vscode/
+.idea/
+
+# Build outputs
+target/
+*.log
+coverage/
+
+# Editor backups
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,175 @@
+# Prometheus alert rules — Kokkeak (T-25).
+#
+# Apply with `kubectl apply -f alerts.yml` after the
+# PrometheusRule CRD is installed (kube-prometheus-stack ships it).
+# Severity tiers:
+#   info     - operator-visible, no paging
+#   warning  - paging during business hours
+#   critical - paging 24/7
+
+groups:
+  - name: kokkak.api.availability
+    interval: 30s
+    rules:
+      - alert: KokkakApiHighErrorRate
+        expr: |
+          sum(rate(http_requests_total{namespace="kokkak-prod",status=~"5.."}[5m]))
+            /
+          sum(rate(http_requests_total{namespace="kokkak-prod"}[5m]))
+            > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          service: kokkak-api
+        annotations:
+          summary: "Kokkeak API 5xx ratio >5% for 5m"
+          description: |
+            The 5xx response ratio is {{ $value | humanizePercentage }}.
+            Check the error panel in the Kokkeak dashboard and
+            recent deploys. Paging on-call.
+          runbook_url: https://runbooks.kokkak.example/api/5xx
+
+      - alert: KokkakApiNoTraffic
+        expr: sum(rate(http_requests_total{namespace="kokkak-prod"}[5m])) == 0
+        for: 5m
+        labels:
+          severity: warning
+          service: kokkak-api
+        annotations:
+          summary: "Kokkeak API serving zero RPS for 5m"
+          description: |
+            Either no users or the load balancer lost the pods.
+            Check kube_deployment_status_replicas_ready and ingress
+            controller logs before assuming a traffic loss.
+
+      - alert: KokkakApiReadyReplicasLow
+        expr: |
+          sum(kube_deployment_status_replicas_ready{namespace="kokkak-prod",deployment=~"kokkak.*-api"})
+            <
+          sum(kube_deployment_spec_replicas{namespace="kokkak-prod",deployment=~"kokkak.*-api"})
+        for: 2m
+        labels:
+          severity: warning
+          service: kokkak-api
+        annotations:
+          summary: "API replicas below desired count"
+          description: |
+            {{ $value }} ready, expected more. Could be a failing
+            rollout, OOM kill loop, or HPA scaling event. Check
+            pod logs and events.
+
+  - name: kokkak.api.latency
+    interval: 30s
+    rules:
+      - alert: KokkakApiHighP99Latency
+        # AC: p99 < 500ms under normal load. Trip when the
+        # 5-minute rolling p99 crosses 1s — gives us margin
+        # before the SLO is broken.
+        expr: |
+          histogram_quantile(0.99,
+            sum by (le) (
+              rate(http_request_duration_seconds_bucket{namespace="kokkak-prod"}[5m])
+            )
+          ) > 1.0
+        for: 10m
+        labels:
+          severity: warning
+          service: kokkak-api
+        annotations:
+          summary: "Kokkeak API p99 latency >1s for 10m"
+          description: |
+            p99 = {{ $value | humanizeDuration }}. Likely culprits:
+            DB pool exhaustion, GC pause, downstream service slow.
+            Run the latency-by-route panel to narrow it down.
+
+      - alert: KokkakApiCriticalP99Latency
+        expr: |
+          histogram_quantile(0.99,
+            sum by (le) (
+              rate(http_request_duration_seconds_bucket{namespace="kokkak-prod"}[5m])
+            )
+          ) > 3.0
+        for: 5m
+        labels:
+          severity: critical
+          service: kokkak-api
+        annotations:
+          summary: "Kokkeak API p99 latency >3s — SLO breach"
+          description: |
+            p99 = {{ $value | humanizeDuration }}. The 99% latency
+            budget is 500ms; this alert means we've blown past it
+            by 6x. Page on-call now.
+
+  - name: kokkak.infra
+    interval: 30s
+    rules:
+      - alert: KokkakDbPoolExhausted
+        # The pool's `in_use` count approaching `pool_size`
+        # signals incoming requests will queue. Catch it
+        # before requests time out.
+        expr: |
+          sum(kokkak_db_pool_connections_in_use{namespace="kokkak-prod"})
+            /
+          sum(kokkak_db_pool_connections_total{namespace="kokkak-prod"})
+            > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          service: kokkak-api
+        annotations:
+          summary: "DB pool >85% in-use for 5m"
+          description: |
+            Pool utilisation is {{ $value | humanizePercentage }}.
+            Either traffic surged or a long-running query is
+            holding connections. Check `pg_stat_activity` (or
+            `sys.dm_exec_requests` for SQL Server).
+
+      - alert: KokkakNatsQueueLagHigh
+        expr: |
+          histogram_quantile(0.99,
+            sum by (le, subject) (
+              rate(nats_jetstream_consumer_delivery_lag_seconds_bucket{namespace="kokkak-prod"}[5m])
+            )
+          ) > 60
+        for: 10m
+        labels:
+          severity: warning
+          service: kokkak-worker
+        annotations:
+          summary: "NATS consumer p99 lag >60s for 10m on {{ $labels.subject }}"
+          description: |
+            Workers can't keep up with producer rate. Scale the
+            worker Deployment (`kubectl scale deploy kokkak-worker --replicas=...`)
+            or investigate slow handlers.
+
+  - name: kokkak.probes
+    interval: 30s
+    rules:
+      - alert: KokkakReadinessProbeFlapping
+        # /readyz toggling more than 5x in 5 minutes suggests
+        # a downstream dependency is intermittent. Catch it
+        # before users do.
+        expr: |
+          changes(probe_success{namespace="kokkak-prod", probe=~".*readyz.*"}[5m]) > 5
+        for: 0m
+        labels:
+          severity: warning
+          service: kokkak-api
+        annotations:
+          summary: "Readiness probe flapping on {{ $labels.instance }}"
+          description: |
+            /readyz has flipped {{ $value }} times in 5 minutes.
+            Check DB / cache / queue connectivity from the pod.
+
+      - alert: KokkakLivenessProbeFailing
+        # Liveness failures restart the pod — page immediately.
+        expr: probe_success{namespace="kokkak-prod", probe=~".*healthz.*"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: kokkak-api
+        annotations:
+          summary: "Liveness probe failing on {{ $labels.instance }}"
+          description: |
+            /healthz has been down for 2m. Pod will be killed by
+            kubelet soon. Check for panics, OOM, or deadlock.

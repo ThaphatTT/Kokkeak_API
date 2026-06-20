@@ -1,0 +1,162 @@
+# CD pipeline — Kokkeak (T-23).
+#
+# Triggered by pushing a semver tag (`v*`). Builds the multi-arch
+# container image, pushes it to ghcr.io, then `helm upgrade`s
+# staging. Production deploy is a separate workflow / manual job
+# with a different secrets scope — we keep that out of this file
+# intentionally so PR reviewers don't need prod credentials.
+#
+# Rollback path: re-run the workflow with the previous tag (or
+# `helm rollback kokkak-staging <revision>`).
+
+name: CD
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to deploy (default: git ref)"
+        required: false
+        default: ""
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ---- Build + push image ----
+  build:
+    name: Build & push image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image-tag: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Resolve image tag
+        id: meta
+        # If pushed via tag, use the tag. Otherwise fall back to
+        # the short SHA (for manual workflow_dispatch).
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+        shell: bash
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # Provenance + SBOM — required by some registries.
+          provenance: true
+          sbom: true
+
+  # ---- Deploy to staging ----
+  deploy-staging:
+    name: Deploy to staging
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: staging
+      url: https://api.staging.kokkak.example
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p "$HOME/.kube"
+          echo "${{ secrets.KUBECONFIG_STAGING }}" | base64 -d > "$HOME/.kube/config"
+          kubectl config current-context
+        shell: bash
+
+      - name: Helm upgrade
+        run: |
+          helm upgrade --install kokkak-staging deploy/helm \
+            --namespace kokkak-staging --create-namespace \
+            --set image.repository=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }} \
+            --set image.tag=${{ needs.build.outputs.image-tag }} \
+            --set api.ingress.hosts[0].host=api.staging.kokkak.example \
+            --wait --timeout 5m
+        shell: bash
+
+      - name: Smoke test
+        # Curl /readyz until it returns 200 or timeout. A 503
+        # means readiness probes are still failing — abort.
+        run: |
+          for i in {1..30}; do
+            status=$(curl -sk -o /dev/null -w "%{http_code}" \
+              https://api.staging.kokkak.example/readyz || echo 000)
+            if [[ "$status" == "200" ]]; then
+              echo "ready after ${i}s"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "staging never became ready"
+          exit 1
+        shell: bash
+
+  # ---- Rollback helper ----
+  rollback:
+    name: Rollback staging
+    runs-on: ubuntu-latest
+    if: failure()
+    needs: [build, deploy-staging]
+    environment: staging
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+
+      - name: Roll back to previous revision
+        run: |
+          mkdir -p "$HOME/.kube"
+          echo "${{ secrets.KUBECONFIG_STAGING }}" | base64 -d > "$HOME/.kube/config"
+          helm history kokkak-staging --namespace kokkak-staging
+          # Roll back to the revision *before* this deploy. If
+          # the failure is post-install (no previous revision),
+          # `helm uninstall` cleans up.
+          PREV=$(helm history kokkak-staging -n kokkak-staging -o json | jq -r '[.[] | select(.status == "deployed")] | .[-1].revision' 2>/dev/null || echo 0)
+          if [[ "$PREV" -gt 0 ]]; then
+            helm rollback kokkak-staging "$PREV" --namespace kokkak-staging --wait
+          else
+            helm uninstall kokkak-staging --namespace kokkak-staging
+          fi
+        shell: bash

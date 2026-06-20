@@ -1,0 +1,199 @@
+# docker-compose.yml — Kokkeak full local stack (T-21).
+#
+# Brings up the entire dependency surface: SQL Server, Redis,
+# NATS (with JetStream), MongoDB, MinIO (S3-compatible), plus
+# the API and worker binaries built from this repo's Dockerfile.
+#
+# Usage:
+#   docker compose up -d         # start everything
+#   docker compose logs -f api   # tail API logs
+#   docker compose down -v       # stop + drop volumes (DESTRUCTIVE)
+#
+# The `api` and `worker` services build from the local Dockerfile.
+# For a faster dev loop, override the `target` and mount source
+# (see `docker-compose.override.yml`).
+#
+# This file is committed; do NOT bake real secrets into it. The
+# `environment:` blocks below contain DEV-ONLY credentials that
+# match `.env.example`. Production secrets come from the host's
+# secret manager (T-29).
+
+name: kokkak
+
+x-common-env: &common-env
+  # Defaults that every backend service can pick up. Each
+  # service also has its own bespoke block below.
+  KOKKAK_ENV: dev
+  KOKKAK_LOG__FORMAT: pretty
+
+services:
+  # ---- Datastores ----
+
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: kokkak-sqlserver
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: DevStrong!Passw0rd
+      MSSQL_PID: Developer
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+    healthcheck:
+      # sqlcmd isn't in the mssql image, so probe via the
+      # gateway port using a tiny TCP-style wait.
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'DevStrong!Passw0rd' -C -Q 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    container_name: kokkak-redis
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  nats:
+    image: nats:2.10-alpine
+    container_name: kokkak-nats
+    command: ["nats-server", "-js", "-sd", "/data", "-m", "8222"]
+    ports:
+      - "4222:4222"   # client
+      - "8222:8222"   # monitoring
+      - "6222:6222"   # cluster
+    volumes:
+      - nats-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  mongo:
+    image: mongo:7
+    container_name: kokkak-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: kokkak-minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: kokkak
+      MINIO_ROOT_PASSWORD: DevStrong!Passw0rd
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # console
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---- Application ----
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kokkak-api
+    image: kokkak:latest
+    # Override the default entrypoint to run the API binary.
+    entrypoint: ["/usr/local/bin/kokkak-api"]
+    environment:
+      <<: *common-env
+      KOKKAK_SERVER__ADDR: 0.0.0.0:8080
+      KOKKAK_DATABASE__SQLSERVER_URL: mssql://sa:DevStrong!Passw0rd@sqlserver:1433/KOKKAK_MASTER?encrypt=true&trustservercertificate=true
+      KOKKAK_DATABASE__POOL_SIZE: "20"
+      KOKKAK_REDIS__URL: redis://redis:6379
+      KOKKAK_NATS__URL: nats://nats:4222
+      KOKKAK_MONGO__URL: mongodb://mongo:27017
+      KOKKAK_AUTH__JWT_SECRET: dev-only-not-for-prod-replace-me
+      KOKKAK_AUTH__ISSUER: kokkak-api
+      # T-09/T-21: TLS off in compose so we don't need certs locally.
+      KOKKAK_SERVER__TLS__ENABLED: "false"
+    ports:
+      - "8080:8080"
+    volumes:
+      # Local data dir for the JSON-DB simulation. Drop the
+      # volume when iterating without SQL Server.
+      - api-data:/app/data
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      # /healthz is always 200 (process is up). /readyz reflects
+      # downstream health (DB / cache / queue). Use both: liveness
+      # probes /healthz, readiness probes /readyz.
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/readyz | grep -q ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kokkak-worker
+    image: kokkak:latest
+    # Same image, different binary.
+    entrypoint: ["/usr/local/bin/kokkak-worker"]
+    environment:
+      <<: *common-env
+      KOKKAK_DATABASE__SQLSERVER_URL: mssql://sa:DevStrong!Passw0rd@sqlserver:1433/KOKKAK_MASTER?encrypt=true&trustservercertificate=true
+      KOKKAK_REDIS__URL: redis://redis:6379
+      KOKKAK_NATS__URL: nats://nats:4222
+      KOKKAK_MONGO__URL: mongodb://mongo:27017
+      KOKKAK_AUTH__JWT_SECRET: dev-only-not-for-prod-replace-me
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  sqlserver-data:
+  redis-data:
+  nats-data:
+  mongo-data:
+  minio-data:
+  api-data:
+
+networks:
+  default:
+    name: kokkak-net

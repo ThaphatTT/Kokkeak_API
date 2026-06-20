@@ -1,0 +1,46 @@
+# .dockerignore — keep the build context lean
+#
+# Anything not needed by `cargo build` should be here so the
+# Docker daemon doesn't ship it to the buildkit cache. The two
+# biggest wins are `target/` (multi-GB) and `.git/` (every
+# commit).
+
+# Cargo build artefacts (recreated inside the image)
+target/
+
+# VCS metadata (recreated by `cargo` if needed via --locked)
+.git/
+.gitignore
+
+# Local dev files
+.env
+.env.local
+.env.*.local
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Docs / planning notes that don't belong in a runtime image
+docs/
+*.md
+!README.md
+!CONTRIBUTING.md
+
+# Test data
+data/
+*.log
+coverage/
+
+# CI config (the image doesn't need to re-run CI)
+.github/
+
+# graphify (development-time only)
+graphify-out/
+.cache/
+
+# Migration history gets baked into the image at build time
+# via the Dockerfile COPY step, so we don't need to ignore it.

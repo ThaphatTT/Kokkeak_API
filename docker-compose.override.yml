@@ -1,0 +1,43 @@
+# docker-compose.override.yml — local-dev overrides (T-21).
+#
+# Compose reads `docker-compose.yml` + this file by default. It
+# only enables the overrides when `docker compose up` is run from
+# the repo root, so prod deploys (which use the base file alone)
+# are unaffected.
+#
+# Purpose: speed up the inner loop. Instead of rebuilding the
+# full image on every source change, mount the source tree into
+# the container and let `cargo run` (or a watch script) rebuild
+# in place. Volumes keep the build cache between restarts.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.override.yml up
+
+services:
+  api:
+    build: null
+    # When `build: null` + `image:` is set, compose skips the
+    # image build step and uses the named image directly. For a
+    # pure mount-based dev loop, point `image` at a prebuilt
+    # dev image with cargo + rustc inside.
+    image: kokkak-dev:latest
+    volumes:
+      # Mount source so edits are picked up on container restart.
+      # The container itself must be a dev image (cargo present).
+      - ./:/app
+      - cargo-target:/app/target
+      - cargo-registry:/usr/local/cargo/registry
+    command: ["cargo", "run", "--release", "-p", "kokkak-api"]
+
+  worker:
+    build: null
+    image: kokkak-dev:latest
+    volumes:
+      - ./:/app
+      - cargo-target:/app/target
+      - cargo-registry:/usr/local/cargo/registry
+    command: ["cargo", "run", "--release", "-p", "kokkak-worker"]
+
+volumes:
+  cargo-target:
+  cargo-registry:
