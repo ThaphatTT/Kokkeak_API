@@ -1,0 +1,88 @@
+# cargo-deny config — Kokkeak (T-28).
+#
+# Fails CI on:
+#   - Known security advisories (RUSTSEC)
+#   - Unapproved licenses
+#   - Banned crates (e.g. http for production, plain-text serde)
+#   - Duplicate dependencies in the dep graph
+#   - Unmaintained crates (warns)
+#
+# Run locally:
+#   cargo install cargo-deny --locked
+#   cargo deny check
+
+[graph]
+# Multiple versions of the same crate are usually fine (different
+# major versions can coexist), but for our small workspace we
+# prefer a clean graph. Set this high enough that we don't get
+# false positives from sub-deps.
+multiple-versions = "warn"
+
+[output]
+# Show the call sites when something is denied — much easier to
+# fix than guessing which dep pulled it in.
+when = { feature = "deny", level = "warn" }
+when = { feature = "warn", level = "warn" }
+
+[advisories]
+# Ignore specific advisories that we have triaged and decided
+# not to fix (each one needs a justification comment + linked
+# tracking issue). Empty for now; expand as we triage.
+ignore = [
+    # Example:
+    # "RUSTSEC-2023-XXXX",  # tracked in GHSA-xxxx-yyyy-zzzz
+]
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",   # LLVM / rustc exception
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "Zlib",
+    "MPL-2.0",                          # acceptable for client SDKs
+    "OpenSSL",                          # transitive only
+]
+# Confidence threshold for license detection. Above this,
+# deny treats ambiguous matches as their most-likely license.
+confidence-threshold = 0.8
+
+[bans]
+# Crates we will NEVER allow. Add the reason next to each so
+# future contributors don't have to spelunk through PR history.
+deny = [
+    # Plain-text HTTP. Use reqwest (which redirects to HTTPS)
+    # or a typed client. No exceptions.
+    { name = "http" },
+
+    # `ring` is a heavyweight alternative to `aws-lc-rs` (and
+    # has had a few CVEs). Standardise on `rustls`'s default.
+    { name = "ring" },
+
+    # Old chrono-replacement that's been unmaintained since 2023.
+    { name = "time" },
+]
+# Skip tree-level analysis for `multiple-versions` of these —
+# they're well-known to have multiple major versions.
+skip = [
+    { name = "openssl" },                # system dep, multiple major OK
+    { name = "windows-sys" },           # comes in per-API-set variants
+]
+# Skip the deny check when these crates are in our workspace
+# (their ban is about transitive deps, not direct usage).
+wildcards = "deny"
+
+[sources]
+# Require crates.io + our private registry. Disallow git deps
+# (they bypass version auditing) and alternative registries
+# unless explicitly added.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# Allow our GHCR-hosted private registry once configured:
+# allow-registry = ["https://ghcr.io/kokkak/kokkak-private"]

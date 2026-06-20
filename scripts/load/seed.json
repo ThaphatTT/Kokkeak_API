@@ -1,0 +1,7 @@
+[
+  { "username": "alice", "password": "LoadTest!Passw0rd" },
+  { "username": "bob", "password": "LoadTest!Passw0rd" },
+  { "username": "carol", "password": "LoadTest!Passw0rd" },
+  { "username": "dave", "password": "LoadTest!Passw0rd" },
+  { "username": "eve", "password": "LoadTest!Passw0rd" }
+]

@@ -65,3 +65,11 @@ rust-s3 = { version = "0.33", default-features = false, features = ["tokio-rustl
 
 # ---- M1.5 / M2: JSON DB simulation ----
 # No extra crate; uses tokio::fs + serde_json above.
+
+# ---- T-27: benches for JWT verify + argon2 verify ----
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "auth"
+harness = false

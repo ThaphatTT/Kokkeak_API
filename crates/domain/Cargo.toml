@@ -56,3 +56,9 @@ tokio = { workspace = true, features = ["macros", "rt"] }
 # T-16: dev builds that exercise the OpenAPI derives need the
 # optional dep materialized.
 utoipa = { workspace = true, features = ["chrono", "uuid", "decimal"] }
+# T-27: Criterion bench harness (only used by `benches/`).
+criterion = { workspace = true }
+
+[[bench]]
+name = "matching"
+harness = false
