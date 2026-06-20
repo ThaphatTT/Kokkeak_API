@@ -78,6 +78,14 @@ once_cell = "1"
 # (sql server adapters in the api worker use these directly via
 # the infra crate, not through the workspace deps above)
 
+# ---- T-09: TLS (HTTPS) server — axum-server + rustls ----
+# Pinned to the same rustls 0.23 the rest of the workspace uses
+# (tiberius pulls 0.23, rust-s3 pulls 0.23 via tokio-rustls-tls),
+# so no extra rustls version lands in the dep graph.
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+rustls = "0.23"
+rustls-pemfile = "2"
+
 # Redis
 redis = { version = "0.27", default-features = false, features = ["tokio-comp", "aio"] }
 deadpool-redis = "0.18"

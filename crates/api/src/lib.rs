@@ -9,6 +9,7 @@ pub mod middleware;
 pub mod repo_factory;
 pub mod router;
 pub mod state;
+pub mod tls;
 
 pub use repo_factory::{from_settings as build_repos, RepoBackend, RepoBundle};
 pub use router::build as build_router;
