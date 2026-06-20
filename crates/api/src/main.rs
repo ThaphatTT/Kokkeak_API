@@ -34,6 +34,8 @@ use kokkak_infra::auth::jwt::JwtService;
 use kokkak_infra::cache::redis::RedisCache;
 use kokkak_infra::db::mongo::MongoClient;
 use kokkak_infra::queue::nats::NatsQueue;
+use tower_governor::key_extractor::PeerIpKeyExtractor;
+use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::timeout::TimeoutLayer;
@@ -180,6 +182,49 @@ async fn main() {
             tracing::info!("CORS allowlist empty — cross-origin requests denied");
             app
         }
+    };
+
+    // T-07: per-IP rate limit (GCRA via tower_governor).
+    // Sits BETWEEN cors and compression: short-circuits before
+    // we pay the compression CPU cost on requests that will be
+    // dropped anyway. Uses PeerIpKeyExtractor so a noisy client
+    // gets throttled regardless of which endpoint it targets.
+    let app = if settings.middleware.rate_limit.enabled {
+        let rate = settings.middleware.rate_limit.requests_per_second;
+        let burst = settings.middleware.rate_limit.burst_size;
+        tracing::info!(
+            rps = rate,
+            burst = burst,
+            "rate limit enabled (per-IP, GCRA)"
+        );
+        let governor_conf = std::sync::Arc::new(
+            GovernorConfigBuilder::default()
+                .per_second(u64::from(rate))
+                .burst_size(burst)
+                .key_extractor(PeerIpKeyExtractor)
+                .finish()
+                .expect("rate-limit config must build (knobs validated upstream)"),
+        );
+        // GC the limiter's key storage every 5 minutes so a busy
+        // day doesn't balloon memory with stale per-IP entries.
+        let limiter = governor_conf.limiter().clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                let before = limiter.len();
+                limiter.retain_recent();
+                let after = limiter.len();
+                if before != after {
+                    tracing::debug!(before, after, "rate limiter GC swept stale entries");
+                }
+            }
+        });
+        app.layer(GovernorLayer {
+            config: governor_conf,
+        })
+    } else {
+        tracing::info!("rate limit disabled");
+        app
     };
 
     let app = if settings.middleware.compression_enabled {

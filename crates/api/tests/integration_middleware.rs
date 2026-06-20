@@ -20,12 +20,17 @@ use std::time::Duration;
 
 use axum::{
     body::Body,
+    extract::ConnectInfo,
     http::{header, HeaderValue, Method, Request, StatusCode},
     routing::get,
     Router,
 };
 use http_body_util::BodyExt;
+use std::net::SocketAddr;
 use tower::ServiceExt;
+use tower_governor::governor::GovernorConfigBuilder;
+use tower_governor::key_extractor::PeerIpKeyExtractor;
+use tower_governor::GovernorLayer;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::timeout::TimeoutLayer;
@@ -234,4 +239,137 @@ async fn timeout_slow_handler_returns_408_or_500() {
     );
 }
 
-// ---- Helpers re-exported for the smoke test below ----
+// ---- Rate limit ----
+
+fn app_with_rate_limit(rps: u64, burst: u32) -> Router {
+    let governor_conf = std::sync::Arc::new(
+        GovernorConfigBuilder::default()
+            .per_second(rps)
+            .burst_size(burst)
+            .key_extractor(PeerIpKeyExtractor)
+            .finish()
+            .expect("rate-limit config must build"),
+    );
+    Router::new()
+        .route("/echo", get(|| async { (StatusCode::OK, "ok") }))
+        .layer(GovernorLayer {
+            config: governor_conf,
+        })
+}
+
+/// Build a request with a `ConnectInfo` extension so
+/// `PeerIpKeyExtractor` can extract the source IP. Each test
+/// uses a distinct IP so the per-IP buckets don't bleed.
+fn request_with_ip(path: &str, ip: [u8; 4]) -> Request<Body> {
+    let connect_info = ConnectInfo(SocketAddr::from((ip, 30_000)));
+    Request::builder()
+        .uri(path)
+        .extension(connect_info)
+        .body(Body::empty())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn rate_limit_burst_then_429() {
+    // burst=2 → first two requests pass, third is throttled.
+    // Using a distinct IP per test prevents the limiter's GCRA
+    // state from carrying over between runs.
+    let app = app_with_rate_limit(1, 2);
+
+    let resp1 = app
+        .clone()
+        .oneshot(request_with_ip("/echo", [10, 0, 0, 1]))
+        .await
+        .unwrap();
+    assert_eq!(resp1.status(), StatusCode::OK);
+
+    let resp2 = app
+        .clone()
+        .oneshot(request_with_ip("/echo", [10, 0, 0, 1]))
+        .await
+        .unwrap();
+    assert_eq!(resp2.status(), StatusCode::OK);
+
+    // Third request from the same IP — bucket empty → 429.
+    let resp3 = app
+        .clone()
+        .oneshot(request_with_ip("/echo", [10, 0, 0, 1]))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp3.status(),
+        StatusCode::TOO_MANY_REQUESTS,
+        "third request from same IP must be throttled"
+    );
+}
+
+#[tokio::test]
+async fn rate_limit_distinct_ips_have_independent_buckets() {
+    // Each IP gets its own token bucket — IP A exhausting its
+    // burst must NOT affect IP B.
+    let app = app_with_rate_limit(1, 1);
+
+    // IP A: drain the bucket.
+    let a1 = app
+        .clone()
+        .oneshot(request_with_ip("/echo", [10, 0, 0, 2]))
+        .await
+        .unwrap();
+    assert_eq!(a1.status(), StatusCode::OK);
+    let a2 = app
+        .clone()
+        .oneshot(request_with_ip("/echo", [10, 0, 0, 2]))
+        .await
+        .unwrap();
+    assert_eq!(a2.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    // IP B: still has a full bucket.
+    let b1 = app
+        .clone()
+        .oneshot(request_with_ip("/echo", [10, 0, 0, 3]))
+        .await
+        .unwrap();
+    assert_eq!(
+        b1.status(),
+        StatusCode::OK,
+        "different IP must not inherit another IP's bucket"
+    );
+}
+
+#[tokio::test]
+async fn rate_limit_429_includes_x_ratelimit_after_header() {
+    // tower_governor attaches an `x-ratelimit-after` header to
+    // 429 responses (NOT the standard `Retry-After`) so
+    // well-behaved clients can back off. Verify the header is
+    // present and parses as a positive integer.
+    let app = app_with_rate_limit(1, 1);
+
+    // Drain the bucket.
+    let _ = app
+        .clone()
+        .oneshot(request_with_ip("/echo", [10, 0, 0, 4]))
+        .await
+        .unwrap();
+    let resp = app
+        .clone()
+        .oneshot(request_with_ip("/echo", [10, 0, 0, 4]))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    let wait = resp
+        .headers()
+        .get("x-ratelimit-after")
+        .expect("429 must include x-ratelimit-after header");
+    // The wait time is the GCRA deficit in seconds — with
+    // burst=1 and rate=1 rps, the deficit is sub-second and the
+    // header rounds to 0. That's fine; clients still parse it
+    // and back off. We just verify the header is present and
+    // parses as a non-negative integer.
+    let secs: u64 = wait
+        .to_str()
+        .unwrap()
+        .parse()
+        .expect("x-ratelimit-after must be a non-negative integer (seconds)");
+    let _ = secs;
+}

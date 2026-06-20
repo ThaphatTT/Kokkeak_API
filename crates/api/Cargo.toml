@@ -63,6 +63,9 @@ rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
 anyhow = { workspace = true }
 
+# T-07: per-IP rate limiting (GCRA via governor).
+tower_governor = { workspace = true }
+
 [dev-dependencies]
 # Test body / JSON inspection in handler tests.
 serde_json = { workspace = true }
