@@ -30,7 +30,8 @@ use axum::{
     extract::Request,
     http::{header, HeaderName, HeaderValue, Method, StatusCode},
     middleware::Next,
-    response::{IntoResponse, Response},
+    response::IntoResponse,
+    response::Response,
 };
 use kokkak_domain::{CachedResponse, IdempotencyStore};
 
@@ -156,4 +157,141 @@ fn replay(cached: CachedResponse) -> Response {
         HeaderValue::from_static("true"),
     );
     response
+}
+
+/// Strict-mode guard (T-15).
+///
+/// For protected routes (`/orders`, `/payments`, `/auth/register`)
+/// the `Idempotency-Key` header is **required**. Requests without
+/// it get a 400 with a clear error message; clients can then
+/// retry with the header. This makes the contract explicit
+/// instead of silently permissively caching — the global
+/// permissive layer (`handle`) only fires when the header is
+/// actually present, so a request that *does* have a header
+/// flows through both layers without double-caching.
+pub async fn require_idempotency_key(req: Request, next: Next) -> Response {
+    // Only enforce on POSTs — GETs don't need idempotency.
+    if req.method() != Method::POST {
+        return next.run(req).await;
+    }
+
+    let has_key = req
+        .headers()
+        .get(&IDEMPOTENCY_KEY_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
+
+    if has_key {
+        next.run(req).await
+    } else {
+        let body = serde_json::json!({
+            "success": false,
+            "error": {
+                "code": "idempotency_key_required",
+                "message": "Idempotency-Key header is required for this endpoint",
+            }
+        });
+        let mut response = (
+            StatusCode::BAD_REQUEST,
+            [(header::CONTENT_TYPE, "application/json")],
+            body.to_string(),
+        )
+            .into_response();
+        response.headers_mut().insert(
+            &IDEMPOTENCY_KEY_HEADER,
+            HeaderValue::from_static("required"),
+        );
+        response
+    }
+}
+
+#[cfg(test)]
+mod strict_tests {
+    use super::*;
+    use axum::body::to_bytes;
+    use axum::routing::{get, post};
+    use axum::Router;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn require_idempotency_key_passes_through_with_key() {
+        let app = Router::new()
+            .route("/p", post(|| async { "ok" }))
+            .route("/g", get(|| async { "ok" }))
+            .layer(axum::middleware::from_fn(require_idempotency_key));
+
+        // POST with key → handler runs.
+        let r = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/p")
+                    .header(IDEMPOTENCY_KEY_HEADER, "abc")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        let body = to_bytes(r.into_body(), 1024).await.unwrap();
+        assert_eq!(&body[..], b"ok");
+
+        // GET without key → handler still runs (GETs are exempt).
+        let r = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/g")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn require_idempotency_key_rejects_post_without_key() {
+        let app = Router::new()
+            .route("/p", post(|| async { "ok" }))
+            .layer(axum::middleware::from_fn(require_idempotency_key));
+
+        let r = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/p")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn require_idempotency_key_rejects_whitespace_key() {
+        let app = Router::new()
+            .route("/p", post(|| async { "ok" }))
+            .layer(axum::middleware::from_fn(require_idempotency_key));
+
+        let r = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/p")
+                    .header(IDEMPOTENCY_KEY_HEADER, "   ")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    }
 }

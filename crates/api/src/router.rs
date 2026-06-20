@@ -8,6 +8,7 @@ use axum::{
 
 use crate::handlers;
 use crate::middleware::i18n::locale_middleware;
+use crate::middleware::idempotency::require_idempotency_key;
 use crate::state::AppState;
 
 /// Build the full application router.
@@ -18,9 +19,29 @@ pub fn build(state: AppState) -> Router {
         .route("/readyz", get(handlers::health::readyz))
         .with_state(state.health.clone());
 
-    // Public auth routes.
-    let auth_routes = Router::new()
+    // T-15: routes that REQUIRE an `Idempotency-Key` header on
+    // every POST. Without the header, the request is rejected
+    // with 400 before the handler runs. With the header, the
+    // global permissive idempotency layer (wired in `main.rs`)
+    // caches the response for retry safety.
+    //
+    // Critical = side effects that are non-idempotent at the
+    // business level. Adding a route here means "mobile retries
+    // could double-charge / double-create, force the client to
+    // send a key".
+    let idempotent_routes = Router::new()
+        // Identity: a duplicate registration = duplicate account.
         .route("/api/v1/auth/register", post(handlers::auth::register))
+        // Money: a duplicate order = real double-charge.
+        .route("/api/v1/orders", post(handlers::order::create_order))
+        // Money: a duplicate payment = real double-charge.
+        .route("/api/v1/payments", post(handlers::payment::create_payment))
+        .layer(from_fn(require_idempotency_key));
+
+    // Public auth routes that do NOT require an idempotency key
+    // (login / refresh / logout are token-issuing / revoking
+    // operations, not state-mutating).
+    let auth_routes = Router::new()
         .route("/api/v1/auth/login", post(handlers::auth::login))
         .route("/api/v1/auth/refresh", post(handlers::auth::refresh))
         .route("/api/v1/auth/logout", post(handlers::auth::logout));
@@ -33,7 +54,6 @@ pub fn build(state: AppState) -> Router {
             get(handlers::catalog::list_services),
         )
         .route("/api/v1/orders/me", get(handlers::order::list_my_orders))
-        .route("/api/v1/orders", post(handlers::order::create_order))
         .route(
             "/api/v1/orders/assigned",
             get(handlers::order::list_assigned_orders),
@@ -57,9 +77,9 @@ pub fn build(state: AppState) -> Router {
         )
         .route("/api/v1/chat/ws/:id", get(handlers::ws::ws_upgrade));
 
-    // M9: Payments.
+    // M9: Payments (read-only + confirm are NOT idempotent-critical;
+    // the confirm call is naturally idempotent on the server side).
     let payment_routes = Router::new()
-        .route("/api/v1/payments", post(handlers::payment::create_payment))
         .route(
             "/api/v1/payments/me",
             get(handlers::payment::list_my_payments),
@@ -83,7 +103,9 @@ pub fn build(state: AppState) -> Router {
 
     // M14.5: Admin user creation (register role split).
     // Admin / super_admin accounts must be provisioned here, not
-    // via the public `/auth/register` endpoint.
+    // via the public `/auth/register` endpoint. Admin users
+    // don't need the public-mobile idempotency guard — they are
+    // created via the admin web console with auth, not retries.
     let admin_users_routes = Router::new().route(
         "/api/v1/admin/users",
         post(handlers::admin::create_user_admin),
@@ -91,8 +113,9 @@ pub fn build(state: AppState) -> Router {
 
     // Merge into a single router, then attach state.
     // Layer order (LIFO: last-attached runs first):
-    //   1. locale_middleware (innermost) — sets task-local locale
-    //      from `Accept-Language` / `?lang=` before the handler runs.
+    //   1. require_idempotency_key (innermost, only on the 3
+    //      protected routes) — rejects POSTs without a key.
+    //   2. locale_middleware — sets task-local locale.
     Router::new()
         .merge(health_routes)
         .merge(auth_routes)
@@ -101,6 +124,7 @@ pub fn build(state: AppState) -> Router {
         .merge(payment_routes)
         .merge(admin_payout_routes)
         .merge(admin_users_routes)
+        .merge(idempotent_routes)
         .with_state(state)
         .layer(from_fn(locale_middleware))
 }
