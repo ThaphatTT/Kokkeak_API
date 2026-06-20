@@ -1,0 +1,15 @@
+# rustfmt config for Kokkeak workspace
+#
+# Locks formatting rules so `cargo fmt` produces identical output across
+# machines / IDEs / CI. Without this, rustfmt defaults (max_width=100,
+# tab_spaces=2) differ from what AGENTS.md §5.3 declares.
+#
+# Per AGENTS.md §5.3:
+#   - edition = "2021"  (matches Cargo.toml)
+#   - max_width = 100
+#   - tab_spaces = 4
+#
+# Loaded automatically by `cargo fmt` from workspace root.
+edition = "2021"
+max_width = 100
+tab_spaces = 4
