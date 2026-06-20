@@ -339,6 +339,66 @@ async fn main() {
                 tls_handle.shutdown();
             }
         });
+
+        // T-12: cert file watcher (auto-reload for LE 90-day
+        // rotation). Only wired when `tls.auto_reload = true` —
+        // the default is off because the restart causes a brief
+        // connection blip. Operators opt in when they need
+        // zero-touch cert rotation.
+        if settings.tls.auto_reload {
+            match kokkak_api::cert_watcher::watch_cert_files(&cert_path, &key_path) {
+                Ok((watcher, mut rx)) => {
+                    let initial_cert_fp = kokkak_api::cert_watcher::cert_fingerprint(&cert_path)
+                        .unwrap_or_else(|_| "<unreadable>".into());
+                    let initial_key_fp = kokkak_api::cert_watcher::cert_fingerprint(&key_path)
+                        .unwrap_or_else(|_| "<unreadable>".into());
+                    tracing::info!(
+                        cert = %initial_cert_fp,
+                        key = %initial_key_fp,
+                        "cert auto-reload watcher active (LE 90-day rotation)"
+                    );
+                    let tls_handle_for_reload = tls_handle.clone();
+                    tokio::spawn(async move {
+                        // Keep the watcher alive for the task lifetime.
+                        let _watcher = watcher;
+                        // Drain the initial false value so `changed()`
+                        // awaits the next true signal.
+                        let _ = rx.borrow_and_update();
+                        if rx.changed().await.is_err() {
+                            return;
+                        }
+                        // Debounce: file watchers can fire multiple
+                        // events for a single rotation (write to temp
+                        // file → rename → modify). 500 ms covers the
+                        // typical LE renewal pattern.
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        let new_cert_fp = kokkak_api::cert_watcher::cert_fingerprint(&cert_path)
+                            .unwrap_or_else(|_| "<unreadable>".into());
+                        let new_key_fp = kokkak_api::cert_watcher::cert_fingerprint(&key_path)
+                            .unwrap_or_else(|_| "<unreadable>".into());
+                        tracing::info!(
+                            old_cert = %initial_cert_fp,
+                            new_cert = %new_cert_fp,
+                            old_key = %initial_key_fp,
+                            new_key = %new_key_fp,
+                            "cert or key file changed — graceful shutdown for orchestrator restart"
+                        );
+                        tls_handle_for_reload.shutdown();
+                    });
+                }
+                Err(err) => {
+                    // Watcher init failure should not crash a
+                    // long-running server — log loudly and continue.
+                    // The certs are loaded; the service just won't
+                    // auto-reload. Operator can restart manually.
+                    tracing::error!(
+                        error = %err,
+                        "cert watcher init failed; auto-reload disabled (service still serves with current cert)"
+                    );
+                }
+            }
+        }
+
         axum_server::bind_rustls(
             settings
                 .server
