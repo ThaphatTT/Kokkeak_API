@@ -5,6 +5,7 @@
 
 pub mod adapters;
 pub mod cert_watcher;
+pub mod error;
 pub mod handlers;
 pub mod middleware;
 pub mod openapi;
