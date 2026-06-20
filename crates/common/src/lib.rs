@@ -21,7 +21,9 @@ pub mod i18n;
 pub mod response;
 pub mod telemetry;
 
-pub use config::{ConfigError, LogFormat, LogSettings, ServerSettings, Settings};
+pub use config::{
+    ConfigError, Environment, LogFormat, LogSettings, ServerSettings, Settings, TlsSettings,
+};
 pub use error::{ApiErrorBody, AppError};
 pub use i18n::{detect_locale, init_i18n, set_locale, substitute, tr, tr_with_repo, Locale};
 pub use response::{created, ok, paginated, ApiResponse, PageMeta};
