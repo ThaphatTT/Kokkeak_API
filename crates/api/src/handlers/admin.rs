@@ -1,9 +1,14 @@
-//! Admin HTTP handlers (M14.5 register-role split).
+//! Admin HTTP handlers (M14.5 register-role split + T-06 refactor).
 //!
 //! ponytail: single endpoint right now (`POST /api/v1/admin/users`).
 //! Future admin endpoints (list users, suspend, change roles, etc.)
 //! live here too — the file is the home for any route that requires
 //! `Admin` / `SuperAdmin` privileges.
+//!
+//! **T-06**: the bespoke `forbidden` / `validation` envelope
+//! helpers were deleted; role + RBAC failures now build an
+//! [`ApiError`] and call [`crate::error::IntoLocalizedResponse::into_localized_response`]
+//! like every other handler.
 
 use axum::{
     extract::State,
@@ -12,12 +17,14 @@ use axum::{
     Json,
 };
 use kokkak_application::auth::RegisterInput;
-use kokkak_common::i18n::{current_locale, tr, tr_with_repo};
-use kokkak_common::response::{created, ApiResponse};
+use kokkak_common::i18n::{current_locale, tr};
+use kokkak_common::response::created;
+use kokkak_common::error::AppError;
 use kokkak_domain::Role;
 use serde::Deserialize;
 
-use crate::handlers::auth::{auth_error_to_response, AuthResponse};
+use crate::error::{ApiError, IntoLocalizedResponse};
+use crate::handlers::auth::AuthResponse;
 use crate::middleware::auth::AuthnUser;
 use crate::state::AppState;
 
@@ -60,31 +67,28 @@ pub async fn create_user_admin(
     user: AuthnUser,
     Json(req): Json<CreateUserRequest>,
 ) -> Result<Response, Response> {
-    let locale = current_locale();
-
     // 1. RBAC: only admins / super_admins may create accounts here.
     if !user.has_role(Role::Admin) && !user.has_role(Role::SuperAdmin) {
-        let msg = tr("err_auth.admin_required", &locale, &[]);
-        return Err(forbidden("admin_required", msg));
+        // AdminRequired carries the admin_required key — the admin
+        // page surfaces this directly to the operator. The message
+        // is pre-localized via the file-based catalog (no repo
+        // override for this message yet), then handed to AppError's
+        // Localized carrier so IntoResponse surfaces it verbatim.
+        let localized = tr("err_auth.admin_required", &current_locale(), &[]);
+        return Err(
+            ApiError::from(AppError::AdminRequired.with_message(localized)).into_response(),
+        );
     }
 
     // 2. Parse the role. Unlike the public register endpoint, all
-    //    four roles are accepted here; an unknown string is a 422.
+    //    four roles are accepted here; an unknown string is a 422
+    //    role_not_allowed.
     let role = match Role::from_code(&req.role) {
         Some(r) => r,
         None => {
-            let msg = format!(
-                "unknown role '{}'; expected customer, technician, admin, or super_admin",
-                req.role
-            );
-            let localized = tr_with_repo(
-                &*state.translation,
-                &locale,
-                "err_auth.validation",
-                &[msg.as_str()],
-            )
-            .await;
-            return Err(validation(localized));
+            return Err(ApiError::from(AppError::RoleNotAllowed(req.role))
+                .into_localized_response(&state)
+                .await);
         }
     };
 
@@ -101,39 +105,9 @@ pub async fn create_user_admin(
     };
     let outcome = match state.auth.register(input).await {
         Ok(o) => o,
-        Err(e) => return Err(auth_error_to_response(e, &state).await),
+        Err(e) => return Err(ApiError::from(e).into_localized_response(&state).await),
     };
     Ok((StatusCode::CREATED, created(AuthResponse::from(outcome))).into_response())
 }
 
-fn forbidden(code: &'static str, message: String) -> Response {
-    (
-        StatusCode::FORBIDDEN,
-        Json(ApiResponse::<()> {
-            success: false,
-            data: None,
-            error: Some(kokkak_common::error::ApiErrorBody {
-                code: code.into(),
-                message,
-            }),
-            meta: None,
-        }),
-    )
-        .into_response()
-}
-
-fn validation(message: String) -> Response {
-    (
-        StatusCode::UNPROCESSABLE_ENTITY,
-        Json(ApiResponse::<()> {
-            success: false,
-            data: None,
-            error: Some(kokkak_common::error::ApiErrorBody {
-                code: "validation".into(),
-                message,
-            }),
-            meta: None,
-        }),
-    )
-        .into_response()
-}
+// Re-import the auth response shape is at the top of the file.

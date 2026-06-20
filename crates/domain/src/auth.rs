@@ -15,7 +15,7 @@ use uuid::Uuid;
 use crate::user::Role;
 
 /// Typed auth errors (mapped to HTTP statuses by the API layer).
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum AuthError {
     /// 401 — credentials missing or invalid.
     #[error("invalid credentials")]

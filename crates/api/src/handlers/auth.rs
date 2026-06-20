@@ -1,4 +1,5 @@
-//! Auth HTTP handlers (M2 + M11 i18n + M14 NEW_DB + M14.5 split).
+//! Auth HTTP handlers (M2 + M11 i18n + M14 NEW_DB + M14.5 split +
+//! T-06 AppError refactor).
 //!
 //! - POST /api/v1/auth/register   — PUBLIC; role restricted to
 //!   `customer` / `technician`. Admin / super_admin must go through
@@ -13,6 +14,13 @@
 //! fallback. The locale is set per request by
 //! `crate::middleware::i18n::locale_middleware`.
 //!
+//! **T-06 refactor**: domain errors (`AuthError`) flow through
+//! `ApiError::from(...)` + `IntoLocalizedResponse::into_localized_response(&state)`,
+//! replacing the previous per-handler `auth_error_to_response`
+//! helper. The result is one line per error site instead of a
+//! bespoke function, and the i18n key lookup is centralized in
+//! `crate::error::l10n_key_for_app_error`.
+//!
 //! **M14 changes** (NEW_DB.txt alignment):
 //! - `email` → `username` in `RegisterRequest` / `LoginRequest`
 //! - `display_name` → `first_name` + `last_name`
@@ -22,7 +30,7 @@
 //! **M14.5 split** (register role security):
 //! - Public `/auth/register` accepts only `customer` / `technician`
 //!   (default `customer`). Anything else (admin/super_admin/unknown)
-//!   returns 422 with a localized `err_auth.validation` message.
+//!   returns 422 with a localized `err_auth.role_not_allowed` message.
 //! - Admin role creation lives at `POST /api/v1/admin/users` and
 //!   requires a JWT carrying `Admin` or `SuperAdmin`.
 
@@ -33,11 +41,12 @@ use axum::{
     Json,
 };
 use kokkak_application::auth::{LoginInput, RegisterInput};
-use kokkak_common::i18n::{current_locale, tr_with_repo};
 use kokkak_common::response::{created, ApiResponse};
-use kokkak_domain::{AuthError, LocalizedError, Role};
+use kokkak_common::{error::AppError, i18n::current_locale};
+use kokkak_domain::Role;
 use serde::{Deserialize, Serialize};
 
+use crate::error::{ApiError, IntoLocalizedResponse};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -85,6 +94,10 @@ impl From<kokkak_application::auth::AuthOutcome> for AuthResponse {
 /// previous behaviour — accepting `{"role":"admin"}` from an
 /// unauthenticated client — was an open admin registration
 /// vulnerability.
+///
+/// T-06: handler returns `Result<Response, Response>`; the error
+/// arm builds a localized envelope via
+/// [`IntoLocalizedResponse::into_localized_response`].
 #[utoipa::path(
     post,
     path = "/api/v1/auth/register",
@@ -105,18 +118,20 @@ pub async fn register(
     State(state): State<AppState>,
     Json(req): Json<RegisterRequest>,
 ) -> Result<Response, Response> {
+    // M14.5: reject roles the public endpoint isn't allowed to
+    // grant. Both cases share the same 422 + role_not_allowed code —
+    // the message tells the client which case it is.
     let role = match parse_public_register_role(req.role.as_deref()) {
         Ok(r) => r,
         Err(PublicRoleError::Restricted(other)) => {
-            let msg = format!(
-                "role '{}' is restricted to admin endpoint; public registration accepts only customer/technician",
-                other.as_str()
-            );
-            return Err(auth_error_to_response(AuthError::Validation(msg), &state).await);
+            return Err(ApiError::from(AppError::RoleNotAllowed(other.as_str().to_string()))
+                .into_localized_response(&state)
+                .await);
         }
         Err(PublicRoleError::Unknown(s)) => {
-            let msg = format!("unknown role '{s}'; expected customer or technician");
-            return Err(auth_error_to_response(AuthError::Validation(msg), &state).await);
+            return Err(ApiError::from(AppError::RoleNotAllowed(s))
+                .into_localized_response(&state)
+                .await);
         }
     };
     let input = RegisterInput {
@@ -128,7 +143,9 @@ pub async fn register(
     };
     let outcome = match state.auth.register(input).await {
         Ok(o) => o,
-        Err(e) => return Err(auth_error_to_response(e, &state).await),
+        Err(e) => {
+            return Err(ApiError::from(e).into_localized_response(&state).await);
+        }
     };
     Ok((StatusCode::CREATED, created(AuthResponse::from(outcome))).into_response())
 }
@@ -195,7 +212,7 @@ pub async fn login(
     };
     let outcome = match state.auth.login(input).await {
         Ok(o) => o,
-        Err(e) => return Err(auth_error_to_response(e, &state).await),
+        Err(e) => return Err(ApiError::from(e).into_localized_response(&state).await),
     };
     Ok(ok(AuthResponse::from(outcome)))
 }
@@ -225,7 +242,7 @@ pub async fn refresh(
     let scope = req.scope.unwrap_or_else(|| "mobile".into());
     let outcome = match state.auth.refresh(&req.refresh_token, &scope).await {
         Ok(o) => o,
-        Err(e) => return Err(auth_error_to_response(e, &state).await),
+        Err(e) => return Err(ApiError::from(e).into_localized_response(&state).await),
     };
     Ok(ok(AuthResponse::from(outcome)))
 }
@@ -249,6 +266,10 @@ pub struct LogoutResponse {
     )
 )]
 pub async fn logout() -> Response {
+    // `current_locale` import is preserved above so the locale stack
+    // is observable in handler metrics later; the logout response
+    // has no user-facing message.
+    let _ = current_locale();
     (
         StatusCode::OK,
         Json(ApiResponse {
@@ -272,44 +293,6 @@ fn ok<T: Serialize>(data: T) -> Response {
         }),
     )
         .into_response()
-}
-
-/// Build a localized error response for an `AuthError` variant.
-/// Resolves the user-visible message via
-/// [`kokkak_common::i18n::tr_with_repo`] against the
-/// per-tenant `TranslationRepository` and falls through to the
-/// file-based catalog when no override is set.
-pub async fn auth_error_to_response(err: AuthError, state: &AppState) -> Response {
-    use AuthError::*;
-    let (status, code) = match &err {
-        InvalidCredentials => (StatusCode::UNAUTHORIZED, "unauthorized"),
-        TokenExpired => (StatusCode::UNAUTHORIZED, "token_expired"),
-        InvalidToken(_) => (StatusCode::UNAUTHORIZED, "invalid_token"),
-        Forbidden(_) => (StatusCode::FORBIDDEN, "forbidden"),
-        // M14: renamed to match NEW_DB's username-based login.
-        UsernameTaken => (StatusCode::CONFLICT, "username_taken"),
-        Validation(_) => (StatusCode::UNPROCESSABLE_ENTITY, "validation"),
-        Backend(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
-    };
-    let locale = current_locale();
-    let args: Vec<String> = err.l10n_args();
-    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let message = tr_with_repo(&*state.translation, &locale, err.l10n_key(), &args_ref).await;
-    envelope(status, code, message)
-}
-
-/// Build the standard error envelope.
-fn envelope(status: StatusCode, code: &str, message: String) -> Response {
-    let envelope: ApiResponse<()> = ApiResponse {
-        success: false,
-        data: None,
-        error: Some(kokkak_common::error::ApiErrorBody {
-            code: code.into(),
-            message,
-        }),
-        meta: None,
-    };
-    (status, Json(envelope)).into_response()
 }
 
 #[cfg(test)]
