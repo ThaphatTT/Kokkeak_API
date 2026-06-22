@@ -9,7 +9,9 @@ use axum::{
     Json, Router,
 };
 use utoipa::OpenApi;
-use utoipa_swagger_ui::SwaggerUi;
+use utoipa_swagger_ui::{Config, SwaggerUi, Url};
+
+use kokkak_common::config::Environment;
 
 use crate::handlers;
 use crate::middleware::feature_gate::{
@@ -151,19 +153,44 @@ pub fn build(state: AppState) -> Router {
         .merge(admin_payout_routes)
         .merge(admin_users_routes)
         .merge(idempotent_routes)
-        .merge(openapi_routes())
+        .merge(openapi_routes::<AppState>(state.settings.environment))
         .with_state(state)
         .layer(from_fn(locale_middleware))
 }
 
 /// T-16: OpenAPI spec + Swagger UI.
 ///
-/// - `GET /api/openapi.json` returns the generated spec.
+/// - `GET /api/openapi.json` returns the generated spec (explicit
+///   route, served from this router — owned by us).
 /// - `GET /api/docs` serves the interactive Swagger UI.
 /// - `GET /api/docs/*` serves the Swagger UI assets.
-fn openapi_routes() -> Router<AppState> {
-    let spec = ApiDoc::openapi();
+///
+/// **SwaggerUi fetch wiring**: we configure the UI to **fetch** the
+/// spec from `/api/openapi.json` via `Config::new([Url::new(...)])`.
+/// We deliberately do NOT use `SwaggerUi::url(...)` — that method
+/// *also* registers an internal axum route at the URL it is given,
+/// which collides with our explicit `/api/openapi.json` route and
+/// panics at startup with "Overlapping method route".
+///
+/// **Production gate**: in `Environment::Production` we serve NONE
+/// of these — no recon, no Swagger UI attack surface, no
+/// `utoipa_swagger_ui` JS bundles exposed. Operators verify the
+/// service is alive via `/healthz` + `/readyz` (always open, no auth).
+fn openapi_routes<S>(env: Environment) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    if matches!(env, Environment::Production) {
+        // ponytail: env gate — a single ternary on an existing enum,
+        // no feature-flag system. Upgrade path if we ever need "off
+        // in staging but on for internal QA": add an `openapi` field
+        // to `FeatureFlagSettings` and route through `openapi_flag`
+        // middleware like the other feature gates.
+        return Router::new();
+    }
+
     let catalog = crate::openapi::error_codes_catalog();
+    let spec = ApiDoc::openapi();
     Router::new()
         .route(
             "/api/openapi.json",
@@ -179,5 +206,117 @@ fn openapi_routes() -> Router<AppState> {
                 async move { Json(catalog).into_response() }
             }),
         )
-        .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", ApiDoc::openapi()))
+        .merge(
+            SwaggerUi::new("/api/docs")
+                .config(Config::new([Url::new("Kokkeak API", "/api/openapi.json")])),
+        )
+}
+
+#[cfg(test)]
+mod tests {
+    //! Unit tests for the production gate on OpenAPI / Swagger UI routes.
+    //!
+    //! These tests construct the subrouter directly via
+    //! `openapi_routes::<()>(env)` — no AppState, no DB, no JWT. They
+    //! use `tower::ServiceExt::oneshot` to assert that the production
+    //! gate actually closes the routes (404), and that the dev path
+    //! actually exposes them (200 for `/api/openapi.json`, 200 for
+    //! the Swagger UI HTML shell at `/api/docs`).
+
+    use super::openapi_routes;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use kokkak_common::config::Environment;
+    use tower::ServiceExt;
+
+    fn app_for(env: Environment) -> axum::Router {
+        openapi_routes::<()>(env)
+    }
+
+    fn get(uri: &str) -> Request<Body> {
+        Request::builder().uri(uri).body(Body::empty()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn production_closes_openapi_json_route() {
+        let res = app_for(Environment::Production)
+            .oneshot(get("/api/openapi.json"))
+            .await
+            .unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::NOT_FOUND,
+            "in production `/api/openapi.json` must return 404 (closed), not expose the spec"
+        );
+    }
+
+    #[tokio::test]
+    async fn production_closes_swagger_ui_route() {
+        let res = app_for(Environment::Production)
+            .oneshot(get("/api/docs"))
+            .await
+            .unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::NOT_FOUND,
+            "in production `/api/docs` (Swagger UI) must return 404 (closed)"
+        );
+    }
+
+    #[tokio::test]
+    async fn production_closes_error_codes_route() {
+        // The error-codes catalog is served from the same subrouter
+        // — if it's open in prod, mobile teams could still scrape
+        // every error code via prod. Keep it closed together.
+        let res = app_for(Environment::Production)
+            .oneshot(get("/api/error-codes.json"))
+            .await
+            .unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::NOT_FOUND,
+            "in production `/api/error-codes.json` must return 404 (closed)"
+        );
+    }
+
+    #[tokio::test]
+    async fn development_serves_openapi_json() {
+        let res = app_for(Environment::Development)
+            .oneshot(get("/api/openapi.json"))
+            .await
+            .unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::OK,
+            "in development `/api/openapi.json` must return 200 (SDK generator + BFF need it)"
+        );
+    }
+
+    #[tokio::test]
+    async fn development_serves_swagger_ui() {
+        let res = app_for(Environment::Development)
+            .oneshot(get("/api/docs/"))
+            .await
+            .unwrap();
+        // Swagger UI redirect follows /api/docs -> /api/docs/ — oneshot
+        // follows 0 redirects so we hit the trailing-slash form.
+        assert_eq!(
+            res.status(),
+            StatusCode::OK,
+            "in development `/api/docs/` (Swagger UI) must return 200"
+        );
+    }
+
+    #[tokio::test]
+    async fn development_serves_error_codes() {
+        let res = app_for(Environment::Development)
+            .oneshot(get("/api/error-codes.json"))
+            .await
+            .unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::OK,
+            "in development `/api/error-codes.json` must return 200"
+        );
+    }
 }

@@ -7,8 +7,19 @@
 .env
 .env.local
 .env.*.local
+.env.dev
+.env.production
 *.pem
 *.key
+
+# Local TLS certs (T-LocalRun: scripts/prod-run.ps1 needs them)
+# Certs are SELF-SIGNED + LOCAL-ONLY. Never use the ones in version
+# control — generate per-host with:
+#   openssl req -x509 -newkey rsa:2048 -keyout certs/localhost-key.pem -out certs/localhost.pem -days 365 -nodes -subj '//CN=localhost'
+# Gitignore the whole certs/ dir except a README that documents the recipe.
+/certs/*
+!/certs/README.md
+!/certs/.gitkeep
 
 # IDE
 .vscode/

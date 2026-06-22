@@ -95,7 +95,12 @@ once_cell = "1"
 # (tiberius pulls 0.23, rust-s3 pulls 0.23 via tokio-rustls-tls),
 # so no extra rustls version lands in the dep graph.
 axum-server = { version = "0.7", features = ["tls-rustls"] }
-rustls = "0.23"
+# rustls 0.23 has no default crypto provider — we must pick one.
+# `ring` is what tiberius + rust-s3 already pull in transitively, so
+# adding it explicitly here costs nothing and stops the release build
+# from panicking with "Could not automatically determine the
+# process-level CryptoProvider".
+rustls = { version = "0.23", default-features = false, features = ["logging", "std", "ring"] }
 rustls-pemfile = "2"
 
 # ---- T-07: per-IP rate limiting ----

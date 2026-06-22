@@ -64,12 +64,28 @@ async fn metrics_handler() -> impl IntoResponse {
 }
 
 fn main() {
+    // ---- T-09: install the rustls crypto provider BEFORE anything
+    //   else. `rustls` 0.23 ships without a default provider — a release
+    //   build that reaches `ServerConfig::builder()` without
+    //   `install_default()` panics with "Could not automatically
+    //   determine the process-level CryptoProvider". The check is
+    //   `set_once` so calling it twice is harmless (the second call
+    //   returns `Err` which we ignore). Dev builds already get a
+    //   provider via `tiberius` / `rust-s3` — this `install_default`
+    //   makes the release build work the same way. ----
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     // ---- T02: load .env (if present) into process env BEFORE
     //   Settings::load() — figment's Env provider only reads from
-    //   std::env, not from disk. `dotenv()` is a no-op when no
-    //   .env exists (production deploys inject env vars via
-    //   docker/k8s/systemd instead). ----
-    let _ = dotenvy::dotenv();
+    //   std::env, not from disk. The file name is selected by
+    //   `KOKKAK_ENVIRONMENT` (default = `development`); production
+    //   deploys inject env vars via docker/k8s/systemd and usually
+    //   ship no .env file — `from_filename` is a no-op in that case. ----
+    let env_file = match std::env::var("KOKKAK_ENVIRONMENT").as_deref() {
+        Ok("production") => ".env.production",
+        _ => ".env.dev",
+    };
+    let _ = dotenvy::from_filename(env_file);
 
     // ---- T02: load & validate configuration ----
     let settings = Settings::load().unwrap_or_else(|err| {

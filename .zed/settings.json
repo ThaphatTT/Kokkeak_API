@@ -3,41 +3,41 @@
     "rust-analyzer": {
       "binary": {
         "path": "rust-analyzer",
-        "lookup_paths": ["$PATH"]
+        "lookup_paths": ["$PATH"],
       },
       "initialization_options": {
         "cargo": {
-          "allFeatures": false
+          "allFeatures": false,
         },
         "check": {
           "command": "clippy",
-          "extraArgs": ["--", "-D", "warnings"]
+          "extraArgs": ["--", "-D", "warnings"],
         },
         "diagnostics": {
           "enable": true,
           "experimental": {
-            "enable": false
-          }
+            "enable": false,
+          },
         },
         "inlayHints": {
           "enable": true,
           "typeHints": true,
           "parameterHints": true,
-          "maxLength": 60
-        }
-      }
-    }
+          "maxLength": 60,
+        },
+      },
+    },
   },
   "file_scan_exclusions": [
     "**/target/**",
     "**/.git/**",
     "**/node_modules/**",
-    "**/data/**"
+    "**/data/**",
   ],
   "git": {
-    "gitignore_entries": ["target/", "data/", ".env"]
+    "gitignore_entries": ["target/", "data/", ".env.dev"],
   },
   "terminal": {
-    "working_directory": "current_project_directory"
-  }
+    "working_directory": "current_project_directory",
+  },
 }
