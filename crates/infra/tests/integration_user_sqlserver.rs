@@ -80,6 +80,7 @@ fn sample_user(role: Role) -> User {
         username: format!("live-{}@example.com", Uuid::new_v4()),
         password_hash: "$argon2id$v=19$m=65536,t=3,p=4$test$test".into(),
         roles: vec![role],
+        permissions: Vec::new(),
         status: UserStatus::Active,
         created_at: now,
         updated_at: now,

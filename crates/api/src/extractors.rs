@@ -26,11 +26,13 @@
 
 use axum::{
     async_trait,
-    extract::{FromRequest, Request},
+    extract::{ConnectInfo, FromRequest, FromRequestParts, Request},
+    http::request::Parts,
     Json,
 };
 use kokkak_common::error::AppError;
 use serde::de::DeserializeOwned;
+use std::net::{IpAddr, SocketAddr};
 use validator::Validate;
 
 use crate::error::ApiError;
@@ -69,6 +71,95 @@ where
             .map_err(|e| ApiError(AppError::Validation(e.to_string())))?;
 
         Ok(Self(value))
+    }
+}
+
+/// `ClientIp` — extracts the **real** client IP for audit logging
+/// and per-(username, IP) rate limiting.
+///
+/// Resolution order:
+///
+/// 1. **`X-Forwarded-For` header** (leftmost IP). Used when the
+///    service runs behind a reverse proxy (nginx, Cloudflare, AWS
+///    ALB, ...). The leftmost IP in `X-Forwarded-For: client, p1, p2`
+///    is the **original** client per the de-facto convention. The
+///    proxy must be configured to **strip** any client-supplied
+///    `X-Forwarded-For` and append the real client IP — see the
+///    deployment guide at the bottom of this doc-comment.
+///
+/// 2. **`ConnectInfo<SocketAddr>`** — the TCP peer address when the
+///    service is hit directly (no proxy, dev mode, integration
+///    tests with `into_make_service_with_connect_info`).
+///
+/// 3. **`None`** — neither source is available (e.g. an in-process
+///    call or a test that doesn't set up the connect info). The
+///    handler decides what to do; today the auth use case skips the
+///    per-(username, IP) rate-limit gate when this is `None`.
+///
+/// Security:
+/// - `X-Forwarded-For` is **spoofable** by any client if the
+///   deployment does not run behind a trusted proxy. In a
+///   direct-internet deployment without a proxy, an attacker can
+///   set this header to any IP. Today we **always trust** the
+///   header for simplicity — the trade-off is a slightly weaker
+///   audit log when the deployment is mis-configured. The
+///   upgrade path is a `KOKKAK_TRUST_FORWARDED_FOR` config flag
+///   (default `true` in deployments with a reverse proxy, default
+///   `false` in direct-internet deployments); the actual logic
+///   change is a 3-line `if settings.trust_forwarded_for { ... }`.
+/// - `ConnectInfo` is not spoofable — the kernel fills in the peer
+///   address on `accept()`.
+///
+/// ponytail: deliberately small and stateless. No cached IP, no
+/// header rewriting. Each request pays one extra header read +
+/// one extra extractor instantiation. Acceptable for a login
+/// endpoint (sub-ms work); if hot paths ever need the same
+/// extractor, hoist it to a `FromRequestParts` impl that caches
+/// in a request extension.
+pub struct ClientIp(pub Option<IpAddr>);
+
+#[async_trait]
+impl<S> FromRequestParts<S> for ClientIp
+where
+    S: Send + Sync,
+{
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        // 1. X-Forwarded-For (RFC 7239 / de-facto header). Format:
+        //    "client, proxy1, proxy2" — leftmost is the original
+        //    client. We accept IPv4 and IPv6; anything malformed is
+        //    silently skipped so a misbehaving header can't lock
+        //    out the whole endpoint.
+        if let Some(forwarded) = parts.headers.get("x-forwarded-for") {
+            if let Ok(s) = forwarded.to_str() {
+                if let Some(first) = s.split(',').next() {
+                    if let Ok(ip) = first.trim().parse::<IpAddr>() {
+                        return Ok(ClientIp(Some(ip)));
+                    }
+                }
+            }
+        }
+        // 2. ConnectInfo<SocketAddr> (axum auto-fills from the
+        //    accepted TCP socket when the router is wrapped in
+        //    `into_make_service_with_connect_info::<SocketAddr>()`).
+        //    The Result is always Ok because ConnectInfo's
+        //    Rejection is `Infallible`; `.ok()` keeps the compiler
+        //    happy without `unwrap`.
+        // `ConnectInfo::Rejection` is `Infallible` so the `match`
+        // collapses to the `Ok` arm — `let-else` keeps the original
+        // behaviour (return early) without the `if-let + .ok()` that
+        // clippy flags as redundant.
+        if let Ok(ConnectInfo(addr)) =
+            ConnectInfo::<SocketAddr>::from_request_parts(parts, state).await
+        {
+            return Ok(ClientIp(Some(addr.ip())));
+        }
+        // 3. Neither source — in-process callers, tests, or
+        //    mis-wired routers. The handler treats this as "no
+        //    IP" and skips the per-(username, IP) gate; audit
+        //    log records `ip: null`.
+        Ok(ClientIp(None))
     }
 }
 
@@ -179,5 +270,110 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("name"), "expected name in error, got: {msg}");
         assert!(msg.contains("age"), "expected age in error, got: {msg}");
+    }
+
+    // ---- ClientIp tests ----
+    //
+    // These don't exercise `oneshot()` end-to-end (axum requires a
+    // router that knows how to call the extractor) — we just drive
+    // the extractor directly through `FromRequestParts::from_request_parts`
+    // on a hand-built `Parts`. Same coverage, half the ceremony.
+
+    use axum::extract::FromRequestParts;
+    use axum::http::Request;
+    use std::net::IpAddr;
+
+    fn parts_from_request(req: Request<Body>) -> Parts {
+        req.into_parts().0
+    }
+
+    async fn extract_ip(req: Request<Body>) -> Option<IpAddr> {
+        let mut parts = parts_from_request(req);
+        ClientIp::from_request_parts(&mut parts, &())
+            .await
+            .unwrap()
+            .0
+    }
+
+    #[tokio::test]
+    async fn x_forwarded_for_header_wins() {
+        // Direct connection from 10.0.0.1 (mimicked by
+        // ConnectInfo<SocketAddr>), behind a proxy that added
+        // X-Forwarded-For: 203.0.113.5 (the real client). The
+        // extractor MUST pick the header value.
+        let mut req = Request::builder()
+            .header("x-forwarded-for", "203.0.113.5")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([10, 0, 0, 1], 12345))));
+        let ip = extract_ip(req).await;
+        assert_eq!(ip, Some("203.0.113.5".parse::<IpAddr>().unwrap()));
+    }
+
+    #[tokio::test]
+    async fn x_forwarded_for_leftmost_wins_in_chain() {
+        // Multiple proxies in chain — leftmost is the original
+        // client per de-facto convention.
+        let req = Request::builder()
+            .header("x-forwarded-for", "203.0.113.5, 198.51.100.1, 10.0.0.1")
+            .body(Body::empty())
+            .unwrap();
+        let ip = extract_ip(req).await;
+        assert_eq!(ip, Some("203.0.113.5".parse::<IpAddr>().unwrap()));
+    }
+
+    #[tokio::test]
+    async fn x_forwarded_for_ipv6_supported() {
+        let req = Request::builder()
+            .header("x-forwarded-for", "2001:db8::1")
+            .body(Body::empty())
+            .unwrap();
+        let ip = extract_ip(req).await;
+        assert_eq!(ip, Some("2001:db8::1".parse::<IpAddr>().unwrap()));
+    }
+
+    #[tokio::test]
+    async fn falls_back_to_connect_info_when_no_header() {
+        // No X-Forwarded-For — direct connection case.
+        let mut req = Request::builder().body(Body::empty()).unwrap();
+        req.extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([10, 0, 0, 1], 12345))));
+        let ip = extract_ip(req).await;
+        assert_eq!(ip, Some("10.0.0.1".parse::<IpAddr>().unwrap()));
+    }
+
+    #[tokio::test]
+    async fn malformed_x_forwarded_for_falls_through() {
+        // Garbage value — must NOT panic, must fall through to
+        // ConnectInfo.
+        let mut req = Request::builder()
+            .header("x-forwarded-for", "not-an-ip")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([10, 0, 0, 1], 12345))));
+        let ip = extract_ip(req).await;
+        assert_eq!(ip, Some("10.0.0.1".parse::<IpAddr>().unwrap()));
+    }
+
+    #[tokio::test]
+    async fn returns_none_when_neither_source_available() {
+        // In-process call, no proxy, no ConnectInfo. The handler
+        // should treat this as "no IP" and skip the rate-limit gate.
+        let req = Request::builder().body(Body::empty()).unwrap();
+        let ip = extract_ip(req).await;
+        assert_eq!(ip, None);
+    }
+
+    #[tokio::test]
+    async fn x_forwarded_for_with_whitespace_trims() {
+        // nginx and CF sometimes add a leading space.
+        let req = Request::builder()
+            .header("x-forwarded-for", "  203.0.113.5  ,  198.51.100.1  ")
+            .body(Body::empty())
+            .unwrap();
+        let ip = extract_ip(req).await;
+        assert_eq!(ip, Some("203.0.113.5".parse::<IpAddr>().unwrap()));
     }
 }

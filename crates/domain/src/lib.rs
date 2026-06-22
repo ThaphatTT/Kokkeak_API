@@ -46,4 +46,4 @@ pub use traits::payment::{PaymentRepoError, PaymentRepository};
 pub use traits::translation::{TranslationError, TranslationRepository};
 pub use traits::user::RepoError;
 pub use traits::{ServiceRepository, UserRepository};
-pub use user::{Role, User, UserStatus};
+pub use user::{Permission, Role, User, UserStatus};

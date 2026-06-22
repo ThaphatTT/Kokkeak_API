@@ -73,17 +73,36 @@ $proc = Start-Process -FilePath $binPath -PassThru `
 Write-Host ('[dev-run] started PID=' + $proc.Id + '. Log: ' + $logDir + '\out.log')
 
 # ---- 4. Smoke-test /healthz ----
-$url = 'http://' + $addr + '/healthz'
+# T-LocalRun: when KOKKAK_TLS__ENABLED=true, the same port serves
+# HTTPS (axum-server::bind_rustls replaces the plain listener). Pick
+# the scheme + cert validation policy from the env, and tell the
+# user the right URL to open in the browser.
+$tlsEnabled = $env:KOKKAK_TLS__ENABLED -eq 'true'
+$scheme     = if ($tlsEnabled) { 'https' } else { 'http' }
+$url        = $scheme + '://' + $addr + '/healthz'
+
+# .NET's TLS chain validation rejects self-signed certs; -SkipCertificateCheck
+# is the dev-run equivalent of curl -k. Safe here: the cert is local-only.
+$smokeOpts = @{
+    Uri              = $url
+    UseBasicParsing  = $true
+    TimeoutSec       = 2
+}
+if ($tlsEnabled) { $smokeOpts['SkipCertificateCheck'] = $true }
+
 $ready = $false
 for ($i = 1; $i -le 20; $i++) {
     Start-Sleep -Milliseconds 500
     try {
-        $r = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 2
+        $r = Invoke-WebRequest @smokeOpts
         if ($r.StatusCode -eq 200) {
             $elapsed = [math]::Round($i * 0.5, 1)
             Write-Host ('[dev-run] ready after ' + $elapsed + 's — GET ' + $url + ' => 200')
-            Write-Host ('[dev-run] OpenAPI: http://' + $addr + '/api/openapi.json')
-            Write-Host ('[dev-run] Swagger: http://' + $addr + '/api/docs/')
+            Write-Host ('[dev-run] OpenAPI: ' + $scheme + '://' + $addr + '/api/openapi.json')
+            Write-Host ('[dev-run] Swagger: ' + $scheme + '://' + $addr + '/api/docs/')
+            if ($tlsEnabled) {
+                Write-Host '[dev-run] TLS: self-signed cert — click through the browser warning.'
+            }
             Write-Host ('[dev-run] Tail log: Get-Content "' + $logDir + '\out.log" -Wait')
             $ready = $true
             break

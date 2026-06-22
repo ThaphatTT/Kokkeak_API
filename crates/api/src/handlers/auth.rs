@@ -42,13 +42,16 @@ use axum::{
 };
 use kokkak_application::auth::{LoginInput, RegisterInput};
 use kokkak_common::response::{created, ApiResponse};
-use kokkak_common::{error::AppError, i18n::current_locale};
+use kokkak_common::{
+    error::AppError,
+    i18n::{current_locale, set_locale},
+};
 use kokkak_domain::Role;
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 
 use crate::error::{ApiError, IntoLocalizedResponse};
-use crate::extractors::ValidatedJson;
+use crate::extractors::{ClientIp, ValidatedJson};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize, Validate, utoipa::ToSchema)]
@@ -82,6 +85,16 @@ pub struct AuthResponse {
     pub token_type: &'static str,
     pub access_ttl_secs: i64,
     pub refresh_ttl_secs: i64,
+    /// IP address the server captured for this login (from
+    /// `X-Forwarded-For` if behind a reverse proxy, otherwise
+    /// from the TCP socket). `None` for in-process callers
+    /// (tests) — the audit log on disk always has the IP.
+    ///
+    /// Frontend can show "last login from 203.0.113.5" so
+    /// users notice unexpected locations. Persisted server-side
+    /// in the audit JSONL too (`logs/auth-audit.jsonl`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_login_ip: Option<std::net::IpAddr>,
 }
 
 impl From<kokkak_application::auth::AuthOutcome> for AuthResponse {
@@ -93,6 +106,11 @@ impl From<kokkak_application::auth::AuthOutcome> for AuthResponse {
             token_type: o.tokens.token_type,
             access_ttl_secs: o.tokens.access_ttl_secs,
             refresh_ttl_secs: o.tokens.refresh_ttl_secs,
+            // The IP is set by the login handler itself (not
+            // AuthOutcome) because the use case doesn't know the
+            // captured IP — only the handler does. The From impl
+            // defaults to None; the handler overrides.
+            last_login_ip: None,
         }
     }
 }
@@ -203,6 +221,20 @@ pub struct LoginRequest {
     /// Token scope (`mobile` / `web` / `admin`). Defaults to `mobile`.
     #[validate(length(max = 16, message = "scope must be 16 characters or fewer"))]
     pub scope: Option<String>,
+    /// Optional language override for the **error response** only
+    /// (`th` / `en` / `lo`). The login endpoint is unauthenticated
+    /// so it cannot read the user's profile locale yet — and mobile
+    /// clients don't reliably send `Accept-Language`. Letting the
+    /// caller pin the language in the body means
+    /// "invalid credentials" / "account locked" / etc. render in
+    /// the user's chosen language even on failure.
+    ///
+    /// Priority: `req.language` > `?lang=` query > `Accept-Language`
+    /// header (the middleware's order). Unknown / unsupported codes
+    /// (`fr`, `de`, …) are silently ignored — the existing locale
+    /// (set by the middleware) stays in effect.
+    #[validate(length(max = 8, message = "language must be 8 characters or fewer"))]
+    pub language: Option<String>,
 }
 
 /// POST /api/v1/auth/login
@@ -219,18 +251,72 @@ pub struct LoginRequest {
 )]
 pub async fn login(
     State(state): State<AppState>,
+    // `ClientIp` reads `X-Forwarded-For` first (real client IP
+    // behind a reverse proxy), then falls back to
+    // `ConnectInfo<SocketAddr>` (the TCP peer address for direct
+    // connections). Returns `None` only in tests / in-process
+    // callers; the auth use case skips the rate-limit gate when
+    // the IP is unknown. See `extractors::ClientIp` for the
+    // trust model and the proxy-deployment caveat.
+    ClientIp(ip): ClientIp,
+    // `ValidatedJson` (the body extractor) MUST be the last
+    // parameter — axum's `Handler` trait picks the body extractor
+    // by position, and putting a `FromRequestParts` extractor
+    // after it confuses the macro.
     ValidatedJson(req): ValidatedJson<LoginRequest>,
 ) -> Result<Response, Response> {
+    // Apply the caller-supplied language **before** invoking the
+    // use case so the localized error message (`into_localized_response`
+    // reads `current_locale()`) renders in the user's chosen
+    // language on 401 / 422 / 500. Unknown codes fall through and
+    // the middleware's locale stays in place.
+    apply_login_language(req.language.as_deref());
+
     let input = LoginInput {
         username: req.username,
         password: req.password,
         scope: req.scope.unwrap_or_else(|| "mobile".into()),
+        ip,
     };
     let outcome = match state.auth.login(input).await {
         Ok(o) => o,
         Err(e) => return Err(ApiError::from(e).into_localized_response(&state).await),
     };
-    Ok(ok(AuthResponse::from(outcome)))
+    // Build the response inline so we can attach `last_login_ip`
+    // — the `From<AuthOutcome>` impl defaults it to `None` because
+    // the use case is IP-unaware; the handler is the only layer
+    // that has the captured IP.
+    let mut resp = AuthResponse::from(outcome);
+    resp.last_login_ip = ip;
+    Ok(ok(resp))
+}
+
+/// Validate `language` against the supported set (`th` / `en` / `lo`)
+/// and override the task-local locale when it matches. Mirrors the
+/// logic in `kokkak_common::i18n::detect_locale` so the supported
+/// set stays single-sourced (i18n module owns the catalog).
+///
+/// ponytail: the supported-locale set is intentionally inlined as a
+/// match here (instead of reading the runtime catalog) because the
+/// catalog may grow keys without adding whole languages. The single
+/// source of truth for which languages are accepted lives in
+/// `common::i18n` — when that list grows, add an arm here too.
+fn apply_login_language(language: Option<&str>) {
+    if let Some(locale) = parse_login_language(language) {
+        set_locale(&locale);
+    }
+}
+
+/// Pure parser for the `language` field — kept separate so the
+/// accept/reject decision is unit-testable without touching the
+/// process-global locale.
+fn parse_login_language(language: Option<&str>) -> Option<String> {
+    let lang = language?;
+    let primary = lang.split('-').next().unwrap_or("").trim().to_lowercase();
+    match primary.as_str() {
+        "th" | "en" | "lo" => Some(primary),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Deserialize, Validate, utoipa::ToSchema)]
@@ -434,6 +520,7 @@ mod tests {
             username: "alice".into(),
             password: "any".into(),
             scope: None,
+            language: None,
         }
     }
 
@@ -450,6 +537,52 @@ mod tests {
         let mut r = valid_login();
         r.username = String::new();
         assert!(r.validate().is_err());
+    }
+
+    #[test]
+    fn login_request_accepts_language_codes_within_length() {
+        // Mobile clients send BCP-47-ish codes ("th", "en-US",
+        // "lo"). 8 chars covers every current locale and leaves
+        // headroom for future additions.
+        for lang in ["th", "en", "lo", "en-US", "th-TH"] {
+            let mut r = valid_login();
+            r.language = Some(lang.into());
+            assert!(r.validate().is_ok(), "language={lang} should be valid");
+        }
+    }
+
+    #[test]
+    fn login_request_rejects_oversized_language() {
+        let mut r = valid_login();
+        r.language = Some("x".repeat(9)); // max 8
+        assert!(r.validate().is_err());
+    }
+
+    #[test]
+    fn parse_login_language_accepts_supported_codes() {
+        // Exact match
+        assert_eq!(parse_login_language(Some("th")), Some("th".into()));
+        assert_eq!(parse_login_language(Some("en")), Some("en".into()));
+        assert_eq!(parse_login_language(Some("lo")), Some("lo".into()));
+        // BCP-47-ish: only the primary subtag matters
+        assert_eq!(parse_login_language(Some("en-US")), Some("en".into()));
+        assert_eq!(parse_login_language(Some("th-TH")), Some("th".into()));
+        // Case insensitive
+        assert_eq!(parse_login_language(Some("TH")), Some("th".into()));
+        assert_eq!(parse_login_language(Some("  en  ")), Some("en".into()));
+    }
+
+    #[test]
+    fn parse_login_language_rejects_unsupported_codes() {
+        // Languages the catalog doesn't ship with must NOT silently
+        // downgrade to English — they must be ignored so the
+        // middleware-set locale (which may already be "th" / "lo")
+        // stays in effect.
+        assert_eq!(parse_login_language(Some("fr")), None);
+        assert_eq!(parse_login_language(Some("de")), None);
+        assert_eq!(parse_login_language(Some("ja")), None);
+        assert_eq!(parse_login_language(Some("")), None);
+        assert_eq!(parse_login_language(None), None);
     }
 
     fn valid_refresh() -> RefreshRequest {

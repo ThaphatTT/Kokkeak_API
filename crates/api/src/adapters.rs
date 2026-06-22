@@ -37,6 +37,9 @@ impl PasswordHasherPort for PasswordHasherAdapter {
     fn verify(&self, password: &str, hash: &str) -> Result<(), AuthError> {
         self.inner.verify(password, hash)
     }
+    fn dummy_hash(&self) -> &str {
+        self.inner.dummy_hash()
+    }
 }
 
 /// Adapter: `JwtService` → `JwtIssuerPort`.

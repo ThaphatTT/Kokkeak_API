@@ -69,6 +69,7 @@ impl LocalizedError for AuthError {
             Self::UsernameTaken => "err_auth.username_taken",
             Self::Validation(_) => "err_auth.validation",
             Self::Backend(_) => "err_auth.backend",
+            Self::RateLimited(_) => "err_general.rate_limited",
         }
     }
 

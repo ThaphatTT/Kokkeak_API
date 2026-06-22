@@ -69,3 +69,5 @@ data/
 /fix_*.py
 
 graphify-out
+
+.zed/

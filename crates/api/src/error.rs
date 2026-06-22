@@ -88,6 +88,7 @@ impl From<AuthError> for ApiError {
             AuthError::UsernameTaken => AppError::UsernameTaken,
             AuthError::Validation(msg) => AppError::Validation(msg),
             AuthError::Backend(msg) => AppError::Internal(msg),
+            AuthError::RateLimited(_) => AppError::RateLimited,
         })
     }
 }

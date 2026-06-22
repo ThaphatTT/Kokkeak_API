@@ -22,7 +22,7 @@
 use async_trait::async_trait;
 use tiberius::ToSql;
 
-use kokkak_domain::{RepoError, Role, User, UserRepository, UserStatus};
+use kokkak_domain::{Permission, RepoError, Role, User, UserRepository, UserStatus};
 use uuid::Uuid;
 
 use crate::db::mssql::{exec_sp, read_i32, read_str, MssqlPool, SpError};
@@ -49,17 +49,17 @@ impl UserRepository for MssqlUserRepository {
             &[&id as &dyn ToSql],
         )
         .await?;
-        // First row: profile. Second row: roles CSV.
+        // First row: profile. Second row: roles + permissions CSV.
         let profile = rows
             .first()
             .ok_or_else(|| RepoError::Backend("API_USER_FIND_BY_ID returned no row".into()))?;
         let user = row_to_user(profile)?;
-        let roles = rows
-            .get(1)
-            .and_then(|r| read_str(r, 0))
-            .map(parse_role_codes)
-            .unwrap_or_default();
-        Ok(Some(User { roles, ..user }))
+        let (roles, permissions) = read_roles_and_permissions(&rows, 1)?;
+        Ok(Some(User {
+            roles,
+            permissions,
+            ..user
+        }))
     }
 
     async fn find_by_username(&self, username: &str) -> Result<Option<User>, RepoError> {
@@ -82,12 +82,12 @@ impl UserRepository for MssqlUserRepository {
         // §1.8 + §3 Step 5) — we only see roles that already passed.
         // Effective permissions (role + allow − deny) + data scope
         // land in M15+ via a dedicated SP_USER_GET_EFFECTIVE_PERMISSIONS.
-        let roles = rows
-            .get(1)
-            .and_then(|r| read_str(r, 0))
-            .map(parse_role_codes)
-            .unwrap_or_default();
-        Ok(Some(User { roles, ..user }))
+        let (roles, permissions) = read_roles_and_permissions(&rows, 1)?;
+        Ok(Some(User {
+            roles,
+            permissions,
+            ..user
+        }))
     }
 
     async fn insert(&self, user: &User) -> Result<(), RepoError> {
@@ -224,11 +224,42 @@ fn row_to_user(row: &tiberius::Row) -> Result<User, RepoError> {
         last_name: last_name.to_string(),
         username: username.to_string(),
         password_hash: password_hash.to_string(),
-        roles: Vec::new(), // filled by caller
+        roles: Vec::new(),       // filled by caller
+        permissions: Vec::new(), // filled by caller
         status,
         created_at,
         updated_at,
     })
+}
+
+/// Read the (roles, permissions) pair from the named row of an
+/// `exec_sp` result set.
+///
+/// Per the stored-procedure contract documented in
+/// `migrations/20260620000001_sp_user.sql`, the second result-set row
+/// contains two CSV columns:
+/// - column 0 → `role_codes`         (snake_case: `customer,admin,…`)
+/// - column 1 → `permission_codes`   (SCREAMING_SNAKE_CASE: `PAGE_JOBS_VIEW,JOBS_CREATE,…`)
+///
+/// Both columns are independently optional (NULL on no rows), so we
+/// never panic when the SP returns just one column or the user has
+/// no role / no permission yet. The CSVs are parsed by
+/// [`parse_role_codes`] and [`parse_permission_codes`].
+fn read_roles_and_permissions(
+    rows: &[tiberius::Row],
+    idx: usize,
+) -> Result<(Vec<Role>, Vec<Permission>), RepoError> {
+    let roles = rows
+        .get(idx)
+        .and_then(|r| read_str(r, 1))
+        .map(parse_role_codes)
+        .unwrap_or_default();
+    let permissions = rows
+        .get(idx)
+        .and_then(|r| read_str(r, 0))
+        .map(parse_permission_codes)
+        .unwrap_or_default();
+    Ok((roles, permissions))
 }
 
 /// Split a comma-separated role_codes string into Vec<Role>.
@@ -307,6 +338,76 @@ mod parse_role_codes_tests {
         assert_eq!(
             parse_role_codes("customer,new_admin_role,admin"),
             vec![Role::Customer, Role::Admin]
+        );
+    }
+}
+
+/// Split a comma-separated `permission_codes` string into `Vec<Permission>`.
+///
+/// Mirrors [`parse_role_codes`]: the SP returns
+/// `SCREAMING_SNAKE_CASE` codes (`PAGE_JOBS_VIEW,JOBS_CREATE,…`); we
+/// trim each segment, skip empties, and log a WARN for codes that
+/// the Rust enum does not yet know about so DBA-side additions are
+/// observable in production instead of silently dropped.
+fn parse_permission_codes(s: &str) -> Vec<Permission> {
+    let mut out = Vec::new();
+    for raw in s.split(',') {
+        let code = raw.trim();
+        if code.is_empty() {
+            continue;
+        }
+        match Permission::from_code(code) {
+            Some(p) => out.push(p),
+            None => tracing::warn!(
+                permission_code = %code,
+                "mssql_user::parse_permission_codes: unknown permission code from DB \
+                 — DBA may have added a new permission; backend enum out of sync"
+            ),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod parse_permission_codes_tests {
+    //! Unit tests for the permission CSV parser — same contract as
+    //! the role parser: tolerant of trailing commas, whitespace, and
+    //! unknown codes.
+    use super::*;
+    use kokkak_domain::Permission;
+
+    #[test]
+    fn parses_known_codes() {
+        assert_eq!(
+            parse_permission_codes("PAGE_DASHBOARD_VIEW,JOBS_CREATE,JOBS_UPDATE"),
+            vec![
+                Permission::PageDashboardView,
+                Permission::JobsCreate,
+                Permission::JobsUpdate,
+            ]
+        );
+    }
+
+    #[test]
+    fn skips_empty_segments_and_trims() {
+        assert_eq!(
+            parse_permission_codes("PAGE_JOBS_VIEW,,JOBS_CREATE,"),
+            vec![Permission::PageJobsView, Permission::JobsCreate]
+        );
+        assert_eq!(parse_permission_codes(""), Vec::<Permission>::new());
+        assert_eq!(
+            parse_permission_codes(" JOBS_EXPORT "),
+            vec![Permission::JobsExport]
+        );
+    }
+
+    #[test]
+    fn skips_unknown_codes_without_panicking() {
+        // Future permission added by the DBA before the Rust enum
+        // catches up. We keep the well-known ones and warn (not test).
+        assert_eq!(
+            parse_permission_codes("JOBS_CREATE,FUTURE_PERMISSION,JOBS_DELETE"),
+            vec![Permission::JobsCreate, Permission::JobsDelete]
         );
     }
 }

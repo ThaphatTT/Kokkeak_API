@@ -15,7 +15,31 @@
       "RUST_LOG": "kokkak=debug,tower_http=info,info",
       "RUST_BACKTRACE": "1",
     },
-    "stop_on_entry": false
+    "stop_on_entry": false,
+  },
+  {
+    "label": "Debug kokkak-api (HTTPS)",
+    "adapter": "CodeLLDB",
+    "build": {
+      "command": "cargo",
+      "args": ["build", "-p", "kokkak-api", "--bin", "kokkak-api"],
+      "cwd": "$ZED_WORKTREE_ROOT",
+    },
+    "request": "launch",
+    "program": "$ZED_WORKTREE_ROOT/target/debug/kokkak-api.exe",
+    "args": [],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "env": {
+      "RUST_LOG": "kokkak=debug,tower_http=info,info",
+      "RUST_BACKTRACE": "1",
+      "KOKKAK_TLS__ENABLED": "true",
+      "KOKKAK_TLS__CERT_PATH": "certs/localhost.pem",
+      "KOKKAK_TLS__KEY_PATH": "certs/localhost-key.pem",
+      "KOKKAK_TLS__REDIRECT_FROM_PORT": "18081",
+      "KOKKAK_TLS__HSTS_MAX_AGE_SECS": "0",
+      "KOKKAK_TLS__AUTO_RELOAD": "false",
+    },
+    "stop_on_entry": false,
   },
   {
     "label": "Debug kokkak-worker",
@@ -33,7 +57,7 @@
       "RUST_LOG": "kokkak=debug,info",
       "RUST_BACKTRACE": "1",
     },
-    "stop_on_entry": false
+    "stop_on_entry": false,
   },
   {
     "label": "Attach to kokkak-api (pid)",

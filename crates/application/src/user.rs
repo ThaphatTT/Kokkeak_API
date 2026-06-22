@@ -109,6 +109,7 @@ mod tests {
             username: "ab".into(),
             password_hash: "$argon2".into(),
             roles: vec![Role::Customer],
+            permissions: Vec::new(),
             status: UserStatus::Active,
             created_at: Utc::now(),
             updated_at: Utc::now(),

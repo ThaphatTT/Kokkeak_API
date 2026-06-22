@@ -21,14 +21,40 @@ use kokkak_domain::AuthError;
 pub const MIN_PASSWORD_LEN: usize = 8;
 
 /// Argon2id hasher.
+///
+/// Carries a pre-computed throwaway hash (see [`Self::dummy_hash`]) used
+/// by the login flow to keep response time constant when the
+/// username is unknown (OWASP Authentication Cheat Sheet § Username
+/// Enumeration, NIST SP 800-63B § 5.2.2).
 #[derive(Clone)]
-pub struct PasswordHasherImpl;
+pub struct PasswordHasherImpl {
+    /// PHC string of a throwaway plaintext. The salt is random per
+    /// process instance so no real password can ever match this
+    /// hash; the cost parameters match `Argon2::default()` so a
+    /// `verify()` call against it takes the same wall-clock time
+    /// as a verify against a real user's hash.
+    dummy_hash: String,
+}
+
+/// Plaintext used to pre-compute [`PasswordHasherImpl::dummy_hash`].
+/// Embedded as a fixed string so the value is reproducible across
+/// processes (helps when checking logs / forensics). The salt is
+/// still random per `new()` — only the plaintext is constant.
+const DUMMY_PASSWORD: &str = "__kokkak_constant_time_login_only__";
 
 impl PasswordHasherImpl {
-    /// Construct a stateless argon2id hasher (the algorithm state is
-    /// pulled from `Argon2::default()` on every call).
+    /// Construct an argon2id hasher and pre-compute the dummy hash
+    /// used by the constant-time login guard. The dummy hash
+    /// generation runs once at startup (~50–200 ms); it is NOT
+    /// re-computed on every login call.
     pub fn new() -> Self {
-        Self
+        let argon2 = Argon2::default();
+        let salt = SaltString::generate(&mut OsRng);
+        let dummy_hash = argon2
+            .hash_password(DUMMY_PASSWORD.as_bytes(), &salt)
+            .map(|h| h.to_string())
+            .expect("argon2 hash of dummy plaintext must succeed; this is a startup invariant");
+        Self { dummy_hash }
     }
 
     /// Hash a plaintext password. Use this on **register / reset**
@@ -56,6 +82,13 @@ impl PasswordHasherImpl {
         Argon2::default()
             .verify_password(password.as_bytes(), &parsed)
             .map_err(|_| AuthError::InvalidCredentials)
+    }
+
+    /// Throwaway PHC string for the constant-time login guard. The
+    /// returned reference is borrowed from `self` and lives for the
+    /// lifetime of the hasher (typically the whole process).
+    pub fn dummy_hash(&self) -> &str {
+        &self.dummy_hash
     }
 }
 

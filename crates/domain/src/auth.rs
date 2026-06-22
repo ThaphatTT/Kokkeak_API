@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::user::Role;
+use crate::user::{Permission, Role};
 
 /// Typed auth errors (mapped to HTTP statuses by the API layer).
 #[derive(Debug, Clone, Error)]
@@ -46,6 +46,13 @@ pub enum AuthError {
     /// 500 — backend (argon2 / repo) failure.
     #[error("auth backend error: {0}")]
     Backend(String),
+
+    /// 429 — too many failed login attempts for this (username, IP)
+    /// pair within the rate-limit window. Carries the seconds
+    /// until the client may retry (driven by the rate limiter's
+    /// oldest failure timestamp).
+    #[error("rate limited (retry after {0}s)")]
+    RateLimited(u64),
 }
 
 /// JWT claims (the body of every access / refresh token).
@@ -125,6 +132,12 @@ impl AuthSession {
 /// - `username` (was `email`)
 /// - `first_name` + `last_name` (was `display_name`)
 /// - no `locale` (locale comes from JWT / Accept-Language per M11)
+///
+/// The `permissions` vector is the effective set returned by the
+/// stored procedure (role grants + explicit allow − deny). The
+/// frontend matches these codes to decide which pages / buttons to
+/// render — keeping the policy on the backend and the rendering on
+/// the client.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct PublicUser {
@@ -138,6 +151,10 @@ pub struct PublicUser {
     pub last_name: String,
     /// Roles assigned via `[user_user_role]` join (M14).
     pub roles: Vec<Role>,
+    /// Effective permissions (SCREAMING_SNAKE_CASE codes, e.g.
+    /// `"PAGE_JOBS_VIEW"`, `"JOBS_CREATE"`). Empty vec means the
+    /// SP returned no rows or all codes were unknown to Rust.
+    pub permissions: Vec<Permission>,
     /// Account lifecycle status (0=Active, 1=Suspended, 2=Locked, 3=Disabled).
     pub status: crate::user::UserStatus,
     /// UTC timestamp the user record was first persisted.
@@ -152,6 +169,7 @@ impl From<&crate::user::User> for PublicUser {
             first_name: u.first_name.clone(),
             last_name: u.last_name.clone(),
             roles: u.roles.clone(),
+            permissions: u.permissions.clone(),
             status: u.status,
             created_at: u.created_at,
         }
@@ -226,6 +244,7 @@ mod tests {
             username: "ab".into(),
             password_hash: "$argon2id$SECRET".into(),
             roles: vec![Role::Customer],
+            permissions: Vec::new(),
             status: crate::user::UserStatus::Active,
             created_at: now,
             updated_at: now,
@@ -237,5 +256,31 @@ mod tests {
         assert!(s.contains("username"));
         assert!(s.contains("first_name"));
         assert!(s.contains("last_name"));
+    }
+
+    #[test]
+    fn public_user_exposes_permissions_as_codes() {
+        // The frontend matches these exact strings, so the
+        // serialization shape is part of the API contract.
+        let now = Utc::now();
+        let u = crate::user::User {
+            id: Uuid::new_v4(),
+            first_name: "A".into(),
+            last_name: "B".into(),
+            username: "ab".into(),
+            password_hash: "x".into(),
+            roles: vec![Role::Admin],
+            permissions: vec![Permission::PageJobsView, Permission::JobsCreate],
+            status: crate::user::UserStatus::Active,
+            created_at: now,
+            updated_at: now,
+        };
+        let pubu = PublicUser::from(&u);
+        let v: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&pubu).unwrap()).unwrap();
+        assert_eq!(
+            v["permissions"],
+            serde_json::json!(["PAGE_JOBS_VIEW", "JOBS_CREATE"])
+        );
     }
 }
