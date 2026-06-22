@@ -75,6 +75,13 @@ impl UserRepository for MssqlUserRepository {
             Some(r) => r,
         };
         let user = row_to_user(profile)?;
+        // Roles CSV from the second result set.
+        // Status (user_user_role.status=1, user_role.status=1) and
+        // expire_at are filtered inside the SP (see
+        // migrations/20260620000001_sp_user.sql + RDBMS Permssion.md
+        // §1.8 + §3 Step 5) — we only see roles that already passed.
+        // Effective permissions (role + allow − deny) + data scope
+        // land in M15+ via a dedicated SP_USER_GET_EFFECTIVE_PERMISSIONS.
         let roles = rows
             .get(1)
             .and_then(|r| read_str(r, 0))
@@ -173,9 +180,12 @@ impl UserRepository for MssqlUserRepository {
 /// The `roles` field is filled by the caller after reading the
 /// second result set.
 fn row_to_user(row: &tiberius::Row) -> Result<User, RepoError> {
-    let id: Uuid = row
-        .get::<Uuid, _>("user_guid")
+    let id_str: &str = row
+        .get::<&str, _>("user_guid")
         .ok_or_else(|| RepoError::Backend("missing id".into()))?;
+
+    let id = Uuid::parse_str(id_str)
+        .map_err(|e| RepoError::Backend(format!("invalid user_guid: {e}")))?;
     let first_name: &str = row
         .get::<&str, _>("user_first_name")
         .ok_or_else(|| RepoError::Backend("missing first_name".into()))?;
@@ -191,12 +201,21 @@ fn row_to_user(row: &tiberius::Row) -> Result<User, RepoError> {
     let status_i32: i32 = row
         .get::<i32, _>("user_status")
         .ok_or_else(|| RepoError::Backend("missing status".into()))?;
-    let created_at = row
-        .get::<chrono::DateTime<chrono::Utc>, _>("user_username_create_at")
+
+    let created_at_naive = row
+        .get::<chrono::NaiveDateTime, _>("user_username_create_at")
         .ok_or_else(|| RepoError::Backend("missing created_at".into()))?;
-    let updated_at = row
-        .get::<chrono::DateTime<chrono::Utc>, _>("user_username_update_by")
+
+    let updated_at_naive = row
+        .get::<chrono::NaiveDateTime, _>("user_username_update_at")
         .ok_or_else(|| RepoError::Backend("missing updated_at".into()))?;
+
+    let created_at =
+        chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(created_at_naive, chrono::Utc);
+
+    let updated_at =
+        chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(updated_at_naive, chrono::Utc);
+
     let status = UserStatus::from_i32(status_i32)
         .ok_or_else(|| RepoError::Backend(format!("unknown status: {status_i32}")))?;
     Ok(User {
@@ -213,9 +232,81 @@ fn row_to_user(row: &tiberius::Row) -> Result<User, RepoError> {
 }
 
 /// Split a comma-separated role_codes string into Vec<Role>.
+///
+/// Per RDBMS Permssion.md §1.8 + §3 Step 5 the SQL filter for
+/// `user_role_status=1` AND `(expire_at IS NULL OR > now)` MUST run
+/// in the stored procedure — Rust only receives role_codes that
+/// already passed those gates. We log unknown codes at WARN level
+/// (instead of silently dropping them) so a DBA-created role that's
+/// not yet mapped in Rust shows up in observability.
+///
+/// ponytail: full effective-permission calculation (§5: role + allow
+/// − deny) belongs in a dedicated `SP_USER_GET_EFFECTIVE_PERMISSIONS`
+/// call — the `roles` Vec on the aggregate stays as-is until M15+.
+/// Scope / department / permission_override land there.
 fn parse_role_codes(s: &str) -> Vec<Role> {
-    s.split(',')
-        .filter(|c| !c.is_empty())
-        .filter_map(|code| Role::from_code(code.trim()))
-        .collect()
+    let mut out = Vec::new();
+    for raw in s.split(',') {
+        let code = raw.trim();
+        if code.is_empty() {
+            continue;
+        }
+        match Role::from_code(code) {
+            Some(r) => out.push(r),
+            None => tracing::warn!(
+                role_code = %code,
+                "mssql_user::parse_role_codes: unknown role code from DB \
+                 — DBA may have added a new role; backend enum out of sync"
+            ),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod parse_role_codes_tests {
+    //! Unit tests for the CSV parser — the SP does the heavy lifting
+    //! (status + expire_at filtering) and these tests confirm the
+    //! Rust side never crashes on the wire format the DBA may tweak.
+    use super::*;
+    use kokkak_domain::Role;
+
+    #[test]
+    fn parses_all_known_codes() {
+        assert_eq!(
+            parse_role_codes("customer,admin,super_admin"),
+            vec![Role::Customer, Role::Admin, Role::SuperAdmin]
+        );
+    }
+
+    #[test]
+    fn skips_empty_segments() {
+        // STUFF(..., 1, 1, '') on an empty subquery yields '' — and
+        // a stray trailing comma would split to ["customer", ""].
+        assert_eq!(
+            parse_role_codes("customer,,admin,"),
+            vec![Role::Customer, Role::Admin]
+        );
+        assert_eq!(parse_role_codes(""), Vec::<Role>::new());
+    }
+
+    #[test]
+    fn trims_whitespace_around_codes() {
+        assert_eq!(
+            parse_role_codes(" customer , admin "),
+            vec![Role::Customer, Role::Admin]
+        );
+    }
+
+    #[test]
+    fn skips_unknown_codes_without_panicking() {
+        // DBA added a role not yet mapped in the Rust enum — we must
+        // not panic at startup. The WARN log is captured by
+        // tracing-subscriber in production; here we just verify the
+        // well-known codes still come through.
+        assert_eq!(
+            parse_role_codes("customer,new_admin_role,admin"),
+            vec![Role::Customer, Role::Admin]
+        );
+    }
 }

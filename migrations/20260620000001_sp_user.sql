@@ -137,6 +137,10 @@ BEGIN
       AND LOWER(un.user_username_username) = LOWER(@p_username);
 
     -- Roles (separate result set; empty if user not found)
+    -- Filter per RDBMS Permssion.md §1.8 + §3 Step 5:
+    --   user_user_role.status = 1 (assignment active)
+    --   user_role.status      = 1 (role itself not retired)
+    --   user_user_role_expire_at IS NULL OR > now (not expired)
     SELECT STUFF((
         SELECT ',' + ur.user_role_code
         FROM [user_user_role] uur
@@ -146,6 +150,9 @@ BEGIN
             ON un.user_username_user_guid = uur.user_user_role_user_guid
         WHERE LOWER(un.user_username_username) = LOWER(@p_username)
           AND uur.user_user_role_status = 1
+          AND ur.user_role_status = 1
+          AND (uur.user_user_role_expire_at IS NULL
+               OR uur.user_user_role_expire_at > SYSUTCDATETIME())
         FOR XML PATH('')
     ), 1, 1, '') AS role_codes;
 END;
@@ -186,6 +193,9 @@ BEGIN
             ON ur.user_role_guid = uur.user_user_role_role_guid
         WHERE uur.user_user_role_user_guid = @p_user_guid
           AND uur.user_user_role_status = 1
+          AND ur.user_role_status = 1
+          AND (uur.user_user_role_expire_at IS NULL
+               OR uur.user_user_role_expire_at > SYSUTCDATETIME())
         FOR XML PATH('')
     ), 1, 1, '') AS role_codes;
 END;
