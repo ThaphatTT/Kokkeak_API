@@ -44,10 +44,10 @@ impl Role {
     /// Canonical snake_case identifier (stable, switch-friendly).
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Customer => "customer",
-            Self::Technician => "technician",
-            Self::Admin => "admin",
-            Self::SuperAdmin => "super_admin",
+            Self::Customer => "CUSTOMER",
+            Self::Technician => "TECHNICIAN",
+            Self::Admin => "ADMIN",
+            Self::SuperAdmin => "SUPER_ADMIN",
         }
     }
 
@@ -57,10 +57,10 @@ impl Role {
     pub fn from_code(s: &str) -> Option<Self> {
         match s {
             "FINANCE_EXPORT" => Some(Self::Customer),
-            "customer" => Some(Self::Customer),
-            "technician" => Some(Self::Technician),
-            "admin" => Some(Self::Admin),
-            "super_admin" => Some(Self::SuperAdmin),
+            "CUSTOMER" => Some(Self::Customer),
+            "TECHNICIAN" => Some(Self::Technician),
+            "ADMIN" => Some(Self::Admin),
+            "SUPER_ADMIN" => Some(Self::SuperAdmin),
             _ => None,
         }
     }

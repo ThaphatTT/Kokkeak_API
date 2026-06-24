@@ -37,6 +37,7 @@ use kokkak_infra::cache::translation_cache::CachedTranslationRepository;
 use kokkak_infra::db::migrate;
 use kokkak_infra::db::mssql::build_pool;
 use kokkak_infra::db::mssql_translation::MssqlTranslationRepository;
+use kokkak_infra::db::mssql_user_role::MssqlUserRoleRepository;
 use std::path::PathBuf;
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -112,6 +113,10 @@ async fn make_app() -> (axum::Router, Arc<MssqlTranslationRepository>) {
         orders: order_repo,
         chat: chat_repo,
         payments: payment_repo,
+        // M15-prep: shared with the admin permissions endpoint.
+        // Mirrors the production wiring so this test exercises
+        // the same dependency-graph as the real binary.
+        user_roles: Arc::new(MssqlUserRoleRepository::new(pool.clone())),
         translation: cached,
         mssql_pool: None,
         topology: None,

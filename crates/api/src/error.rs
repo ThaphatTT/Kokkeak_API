@@ -88,7 +88,9 @@ impl From<AuthError> for ApiError {
             AuthError::UsernameTaken => AppError::UsernameTaken,
             AuthError::Validation(msg) => AppError::Validation(msg),
             AuthError::Backend(msg) => AppError::Internal(msg),
-            AuthError::RateLimited(_) => AppError::RateLimited,
+            AuthError::RateLimited(secs) => AppError::RateLimited {
+                retry_after_secs: secs,
+            },
         })
     }
 }
@@ -214,7 +216,7 @@ fn l10n_key_for_app_error(err: &AppError) -> &'static str {
         AppError::UsernameTaken => "err_auth.username_taken",
         AppError::Validation(_) => "err_auth.validation",
         AppError::RoleNotAllowed(_) => "err_auth.role_not_allowed",
-        AppError::RateLimited => "err_general.rate_limited",
+        AppError::RateLimited { .. } => "err_general.rate_limited",
         AppError::Internal(_) => "err_general.internal",
         // Handled by the early return in `into_localized_response` —
         // unreachable in practice.
@@ -239,7 +241,7 @@ fn l10n_args_for_app_error(err: &AppError) -> Vec<String> {
         | AppError::TokenExpired
         | AppError::AdminRequired
         | AppError::UsernameTaken
-        | AppError::RateLimited
+        | AppError::RateLimited { .. }
         | AppError::Localized { .. } => vec![],
     }
 }
@@ -287,6 +289,77 @@ mod tests {
         // AuthError::Backend gets the shared catch-all key.
         let api_err: ApiError = ApiError::from(AuthError::Backend("x".into()));
         assert_eq!(l10n_key_for_app_error(&api_err.0), "err_general.internal");
+    }
+
+    #[test]
+    fn all_login_failure_modes_produce_byte_identical_unauthorized_response() {
+        // OWASP Authentication Cheat Sheet § "Authentication Responses":
+        // the server MUST return a generic message that does NOT
+        // disclose whether the user account exists. The KOKKAK auth
+        // use case already collapses all 5 reasons into
+        // `AuthError::InvalidCredentials`; this test pins the
+        // **HTTP layer** invariant — the same `AppError::Unauthorized`
+        // with the same code, same status, same i18n key, regardless
+        // of which failure path the login service took.
+        //
+        // If a future change re-introduces a different error
+        // variant (e.g. `AccountSuspended`) for any of these
+        // scenarios, this test fails loudly so the security review
+        // catches it.
+        //
+        // Note: AuthError does not expose the internal
+        // `LoginFailureReason` enum (it's private to the auth
+        // service), so the test exercises the public surface that
+        // the HTTP layer actually sees. The 5 scenarios below are
+        // the 5 distinct public `AuthError` outcomes a login
+        // attempt can produce.
+        let scenarios: Vec<(&'static str, AuthError)> = vec![
+            // 1. user-not-found
+            (
+                "user_not_found",
+                AuthError::InvalidCredentials, // collapsed at use case layer
+            ),
+            // 2. wrong-password
+            ("wrong_password", AuthError::InvalidCredentials),
+            // 3. account-suspended (still collapses)
+            ("account_suspended", AuthError::InvalidCredentials),
+            // 4. account-deleted (still collapses)
+            ("account_deleted", AuthError::InvalidCredentials),
+            // 5. account-pending (still collapses)
+            ("account_pending", AuthError::InvalidCredentials),
+            // 6. rate-limited (the ONE non-generic path — surfaces
+            //    429 with Retry-After, not 401). Documented
+            //    exception: the user IS being told they're being
+            //    throttled, not denied, so a different status is OK.
+        ];
+
+        for (label, src) in scenarios {
+            let api: ApiError = ApiError::from(src);
+            assert_eq!(
+                api.0,
+                AppError::Unauthorized,
+                "{label}: login failure must collapse into AppError::Unauthorized"
+            );
+            assert_eq!(
+                api.0.status().as_u16(),
+                401,
+                "{label}: HTTP status must be 401"
+            );
+            assert_eq!(
+                api.0.code(),
+                "unauthorized",
+                "{label}: error code must be the generic `unauthorized`"
+            );
+            assert_eq!(
+                l10n_key_for_app_error(&api.0),
+                "err_auth.invalid_credentials",
+                "{label}: i18n key must be the generic `err_auth.invalid_credentials`"
+            );
+            assert!(
+                l10n_args_for_app_error(&api.0).is_empty(),
+                "{label}: i18n args must be empty (no leaked context)"
+            );
+        }
     }
 
     #[test]

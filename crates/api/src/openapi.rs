@@ -69,6 +69,7 @@ use crate::handlers;
         handlers::payment::list_payouts_admin,
         handlers::payment::mark_payout_paid_admin,
         handlers::admin::create_user_admin,
+        handlers::admin::list_permissions,
     ),
     components(
         schemas(
@@ -81,6 +82,7 @@ use crate::handlers;
             handlers::catalog::ListQuery,
             handlers::catalog::ServiceItem,
             handlers::admin::CreateUserRequest,
+            handlers::admin::PermissionsQuery,
             // Domain entities (cfg-gated `ToSchema` via the `openapi` feature).
             kokkak_domain::PublicUser,
             kokkak_domain::ServiceCategory,
@@ -91,6 +93,9 @@ use crate::handlers;
             kokkak_domain::Payout,
             kokkak_domain::PayoutStatus,
             kokkak_domain::Role,
+            kokkak_domain::UserRolePermission,
+            kokkak_domain::UserRolePermissionRow,
+            kokkak_domain::UserRoleWithPermissions,
             // Error envelope (used by all 4xx / 5xx responses).
             ApiError,
             ApiErrorBody,

@@ -9,6 +9,7 @@ use kokkak_application::chat::{BroadcastTransport, ChatService};
 use kokkak_application::order::OrderService;
 use kokkak_application::payment::PaymentService;
 use kokkak_application::user::UserService;
+use kokkak_application::user_role::UserRoleService;
 use kokkak_common::config::Settings;
 use kokkak_domain::{
     ChatMembership, ChatRepoError, ChatRepository, HealthRegistry, TranslationRepository,
@@ -55,6 +56,8 @@ pub struct AppState {
     pub chat: ChatHandle,
     /// Payment use cases (M9).
     pub payments: Arc<PaymentService>,
+    /// M15-prep: role × permission use cases (`GET /api/v1/admin/permissions`).
+    pub user_roles: Arc<UserRoleService>,
     /// JWT service (for extractor verification).
     pub jwt: Arc<JwtService>,
     /// Health registry for `/readyz`.
@@ -174,6 +177,7 @@ impl AppState {
         orders: Arc<OrderService>,
         chat: ChatHandle,
         payments: Arc<PaymentService>,
+        user_roles: Arc<UserRoleService>,
         jwt: Arc<JwtService>,
         health: HealthRegistry,
         translation: Arc<dyn TranslationRepository>,
@@ -186,6 +190,7 @@ impl AppState {
             orders,
             chat,
             payments,
+            user_roles,
             jwt,
             health,
             users: user,
@@ -205,6 +210,7 @@ impl AppState {
         orders: Arc<OrderService>,
         chat: Arc<ChatService>,
         payments: Arc<PaymentService>,
+        user_roles: Arc<UserRoleService>,
         jwt: Arc<JwtService>,
         health: HealthRegistry,
         translation: Arc<dyn TranslationRepository>,
@@ -221,6 +227,7 @@ impl AppState {
             orders,
             chat: chat_handle,
             payments,
+            user_roles,
             jwt,
             health,
             users: user,

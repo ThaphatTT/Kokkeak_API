@@ -76,3 +76,7 @@ err_order:
 # -- Generic request validation --
 err_request:
   bad_timestamp: "after ຕ້ອງເປັນ timestamp ແບບ RFC3339"
+
+# -- Admin permissions (M15-prep: GET /api/v1/admin/permissions) --
+err_permission:
+  mode_required: "ຕ້ອງລະບຸ query parameter `mode`"

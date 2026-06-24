@@ -23,6 +23,7 @@ use kokkak_infra::db::mssql_order::MssqlOrderRepository;
 use kokkak_infra::db::mssql_payment::MssqlPaymentRepository;
 use kokkak_infra::db::mssql_translation::MssqlTranslationRepository;
 use kokkak_infra::db::mssql_user::MssqlUserRepository;
+use kokkak_infra::db::mssql_user_role::MssqlUserRoleRepository;
 use std::path::PathBuf;
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -88,6 +89,11 @@ async fn make_app() -> (axum::Router, Vec<PathBuf>) {
         orders: order_repo,
         chat: chat_repo,
         payments: payment_repo,
+        // M15-prep: shared with the admin permissions endpoint.
+        // Tests for this repo live in the unit suite (mock impl);
+        // this integration test exercises the rest of the route
+        // table and just needs any impl that satisfies the trait.
+        user_roles: Arc::new(MssqlUserRoleRepository::new(pool.clone())),
         translation,
         mssql_pool: None,
         topology: None,

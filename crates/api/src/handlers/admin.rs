@@ -1,9 +1,10 @@
 //! Admin HTTP handlers (M14.5 register-role split + T-06 refactor).
 //!
-//! ponytail: single endpoint right now (`POST /api/v1/admin/users`).
-//! Future admin endpoints (list users, suspend, change roles, etc.)
-//! live here too — the file is the home for any route that requires
-//! `Admin` / `SuperAdmin` privileges.
+//! - `POST /api/v1/admin/users` — admin-only user creation (M14.5).
+//! - `GET /api/v1/admin/permissions?mode=<literal>` — role × permission
+//!   matrix (M15-prep). The `mode` is a pass-through literal the SP
+//!   uses to scope which role set to return (e.g. `SELECT_ADMIN`,
+//!   `SELECT_EMPLOYEE`); the service does not validate it.
 //!
 //! **T-06**: the bespoke `forbidden` / `validation` envelope
 //! helpers were deleted; role + RBAC failures now build an
@@ -11,15 +12,17 @@
 //! like every other handler.
 
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
+    Json,
 };
 use kokkak_application::auth::RegisterInput;
 use kokkak_common::error::AppError;
+use kokkak_common::error_codes::ErrorCode;
 use kokkak_common::i18n::{current_locale, tr};
-use kokkak_common::response::created;
-use kokkak_domain::Role;
+use kokkak_common::response::{created, ApiResponse};
+use kokkak_domain::{Role, UserRoleWithPermissions};
 use serde::Deserialize;
 use validator::Validate;
 
@@ -116,4 +119,112 @@ pub async fn create_user_admin(
     Ok((StatusCode::CREATED, created(AuthResponse::from(outcome))).into_response())
 }
 
-// Re-import the auth response shape is at the top of the file.
+// ============================================================================
+// M15-prep: GET /api/v1/admin/permissions
+// ============================================================================
+
+/// Query parameters for the role × permission matrix endpoint.
+///
+/// `mode` is **required** — it's the pass-through literal the SP
+/// uses to scope which role set to return (e.g. `SELECT_ADMIN`,
+/// `SELECT_EMPLOYEE`). The handler does not validate the value;
+/// unknown modes return zero rows from the SP, which the wire
+/// payload surfaces as an empty list (graceful, not 404).
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
+pub struct PermissionsQuery {
+    /// Pass-through mode literal forwarded to the SP (e.g.
+    /// `SELECT_ADMIN`, `SELECT_EMPLOYEE`). Application-defined;
+    /// unknown values return an empty list.
+    pub mode: String,
+}
+
+/// `GET /api/v1/admin/permissions?mode=<literal>`
+///
+/// Read-only view of the role × permission matrix, grouped by
+/// role. The `mode` is forwarded to the SP verbatim — no
+/// transformation, no enum validation, no trimming.
+///
+/// RBAC: `Admin` or `SuperAdmin` only. The `admin_flag`
+/// middleware (T-31) also gates the route behind the Strangler
+/// flag, so flipping `KOKKAK_MIDDLEWARE__FEATURES__ADMIN=false`
+/// hands the route back to the legacy ASP.NET service.
+#[utoipa::path(
+    get,
+    path = "/api/v1/admin/permissions",
+    tag = "admin",
+    params(PermissionsQuery),
+    responses(
+        (status = 200, description = "Role × permission matrix (grouped by role)", body = Vec<UserRoleWithPermissions>),
+        (status = 400, description = "Missing or empty `mode` query parameter", body = crate::openapi::ApiError),
+        (status = 401, description = "Not authenticated", body = crate::openapi::ApiError),
+        (status = 403, description = "Not an admin", body = crate::openapi::ApiError),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn list_permissions(
+    State(state): State<AppState>,
+    user: AuthnUser,
+    Query(q): Query<PermissionsQuery>,
+) -> Result<Response, Response> {
+    // 1. RBAC: only admins / super_admins may inspect the matrix.
+    if !user.has_role(Role::Admin) && !user.has_role(Role::SuperAdmin) {
+        let locale = current_locale();
+        let localized = tr("err_auth.admin_required", &locale, &[]);
+        return Err(
+            ApiError::from(AppError::AdminRequired.with_message(localized)).into_response(),
+        );
+    }
+
+    // 2. Validate the mode literal. We only require it to be
+    //    non-empty (the SP accepts the value verbatim — no
+    //    closed-set check on the Rust side). The endpoint has
+    //    no other input dimensions, so the only way to surface
+    //    a 400 here is an empty `mode=` query string.
+    let mode = q.mode.trim();
+    if mode.is_empty() {
+        let locale = current_locale();
+        let msg = tr("err_permission.mode_required", &locale, &[]);
+        return Err(bad_request_envelope(&msg, ErrorCode::BAD_REQUEST));
+    }
+
+    // 3. Delegate to the application service. Repo failures
+    //    map to 500 via the standard `into_localized_response`
+    //    path (which falls back to the i18n-catalog message for
+    //    `err_repo.backend`). Explicit type annotation is
+    //    intentional — the handler return type is the generic
+    //    `Result<Response, Response>` and the utoipa
+    //    `body = Vec<UserRoleWithPermissions>` annotation needs
+    //    the concrete type to be in scope.
+    let groups: Vec<UserRoleWithPermissions> = match state.user_roles.list_permissions(mode).await {
+        Ok(r) => r,
+        Err(e) => return Err(ApiError::from(e).into_localized_response(&state).await),
+    };
+
+    Ok((
+        StatusCode::OK,
+        Json(ApiResponse {
+            success: true,
+            data: Some(groups),
+            error: None,
+            meta: None,
+        }),
+    )
+        .into_response())
+}
+
+/// Build a 400 envelope in the standard shape. Ponytail helper
+/// to keep the single early-return branch in `list_permissions`
+/// readable — same envelope, same code, same key naming as the
+/// other handlers' 400 paths.
+fn bad_request_envelope(message: &str, code: &'static str) -> Response {
+    let envelope: ApiResponse<()> = ApiResponse {
+        success: false,
+        data: None,
+        error: Some(kokkak_common::error::ApiErrorBody {
+            code: code.into(),
+            message: message.to_string(),
+        }),
+        meta: None,
+    };
+    (StatusCode::BAD_REQUEST, Json(envelope)).into_response()
+}

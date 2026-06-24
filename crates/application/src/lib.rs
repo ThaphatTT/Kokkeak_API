@@ -17,6 +17,7 @@ pub mod order;
 pub mod payment;
 pub mod rate_limit;
 pub mod user;
+pub mod user_role;
 
 pub use audit::{AuditEvent, AuditLogger, NoopAuditLogger, TestAuditLogger};
 pub use auth::{AuthOutcome, AuthService, LoginInput, RegisterInput};
@@ -28,3 +29,4 @@ pub use rate_limit::{
     AllowAllLoginRateLimiter, LoginRateLimiter, NoopLoginRateLimiter, RateLimitDecision,
 };
 pub use user::UserService;
+pub use user_role::UserRoleService;

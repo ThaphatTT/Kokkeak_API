@@ -75,3 +75,7 @@ err_order:
 # -- Generic request validation --
 err_request:
   bad_timestamp: "after must be an RFC3339 timestamp"
+
+# -- Admin permissions (M15-prep: GET /api/v1/admin/permissions) --
+err_permission:
+  mode_required: "query parameter `mode` is required"

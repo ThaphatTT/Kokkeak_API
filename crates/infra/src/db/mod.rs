@@ -21,4 +21,5 @@ pub mod mssql_order;
 pub mod mssql_payment;
 pub mod mssql_translation;
 pub mod mssql_user;
+pub mod mssql_user_role;
 pub mod topology;

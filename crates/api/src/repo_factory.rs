@@ -17,7 +17,7 @@ use kokkak_application::order::OrderService;
 use kokkak_common::config::DatabaseTopologySettings;
 use kokkak_domain::{
     ChatRepository, OrderRepository, PaymentRepository, ServiceRepository, TranslationRepository,
-    UserRepository,
+    UserRepository, UserRoleRepository,
 };
 use kokkak_infra::cache::translation_cache::CachedTranslationRepository;
 use kokkak_infra::db::mssql_catalog::MssqlServiceRepository;
@@ -26,6 +26,7 @@ use kokkak_infra::db::mssql_order::MssqlOrderRepository;
 use kokkak_infra::db::mssql_payment::MssqlPaymentRepository;
 use kokkak_infra::db::mssql_translation::MssqlTranslationRepository;
 use kokkak_infra::db::mssql_user::MssqlUserRepository;
+use kokkak_infra::db::mssql_user_role::MssqlUserRoleRepository;
 use kokkak_infra::db::topology::{DatabaseTopology, DbRole};
 use tracing::{info, warn};
 
@@ -52,6 +53,8 @@ pub struct RepoBundle {
     pub orders: Arc<dyn OrderRepository>,
     pub chat: Arc<dyn ChatRepository>,
     pub payments: Arc<dyn PaymentRepository>,
+    /// M15-prep: role × permission matrix repo (admin endpoint).
+    pub user_roles: Arc<dyn UserRoleRepository>,
     /// Translation override store (M11). Now backed by SQL Server
     /// (`MssqlTranslationRepository` + moka L1 cache).
     pub translation: Arc<dyn TranslationRepository>,
@@ -120,6 +123,11 @@ pub async fn from_settings(
                     payments: Arc::new(MssqlPaymentRepository::new(topo_pool(
                         &topo,
                         DbRole::Payment,
+                        &primary_pool,
+                    ))),
+                    user_roles: Arc::new(MssqlUserRoleRepository::new(topo_pool(
+                        &topo,
+                        DbRole::Master,
                         &primary_pool,
                     ))),
                     translation: Arc::new(CachedTranslationRepository::new(

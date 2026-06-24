@@ -39,6 +39,7 @@ use kokkak_infra::db::mssql_order::MssqlOrderRepository;
 use kokkak_infra::db::mssql_payment::MssqlPaymentRepository;
 use kokkak_infra::db::mssql_translation::MssqlTranslationRepository;
 use kokkak_infra::db::mssql_user::MssqlUserRepository;
+use kokkak_infra::db::mssql_user_role::MssqlUserRoleRepository;
 use std::path::PathBuf;
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -85,6 +86,8 @@ async fn make_app() -> (axum::Router, Vec<PathBuf>) {
         Arc::new(MssqlChatRepository::new(pool.clone()));
     let payment_repo: Arc<dyn kokkak_domain::PaymentRepository> =
         Arc::new(MssqlPaymentRepository::new(pool.clone()));
+    let user_role_repo: Arc<dyn kokkak_domain::UserRoleRepository> =
+        Arc::new(MssqlUserRoleRepository::new(pool.clone()));
     let translation: Arc<dyn kokkak_domain::TranslationRepository> = Arc::new(
         CachedTranslationRepository::new(MssqlTranslationRepository::new(pool.clone())),
     );
@@ -103,6 +106,7 @@ async fn make_app() -> (axum::Router, Vec<PathBuf>) {
         order_repo,
         chat_repo,
         payment_repo,
+        user_role_repo,
         jwt,
         HealthRegistry::new(),
         translation,

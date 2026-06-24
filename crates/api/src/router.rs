@@ -136,6 +136,16 @@ pub fn build(state: AppState) -> Router {
         )
         .layer(from_fn(admin_flag(Arc::new(state.clone()))));
 
+    // M15-prep: Admin role × permission matrix lookup. Read-only;
+    // the route is gated by `admin_flag` so flipping the Strangler
+    // flag hands it back to the legacy ASP.NET service.
+    let admin_permissions_routes = Router::new()
+        .route(
+            "/api/v1/admin/permissions",
+            get(handlers::admin::list_permissions),
+        )
+        .layer(from_fn(admin_flag(Arc::new(state.clone()))));
+
     // Merge into a single router, then attach state.
     // Layer order (LIFO: last-attached runs first):
     //   1. require_idempotency_key (innermost, only on the 3
@@ -152,6 +162,7 @@ pub fn build(state: AppState) -> Router {
         .merge(payment_routes)
         .merge(admin_payout_routes)
         .merge(admin_users_routes)
+        .merge(admin_permissions_routes)
         .merge(idempotent_routes)
         .merge(openapi_routes::<AppState>(state.settings.environment))
         .with_state(state)

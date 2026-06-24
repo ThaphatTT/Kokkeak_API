@@ -30,6 +30,7 @@ use kokkak_application::order::OrderService;
 use kokkak_application::payment::PaymentService;
 use kokkak_application::rate_limit::LoginRateLimiter;
 use kokkak_application::user::UserService;
+use kokkak_application::user_role::UserRoleService;
 use kokkak_domain::{HealthRegistry, TranslationRepository};
 use kokkak_infra::audit::FileAuditLogger;
 use kokkak_infra::auth::jwt::JwtService;
@@ -101,6 +102,7 @@ pub fn build_app_state_with(
         bundle.payments.clone(),
         bundle.orders.clone(),
     ));
+    let user_roles = Arc::new(UserRoleService::new(bundle.user_roles.clone()));
     let translation: Arc<dyn TranslationRepository> = bundle.translation;
     AppState::new(
         auth,
@@ -109,6 +111,7 @@ pub fn build_app_state_with(
         orders,
         chat,
         payments,
+        user_roles,
         jwt,
         registry,
         translation,
@@ -139,6 +142,7 @@ pub fn build_app_state(
     order_repo: Arc<dyn kokkak_domain::OrderRepository>,
     chat_repo: Arc<dyn kokkak_domain::ChatRepository>,
     payment_repo: Arc<dyn kokkak_domain::PaymentRepository>,
+    user_role_repo: Arc<dyn kokkak_domain::UserRoleRepository>,
     jwt: Arc<JwtService>,
     settings: Arc<kokkak_common::config::Settings>,
     registry: HealthRegistry,
@@ -154,6 +158,7 @@ pub fn build_app_state(
         orders: order_repo,
         chat: chat_repo,
         payments: payment_repo,
+        user_roles: user_role_repo,
         translation,
         mssql_pool: backend_marker,
         topology: None,
@@ -171,6 +176,7 @@ pub fn build_app_state_json(
     order_repo: Arc<dyn kokkak_domain::OrderRepository>,
     chat_repo: Arc<dyn kokkak_domain::ChatRepository>,
     payment_repo: Arc<dyn kokkak_domain::PaymentRepository>,
+    user_role_repo: Arc<dyn kokkak_domain::UserRoleRepository>,
     jwt: Arc<JwtService>,
     registry: HealthRegistry,
     translation: Arc<dyn TranslationRepository>,
@@ -184,6 +190,7 @@ pub fn build_app_state_json(
         orders: order_repo,
         chat: chat_repo,
         payments: payment_repo,
+        user_roles: user_role_repo,
         translation,
         mssql_pool: backend_marker,
         topology: None,
