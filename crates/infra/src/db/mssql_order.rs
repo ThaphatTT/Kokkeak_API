@@ -39,22 +39,22 @@ impl OrderRepository for MssqlOrderRepository {
         }
         // 3 result sets: header, body, assignment.
         let header = &rows[0];
-        let customer_id = read_uuid(header, 1).unwrap_or_else(Uuid::nil);
-        let status = order_status_from_i32(read_i32(header, 2).unwrap_or(1));
-        let address = read_str(header, 3).unwrap_or("").to_string();
-        let total = Decimal::from(read_i32(header, 6).unwrap_or(0));
+        let customer_id = read_uuid(header, "customer_id").unwrap_or_else(Uuid::nil);
+        let status = order_status_from_i32(read_i32(header, "status").unwrap_or(1));
+        let address = read_str(header, "address").unwrap_or("").to_string();
+        let total = Decimal::from(read_i32(header, "total_amount").unwrap_or(0));
         let created_at = header
-            .get::<chrono::DateTime<chrono::Utc>, _>(7)
+            .get::<chrono::DateTime<chrono::Utc>, _>("created_at")
             .unwrap_or_else(chrono::Utc::now);
         let service_code = rows
             .get(1)
-            .and_then(|b| read_str(b, 2).map(|s| s.to_string()))
+            .and_then(|b| read_str(b, "service_id").map(|s| s.to_string()))
             .unwrap_or_default();
         let description = rows
             .get(1)
-            .and_then(|b| read_str(b, 3).map(|s| s.to_string()))
+            .and_then(|b| read_str(b, "description").map(|s| s.to_string()))
             .unwrap_or_default();
-        let technician_id = rows.get(2).and_then(|a| read_uuid(a, 2));
+        let technician_id = rows.get(2).and_then(|a| read_uuid(a, "technician_id"));
         Ok(Some(Order {
             id,
             service_code,
@@ -137,12 +137,12 @@ impl OrderRepository for MssqlOrderRepository {
 }
 
 fn header_row_to_order(row: &tiberius::Row, technician_id: Option<Uuid>) -> Order {
-    let id = read_uuid(row, 0).unwrap_or_else(Uuid::nil);
-    let customer_id = read_uuid(row, 1).unwrap_or_else(Uuid::nil);
-    let status = order_status_from_i32(read_i32(row, 2).unwrap_or(1));
-    let total = Decimal::from(read_i32(row, 3).unwrap_or(0));
+    let id = read_uuid(row, "id").unwrap_or_else(Uuid::nil);
+    let customer_id = read_uuid(row, "customer_id").unwrap_or_else(Uuid::nil);
+    let status = order_status_from_i32(read_i32(row, "status").unwrap_or(1));
+    let total = Decimal::from(read_i32(row, "total_amount").unwrap_or(0));
     let created_at = row
-        .get::<chrono::DateTime<chrono::Utc>, _>(4)
+        .get::<chrono::DateTime<chrono::Utc>, _>("created_at")
         .unwrap_or_else(chrono::Utc::now);
     Order {
         id,

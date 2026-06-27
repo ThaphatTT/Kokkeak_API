@@ -21,6 +21,7 @@ use kokkak_infra::db::mssql_catalog::MssqlServiceRepository;
 use kokkak_infra::db::mssql_chat::MssqlChatRepository;
 use kokkak_infra::db::mssql_order::MssqlOrderRepository;
 use kokkak_infra::db::mssql_payment::MssqlPaymentRepository;
+use kokkak_infra::db::mssql_permission_user::MssqlPermissionUserRepository;
 use kokkak_infra::db::mssql_translation::MssqlTranslationRepository;
 use kokkak_infra::db::mssql_user::MssqlUserRepository;
 use kokkak_infra::db::mssql_user_role::MssqlUserRoleRepository;
@@ -94,6 +95,10 @@ async fn make_app() -> (axum::Router, Vec<PathBuf>) {
         // this integration test exercises the rest of the route
         // table and just needs any impl that satisfies the trait.
         user_roles: Arc::new(MssqlUserRoleRepository::new(pool.clone())),
+        // M17: dedicated permission-page repository (decoupled from
+        // `users`). Auth tests don't exercise permission routes, so a
+        // live MSSQL adapter against the same pool is sufficient.
+        permission_users: Arc::new(MssqlPermissionUserRepository::new(pool.clone())),
         translation,
         mssql_pool: None,
         topology: None,

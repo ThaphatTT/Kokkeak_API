@@ -35,8 +35,38 @@ use std::sync::Arc;
 
 use kokkak_domain::traits::user::RepoError;
 use kokkak_domain::{
-    UserRolePermission, UserRolePermissionRow, UserRoleRepository, UserRoleWithPermissions,
+    PermissionUpdateRow, UserRolePermission, UserRolePermissionRow, UserRoleRepository,
+    UserRoleWithPermissions,
 };
+
+/// Bulk-input bundle for [`UserRoleService::update_permissions`].
+///
+/// One item per `(role, permission, status)` triple. The
+/// application layer pre-validates each item's shape (the
+/// `validator` crate handles the request DTO; the service trusts
+/// the values it gets).
+#[derive(Debug, Clone)]
+pub struct PermissionUpdateInput {
+    /// `user_role_guid` of the role being granted / revoked.
+    pub user_role_guid: String,
+    /// `user_permission_guid` of the permission being granted / revoked.
+    pub user_permission_guid: String,
+    /// Target status: `1` = grant, `0` = revoke. The API layer
+    /// rejects anything else with 422 before we get here.
+    pub user_role_permission_status: i32,
+}
+
+/// Bulk update bundle — what to apply, who is applying it.
+#[derive(Debug, Clone)]
+pub struct UpdatePermissionsInput {
+    /// Per-item updates to apply. The service loops, calling the
+    /// SP once per item. Order is preserved in the response so
+    /// callers can correlate `results[i]` with `updates[i]`.
+    pub updates: Vec<PermissionUpdateInput>,
+    /// Audit field — recorded in `user_role_permission_update_by`.
+    /// `None` leaves the column as SQL `NULL`.
+    pub update_by: Option<String>,
+}
 
 /// Application service bundle for the role × permission endpoint.
 pub struct UserRoleService {
@@ -84,6 +114,57 @@ impl UserRoleService {
     ) -> Result<Vec<UserRoleWithPermissions>, RepoError> {
         let flat = self.repo.list_permissions(mode).await?;
         Ok(group_by_role(flat))
+    }
+
+    /// Apply a batch of `(role, permission, status)` updates,
+    /// returning one [`PermissionUpdateRow`] per input item in
+    /// the **same order**.
+    ///
+    /// ## Why loop in Rust, not in the SP
+    ///
+    /// The existing `SP_USER_ROLE_PERMISSION_UPDATE` is a
+    /// single-item SP. Wrapping it in a TVP / JSON bulk SP would
+    /// (a) duplicate the validation logic that's already correct,
+    /// (b) require a new SP and a new transaction helper, and
+    /// (c) lose the per-item error granularity the admin UI
+    /// needs to surface "item N failed because ROLE_NOT_FOUND".
+    /// Instead we loop here, calling the existing trait method
+    /// once per item; the SP keeps its job as the single source
+    /// of truth for `ROLE_NOT_FOUND` / `PERMISSION_NOT_FOUND`.
+    ///
+    /// ponytail: `Vec::with_capacity` + `for` loop over a small
+    /// (≤ 500) admin batch. The ceiling is a TVP-backed bulk SP
+    /// when the admin UI starts sending thousands of toggles per
+    /// request — at that point add a second method instead of
+    /// overloading this one.
+    ///
+    /// ## Atomicity
+    ///
+    /// Each item commits independently — no surrounding
+    /// transaction. Partial success is the *intended* behavior for
+    /// admin operations: the response shows which items failed so
+    /// the operator can retry just those, rather than rolling back
+    /// the entire batch on one bad GUID. The SP is already row-level
+    /// idempotent (re-running UPDATE on the same `(role, perm)` is
+    /// safe), so retries don't double-mutate.
+    pub async fn update_permissions(
+        &self,
+        input: UpdatePermissionsInput,
+    ) -> Result<Vec<PermissionUpdateRow>, RepoError> {
+        let mut out = Vec::with_capacity(input.updates.len());
+        for item in &input.updates {
+            let row = self
+                .repo
+                .update_role_permission(
+                    &item.user_role_guid,
+                    &item.user_permission_guid,
+                    item.user_role_permission_status,
+                    input.update_by.as_deref(),
+                )
+                .await?;
+            out.push(row);
+        }
+        Ok(out)
     }
 }
 
@@ -162,7 +243,24 @@ mod tests {
     struct MockUserRoleRepository {
         rows: Mutex<Vec<UserRolePermissionRow>>,
         last_mode: Mutex<Option<String>>,
+        /// Pre-canned response rows for `update_role_permission`,
+        /// returned one per call in FIFO order. When the Vec is
+        /// shorter than the call count, the remaining calls
+        /// surface `Backend` — tests that want success assert
+        /// the Vec is sized correctly.
+        update_responses: Mutex<Vec<PermissionUpdateRow>>,
+        /// Records every `(role, permission, status, update_by)`
+        /// tuple the service passed to the repo, so tests can
+        /// assert that the loop preserved order and forwarded
+        /// `update_by` verbatim. The `UpdateCall` alias keeps
+        /// the field type short (clippy::type_complexity).
+        update_calls: Mutex<Vec<UpdateCall>>,
     }
+
+    /// Single recorded call to `update_role_permission` — `(role,
+    /// permission, status, update_by)`. Aliased to keep
+    /// `MockUserRoleRepository`'s field types readable.
+    type UpdateCall = (String, String, i32, Option<String>);
 
     #[async_trait::async_trait]
     impl UserRoleRepository for MockUserRoleRepository {
@@ -172,6 +270,28 @@ mod tests {
         ) -> Result<Vec<UserRolePermissionRow>, RepoError> {
             *self.last_mode.lock().unwrap() = Some(mode.to_string());
             Ok(self.rows.lock().unwrap().clone())
+        }
+
+        async fn update_role_permission(
+            &self,
+            role_guid: &str,
+            permission_guid: &str,
+            status: i32,
+            update_by: Option<&str>,
+        ) -> Result<PermissionUpdateRow, RepoError> {
+            self.update_calls.lock().unwrap().push((
+                role_guid.to_string(),
+                permission_guid.to_string(),
+                status,
+                update_by.map(str::to_string),
+            ));
+            let mut queue = self.update_responses.lock().unwrap();
+            if queue.is_empty() {
+                return Err(RepoError::Backend(
+                    "MockUserRoleRepository ran out of canned update responses".into(),
+                ));
+            }
+            Ok(queue.remove(0))
         }
     }
 
@@ -250,6 +370,7 @@ mod tests {
         let repo = Arc::new(MockUserRoleRepository {
             rows: Mutex::new(rows),
             last_mode: Mutex::new(None),
+            ..Default::default()
         });
         let svc = UserRoleService::new(repo.clone());
         let groups = svc.list_permissions("SELECT_ADMIN").await.unwrap();
@@ -304,6 +425,7 @@ mod tests {
         let repo = Arc::new(MockUserRoleRepository {
             rows: Mutex::new(rows),
             last_mode: Mutex::new(None),
+            ..Default::default()
         });
         let svc = UserRoleService::new(repo);
         let groups = svc.list_permissions("SELECT_EMPLOYEE").await.unwrap();
@@ -374,6 +496,7 @@ mod tests {
         let repo = Arc::new(MockUserRoleRepository {
             rows: Mutex::new(rows),
             last_mode: Mutex::new(None),
+            ..Default::default()
         });
         let svc = UserRoleService::new(repo);
         let groups = svc.list_permissions("SELECT_ADMIN").await.unwrap();
@@ -411,5 +534,225 @@ mod tests {
         let svc = UserRoleService::new(repo);
         let groups = svc.list_permissions("SELECT_ADMIN").await.unwrap();
         assert!(groups.is_empty());
+    }
+
+    // ---- update_permissions ----
+
+    /// One canned response row the bulk-update mock will return
+    /// for the next call to `update_role_permission`.
+    fn update_row_updated(role_guid: &str, perm_guid: &str) -> PermissionUpdateRow {
+        PermissionUpdateRow {
+            success: true,
+            code: PermissionUpdateRow::CODE_UPDATED.to_string(),
+            message: "Role permission updated".to_string(),
+            user_role_permission_guid: Some(format!("rp-{role_guid}-{perm_guid}")),
+            user_role_guid: role_guid.to_string(),
+            user_permission_guid: perm_guid.to_string(),
+            user_role_permission_status: 1,
+        }
+    }
+
+    fn update_row_created(role_guid: &str, perm_guid: &str) -> PermissionUpdateRow {
+        PermissionUpdateRow {
+            success: true,
+            code: PermissionUpdateRow::CODE_CREATED.to_string(),
+            message: "Role permission created".to_string(),
+            user_role_permission_guid: Some(format!("rp-{role_guid}-{perm_guid}")),
+            user_role_guid: role_guid.to_string(),
+            user_permission_guid: perm_guid.to_string(),
+            user_role_permission_status: 1,
+        }
+    }
+
+    fn update_row_role_not_found(role_guid: &str, perm_guid: &str) -> PermissionUpdateRow {
+        PermissionUpdateRow {
+            success: false,
+            code: PermissionUpdateRow::CODE_ROLE_NOT_FOUND.to_string(),
+            message: "user_role_guid not found".to_string(),
+            user_role_permission_guid: None,
+            user_role_guid: role_guid.to_string(),
+            user_permission_guid: perm_guid.to_string(),
+            user_role_permission_status: 0,
+        }
+    }
+
+    fn update_row_permission_not_found(role_guid: &str, perm_guid: &str) -> PermissionUpdateRow {
+        PermissionUpdateRow {
+            success: false,
+            code: PermissionUpdateRow::CODE_PERMISSION_NOT_FOUND.to_string(),
+            message: "user_permission_guid not found".to_string(),
+            user_role_permission_guid: None,
+            user_role_guid: role_guid.to_string(),
+            user_permission_guid: perm_guid.to_string(),
+            user_role_permission_status: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn update_permissions_loops_in_order_and_preserves_responses() {
+        // The service must (a) call the repo once per input item
+        // **in input order**, (b) forward the per-item fields
+        // verbatim, and (c) forward `update_by` to every call.
+        // Canned responses cover the three branches: UPDATED,
+        // CREATED, ROLE_NOT_FOUND. The wire array must mirror
+        // the input array 1:1.
+        let repo = Arc::new(MockUserRoleRepository {
+            update_responses: Mutex::new(vec![
+                update_row_updated("r1", "p1"),
+                update_row_created("r1", "p2"),
+                update_row_role_not_found("r-missing", "p3"),
+            ]),
+            ..Default::default()
+        });
+        let svc = UserRoleService::new(repo.clone());
+        let input = UpdatePermissionsInput {
+            updates: vec![
+                PermissionUpdateInput {
+                    user_role_guid: "r1".into(),
+                    user_permission_guid: "p1".into(),
+                    user_role_permission_status: 1,
+                },
+                PermissionUpdateInput {
+                    user_role_guid: "r1".into(),
+                    user_permission_guid: "p2".into(),
+                    user_role_permission_status: 1,
+                },
+                PermissionUpdateInput {
+                    user_role_guid: "r-missing".into(),
+                    user_permission_guid: "p3".into(),
+                    user_role_permission_status: 0,
+                },
+            ],
+            update_by: Some("admin-guid".into()),
+        };
+        let out = svc.update_permissions(input).await.unwrap();
+
+        // Output mirrors input order.
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].code, PermissionUpdateRow::CODE_UPDATED);
+        assert_eq!(out[1].code, PermissionUpdateRow::CODE_CREATED);
+        assert_eq!(out[2].code, PermissionUpdateRow::CODE_ROLE_NOT_FOUND);
+        assert!(
+            !out[2].success,
+            "ROLE_NOT_FOUND must surface as success=false"
+        );
+
+        // Repo was called once per item, in order, with the
+        // expected args (the per-item fields + the shared
+        // `update_by`).
+        let calls = repo.update_calls.lock().unwrap();
+        assert_eq!(calls.len(), 3);
+        assert_eq!(
+            calls[0],
+            ("r1".into(), "p1".into(), 1, Some("admin-guid".into()))
+        );
+        assert_eq!(
+            calls[1],
+            ("r1".into(), "p2".into(), 1, Some("admin-guid".into()))
+        );
+        assert_eq!(
+            calls[2],
+            (
+                "r-missing".into(),
+                "p3".into(),
+                0,
+                Some("admin-guid".into())
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn update_permissions_forwards_none_update_by_as_none() {
+        // The API defaults `update_by` to the authenticated
+        // admin's GUID, but the service must also accept
+        // `None` (admin explicitly opted out, or future BFF
+        // pre-fills it). The repo records whatever the
+        // service forwarded.
+        let repo = Arc::new(MockUserRoleRepository {
+            update_responses: Mutex::new(vec![update_row_updated("r", "p")]),
+            ..Default::default()
+        });
+        let svc = UserRoleService::new(repo.clone());
+        let input = UpdatePermissionsInput {
+            updates: vec![PermissionUpdateInput {
+                user_role_guid: "r".into(),
+                user_permission_guid: "p".into(),
+                user_role_permission_status: 1,
+            }],
+            update_by: None,
+        };
+        let _ = svc.update_permissions(input).await.unwrap();
+        let calls = repo.update_calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].3, None, "None must round-trip as None");
+    }
+
+    #[tokio::test]
+    async fn update_permissions_empty_input_is_a_no_op() {
+        // Edge case: the API allows an empty `updates` only via
+        // the inner `Vec` (the outer request validator rejects
+        // empty lists at the boundary), but the service itself
+        // must still handle the no-op cleanly: no repo calls,
+        // empty output.
+        let repo = Arc::new(MockUserRoleRepository::default());
+        let svc = UserRoleService::new(repo.clone());
+        let input = UpdatePermissionsInput {
+            updates: vec![],
+            update_by: None,
+        };
+        let out = svc.update_permissions(input).await.unwrap();
+        assert!(out.is_empty());
+        assert!(repo.update_calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn update_permissions_propagates_repo_backend_error() {
+        // When the repo runs out of canned responses (or, in
+        // production, when the SP fails to execute), the
+        // service surfaces the error to the caller. The
+        // handler maps that to a 500 envelope.
+        let repo = Arc::new(MockUserRoleRepository::default());
+        let svc = UserRoleService::new(repo);
+        let input = UpdatePermissionsInput {
+            updates: vec![PermissionUpdateInput {
+                user_role_guid: "r".into(),
+                user_permission_guid: "p".into(),
+                user_role_permission_status: 1,
+            }],
+            update_by: None,
+        };
+        let err = svc.update_permissions(input).await.unwrap_err();
+        match err {
+            RepoError::Backend(msg) => {
+                assert!(msg.contains("MockUserRoleRepository"), "got: {msg}");
+            }
+            other => panic!("expected Backend error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn update_permissions_surfaces_permission_not_found() {
+        // PERMISSION_NOT_FOUND is the symmetric rejection to
+        // ROLE_NOT_FOUND. The service must surface it as a
+        // success=false row (not a hard error) so the admin
+        // UI can render per-item diagnostics.
+        let repo = Arc::new(MockUserRoleRepository {
+            update_responses: Mutex::new(vec![update_row_permission_not_found("r", "p-missing")]),
+            ..Default::default()
+        });
+        let svc = UserRoleService::new(repo);
+        let input = UpdatePermissionsInput {
+            updates: vec![PermissionUpdateInput {
+                user_role_guid: "r".into(),
+                user_permission_guid: "p-missing".into(),
+                user_role_permission_status: 1,
+            }],
+            update_by: None,
+        };
+        let out = svc.update_permissions(input).await.unwrap();
+        assert_eq!(out.len(), 1);
+        assert!(!out[0].success);
+        assert_eq!(out[0].code, PermissionUpdateRow::CODE_PERMISSION_NOT_FOUND);
+        assert!(out[0].user_role_permission_guid.is_none());
     }
 }

@@ -12,7 +12,7 @@
 
 use async_trait::async_trait;
 
-use crate::permission::UserRolePermissionRow;
+use crate::permission::{PermissionUpdateRow, UserRolePermissionRow};
 use crate::traits::user::RepoError;
 
 /// Repository contract for the role × permission matrix.
@@ -35,4 +35,34 @@ pub trait UserRoleRepository: Send + Sync {
     /// application-defined and may be extended over time; the
     /// Rust side does not enforce a closed set.
     async fn list_permissions(&self, mode: &str) -> Result<Vec<UserRolePermissionRow>, RepoError>;
+
+    /// Apply one `(role, permission, status)` update via
+    /// `dbo.SP_USER_ROLE_PERMISSION_UPDATE`.
+    ///
+    /// The SP accepts three top-level validation outcomes and two
+    /// mutation outcomes (see [`PermissionUpdateRow::code`]):
+    ///
+    /// - `INVALID_STATUS` — pre-validated away by the API layer
+    ///   (status must be 0 or 1); the SP branch is a defensive
+    ///   fallback that should never fire in practice.
+    /// - `ROLE_NOT_FOUND`, `PERMISSION_NOT_FOUND` — domain-level
+    ///   rejection (the GUIDs don't resolve). The repo propagates
+    ///   these as a successful SP query with `success = false`.
+    /// - `UPDATED` / `INSERTED` — the junction row was mutated.
+    /// - **Zero rows returned** — `status = 0` and no junction row
+    ///   existed. The repo synthesizes a
+    ///   [`PermissionUpdateRow::no_change`] so the caller gets one
+    ///   [`PermissionUpdateRow`] per call regardless of branch.
+    ///
+    /// `update_by` is the audit field — `Some(admin_guid)` records
+    /// the actor, `None` leaves it as SQL `NULL`. The API layer
+    /// defaults to the authenticated admin's GUID when the request
+    /// body omits `update_by`.
+    async fn update_role_permission(
+        &self,
+        role_guid: &str,
+        permission_guid: &str,
+        status: i32,
+        update_by: Option<&str>,
+    ) -> Result<PermissionUpdateRow, RepoError>;
 }

@@ -15,7 +15,8 @@
 //! - orders (list_my_orders, list_assigned_orders, create_order)
 //! - payments (list_my_payments, create_payment, confirm_payment,
 //!   get_payment)
-//! - admin (payouts list / mark paid, user create)
+//! - admin (payouts list / mark paid, user create, user list,
+//!   per-user permissions, role × permission matrix)
 //! - chat (rooms list / open, messages list / send, mark read)
 //! - health (healthz, readyz)
 //!
@@ -66,10 +67,15 @@ use crate::handlers;
         handlers::payment::create_payment,
         handlers::payment::confirm_payment,
         // ---- Admin ----
-        handlers::payment::list_payouts_admin,
-        handlers::payment::mark_payout_paid_admin,
-        handlers::admin::create_user_admin,
-        handlers::admin::list_permissions,
+                handlers::payment::list_payouts_admin,
+                handlers::payment::mark_payout_paid_admin,
+                handlers::admin::create_user_admin,
+                handlers::admin::list_users_admin,
+                handlers::admin::list_user_permissions_admin,
+                        handlers::admin::list_permissions,
+                        handlers::admin::update_permissions_admin,
+                // ---- Permission (M18: batch override upsert) ----
+                handlers::permission::update_permission_overrides,
     ),
     components(
         schemas(
@@ -82,10 +88,17 @@ use crate::handlers;
             handlers::catalog::ListQuery,
             handlers::catalog::ServiceItem,
             handlers::admin::CreateUserRequest,
-            handlers::admin::PermissionsQuery,
+                                    handlers::admin::ListUsersQuery,
+                                    handlers::admin::PermissionsQuery,
+                        handlers::admin::UpdatePermissionsRequest,
+                        handlers::admin::UpdatePermissionsResponse,
+                        handlers::admin::PermissionUpdateItem,
+                        handlers::admin::PermissionUpdateResultItem,
+                        kokkak_domain::PermissionUpdateRow,
             // Domain entities (cfg-gated `ToSchema` via the `openapi` feature).
-            kokkak_domain::PublicUser,
-            kokkak_domain::ServiceCategory,
+                        kokkak_domain::PublicUser,
+                        kokkak_domain::UserListRow,
+                        kokkak_domain::ServiceCategory,
             kokkak_domain::Order,
             kokkak_domain::OrderStatus,
             kokkak_domain::Payment,
@@ -96,6 +109,16 @@ use crate::handlers;
             kokkak_domain::UserRolePermission,
             kokkak_domain::UserRolePermissionRow,
             kokkak_domain::UserRoleWithPermissions,
+            // M17: permission-page wire payload.
+            kokkak_domain::PermissionUserListRow,
+            kokkak_domain::PermissionUserDetailRow,
+            kokkak_domain::PermissionUserGroupEntry,
+            kokkak_domain::PermissionUserGroup,
+            // M18: batch permission-override update wire payload.
+            kokkak_domain::PermissionOverrideUpdateItem,
+            kokkak_domain::PermissionOverrideUpdateResult,
+            handlers::permission::UpdatePermissionOverridesRequest,
+            handlers::permission::UpdatePermissionOverridesResponse,
             // Error envelope (used by all 4xx / 5xx responses).
             ApiError,
             ApiErrorBody,

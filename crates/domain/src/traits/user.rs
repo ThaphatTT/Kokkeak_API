@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::user::User;
+use crate::user::{User, UserListRow};
 
 /// Repository-level error (one of the few `domain` types that maps
 /// 1:1 to an HTTP status).
@@ -60,4 +60,25 @@ pub trait UserRepository: Send + Sync {
     /// role changes go through a dedicated admin endpoint (planned
     /// M15+).
     async fn update(&self, user: &User) -> Result<(), RepoError>;
+
+    /// M16: fetch the admin user-list view (one row per user) with
+    /// permission summary CSVs.
+    ///
+    /// Backed by `dbo.SP_PERMISSION_USER_LIST`. Returns ALL active
+    /// users (no parameters); the application layer applies cursor
+    /// pagination (`after` + `limit`) on top of the result.
+    ///
+    /// ponytail: the SP returns the full set; pagination lives in
+    /// Rust today. Ceiling: extend the SP with `@p_after_username`
+    /// + `OFFSET`/`FETCH` when the admin list grows past ~10K
+    /// users — at that point the O(n) Rust-side slice + `O(n)`
+    /// transport becomes the bottleneck.
+    async fn list_with_permissions(&self) -> Result<Vec<UserListRow>, RepoError>;
+
+    // M17 cleanup: the per-user detail row type + its SP
+    // (`SP_PERMISSION_USER_FIND_BY_USERNAME`) moved to
+    // [`kokkak_domain::PermissionUserRepository`] (see
+    // `crates/domain/src/traits/permission.rs`). The permission
+    // flow no longer lives on the login/auth port — it owns its
+    // own port, its own SPs, and its own DTOs.
 }

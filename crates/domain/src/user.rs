@@ -1,4 +1,4 @@
-//! User domain (เอนทิตี้ผู้ใช้ — M2 + M14).
+//! User domain (เอนทิตี้ผู้ใช้ — M2 + M14 + M16).
 //!
 //! `User` is the central aggregate for everyone who can log in:
 //! customers, technicians, and admin staff. The same struct carries
@@ -414,6 +414,85 @@ impl User {
             format!("{first} {last}")
         }
     }
+}
+
+// ============================================================================
+// M16: admin user-list wire type (1:1 with the SP SELECT list)
+// ============================================================================
+//
+// One stored procedure backs the admin user-management screen:
+//
+// - `SP_PERMISSION_USER_LIST` → [`UserListRow`] (one row per user)
+//
+// The struct below mirrors the SP SELECT list 1:1 so the row mapper
+// in `kokkak_infra::db::mssql_user` is a field-by-field copy. CSVs
+// (`role_codes`, `role_names`) are pre-split into `Vec<String>` at
+// the infra layer so the admin UI never has to re-parse.
+//
+// **M17 cleanup**: the detail-row type and its backing SP
+// (`SP_PERMISSION_USER_FIND_BY_USERNAME`) moved to
+// `kokkak_domain::permission::PermissionUserDetailRow` + a dedicated
+// [`PermissionUserRepository`] port. The permission flow no longer
+// shares SPs / row types with the login/auth flow — see
+// `crates/domain/src/traits/permission.rs` for the new port.
+//
+// **Note on `permission_codes` (M16 round 2)**: the LIST SP
+// intentionally omits the full `permission_codes` CSV — only the
+// cheap `has_permission` boolean is exposed. The admin UI fetches
+// the full code list per user via the M17 detail endpoint
+// (`SP_PERMISSION_USER_DETAIL_FIND_BY_GUID`). This keeps the LIST
+// payload O(users) instead of O(users × permissions) and lets the
+// list page scale to large user tables.
+//
+// We deliberately keep [`UserListRow`] **separate** from [`User`]:
+// - `User` is the login-facing aggregate (full_name split into first/last).
+// - The SP rows are denormalised for admin display (CSV for badges,
+//   `has_override` / `effective_status` flags).
+// Forcing a single struct would either leak SP shape into the
+// aggregate or strip admin-display fields the SP returns.
+
+/// One row from `SP_PERMISSION_USER_LIST` — flat per-user summary
+/// for the admin user list screen.
+///
+/// The CSV columns are pre-split into `Vec<String>` at the infra
+/// layer so the wire payload never carries CSV strings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct UserListRow {
+    /// `user.user_guid` (36-char UUID).
+    pub user_guid: String,
+    /// `first_name + ' ' + last_name` from `[user]`, COALESCEd to "".
+    pub full_name: String,
+    /// `user_username.user_username_username` (the login handle —
+    /// email, phone, or alphanumeric). SP aliases it as `email`.
+    pub email: String,
+    /// Active role codes, e.g. `["customer", "finance_manager"]`.
+    /// Parsed from the SP's `STRING_AGG(user_role_code, ',')` CSV.
+    pub role_codes: Vec<String>,
+    /// Human-readable role names matching `role_codes` 1:1 by index,
+    /// e.g. `["Customer", "Finance Manager"]`.
+    pub role_names: Vec<String>,
+    /// `1` if the user holds any effective permission (cheap "has
+    /// any perms?" badge for the admin list).
+    ///
+    /// The **actual** permission codes live behind the detail
+    /// endpoint (`SP_PERMISSION_USER_FIND_BY_USERNAME`) — the LIST
+    /// payload intentionally omits them to stay O(users) instead
+    /// of O(users × permissions).
+    pub has_permission: bool,
+    /// `1` if the user has any explicit per-permission override
+    /// (allow or deny) recorded in `user_permission_override`.
+    pub has_override: bool,
+    /// `[user].user_status` mapped to [`UserStatus`]. Unknown ints
+    /// fall back to [`UserStatus::Pending`] so the wire shape stays
+    /// stable if a future migration adds a new lifecycle state.
+    pub user_status: UserStatus,
+    /// `user_username.user_username_status` raw `int`. No enum
+    /// because the username row's status is internal to the
+    /// auth flow — the admin UI displays the `user_status` enum
+    /// and only needs this for a future "username inactive"
+    /// indicator.
+    pub user_username_status: i32,
 }
 
 #[cfg(test)]

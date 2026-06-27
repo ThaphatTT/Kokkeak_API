@@ -149,24 +149,82 @@ pub async fn exec_sp(
     Ok(out)
 }
 
-/// Read a `i32` column by index. Returns `None` when the column is NULL.
-pub fn read_i32(row: &tiberius::Row, idx: usize) -> Option<i32> {
-    row.get::<i32, _>(idx)
+/// Read a `&str` column by **name**. Returns `None` when the column is
+/// NULL or the column is not present on the row.
+///
+/// Column-name lookup is the standard for every MSSQL mapper in this
+/// crate (see `mssql_user_role.rs` for the rationale): the SP layer
+/// owns the SELECT list and aliases every column, so reading by name
+/// (a) keeps the Rust mapper self-documenting, (b) survives future
+/// column reorders, and (c) catches drift the moment a SP alias
+/// changes (compile-time panic on `Option::unwrap_or`, runtime error
+/// from tiberius when the column is missing).
+///
+/// ponytail: thin pass-through to `tiberius::Row::get`. The ceiling is
+/// when a mapper needs to read the same column under two names (e.g.
+/// after an SP refactor adds a legacy alias) — at that point introduce
+/// a `read_str_either(row, &[name1, name2])` helper instead of
+/// duplicating the `match` at the call site.
+pub fn read_str<'a>(row: &'a tiberius::Row, col: &str) -> Option<&'a str> {
+    row.get::<&str, _>(col)
 }
 
-/// Read a `&str` column by index. Returns `None` when NULL.
-pub fn read_str(row: &tiberius::Row, idx: usize) -> Option<&str> {
-    row.get::<&str, _>(idx)
+/// Read an `i32` column by **name**. Returns `None` when NULL.
+pub fn read_i32(row: &tiberius::Row, col: &str) -> Option<i32> {
+    row.get::<i32, _>(col)
 }
 
-/// Read a `Uuid` column by index. Returns `None` when NULL.
-pub fn read_uuid(row: &tiberius::Row, idx: usize) -> Option<Uuid> {
-    row.get::<Uuid, _>(idx)
+/// Read a `Uuid` column by **name**. Returns `None` when NULL.
+pub fn read_uuid(row: &tiberius::Row, col: &str) -> Option<Uuid> {
+    row.get::<Uuid, _>(col)
 }
 
-/// Read a `chrono::DateTime<Utc>` column by index.
-pub fn read_datetime(row: &tiberius::Row, idx: usize) -> Option<chrono::DateTime<chrono::Utc>> {
-    row.get::<chrono::DateTime<chrono::Utc>, _>(idx)
+/// Read a `chrono::DateTime<Utc>` column by **name**.
+pub fn read_datetime(row: &tiberius::Row, col: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    row.get::<chrono::DateTime<chrono::Utc>, _>(col)
+}
+
+/// Read a GUID column by **name** and emit it as a hyphenated
+/// `String` (e.g. `11111111-1111-1111-1111-111111111111`).
+///
+/// Tries two shapes because the SP layer is allowed to emit GUIDs as
+/// either `uniqueidentifier` (the SQL Server native type) or
+/// `varchar(36)` (when an explicit `CONVERT(varchar(36), col)` was
+/// added at the SP boundary). Both wire shapes must round-trip to the
+/// same Rust `String` so the handler / DTO layer never branches on
+/// the SP choice:
+///
+/// 1. `tiberius::Guid` — covers `uniqueidentifier`. `Guid::Display`
+///    emits the hyphenated form, which matches `uuid::Uuid::to_string()`.
+/// 2. `&str` — covers `varchar(36)` (with hyphens already in the string).
+///
+/// We use [`tiberius::Row::try_get`] (the fallible sibling of `get`,
+/// which would PANIC on type mismatch — see `row.rs:393-397` upstream
+/// of this helper) so a type mismatch becomes an empty string instead
+/// of crashing the request. The empty fallback matches the wire
+/// contract of the rest of the codebase (the COALESCE'd SP columns
+/// empty-string on no-rows).
+///
+/// ponytail: thin `try_get`-fallback. The ceiling is when an SP
+/// surfaces the same logical GUID under two column names (alias
+/// migration) — at that point expose `read_guid_either(row, &[a, b])`
+/// instead of duplicating the try-pair at the call site.
+pub fn read_guid_str(row: &tiberius::Row, col: &str) -> String {
+    // Path 1: column is `uniqueidentifier`.
+    //
+    // ponytail: typo fix — tiberius 0.12 re-exports the SQL Server
+    // GUID type as `tiberius::Uuid` (not `tiberius::Guid` as a
+    // previous session wrote). One-character fix to unblock the
+    // kokkak-api test binary compile; the rest of the function is
+    // pre-existing M15 work and unchanged.
+    if let Ok(Some(g)) = row.try_get::<tiberius::Uuid, _>(col) {
+        return g.to_string();
+    }
+    // Path 2: column is `varchar(36)` GUID string (or other text).
+    if let Ok(Some(s)) = row.try_get::<&str, _>(col) {
+        return s.to_string();
+    }
+    String::new()
 }
 
 /// Standardized error code returned by every API_* stored procedure.

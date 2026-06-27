@@ -47,7 +47,7 @@ impl ServiceRepository for MssqlServiceRepository {
         )
         .await?;
         for row in &rows {
-            if let Some(c) = read_str(row, 4) {
+            if let Some(c) = read_str(row, "name_en") {
                 if c == code {
                     return Ok(Some(row_to_service(row)));
                 }
@@ -77,21 +77,31 @@ impl ServiceRepository for MssqlServiceRepository {
     }
 }
 
-/// Hydrate a `ServiceCategory` from the API_SERVICE_GET row.
-/// Column order: id(0), category_main_id(1), category_job_id(2),
-/// name_th(3), name_en(4)... Wait — the SP returns name_th at column 3.
-/// We map the service code as the Thai name (legacy compatibility)
-/// and fall back to defaults for un-modelled columns.
+/// Hydrate a `ServiceCategory` from `API_SERVICE_GET` / `API_SERVICE_LIST_ACTIVE`.
+///
+/// Read by column name (not positional index) so the mapper
+/// survives future SP-side column reorders. The authoritative SELECT
+/// list lives in `migrations/20260620000002_sp_service.sql`:
+///
+/// | Column            | Consumed as                |
+/// |-------------------|----------------------------|
+/// | `id`              | `ServiceCategory.id`       |
+/// | `name_th`         | `ServiceCategory.code`     |
+/// | `priority`        | `ServiceCategory.sort_order`|
+///
+/// The remaining columns (`category_main_id`, `name_en`, `status`, ...)
+/// are not modelled on `ServiceCategory` yet — they fall through to
+/// the default-constructed fields.
 fn row_to_service(row: &tiberius::Row) -> ServiceCategory {
-    let id = read_uuid(row, 0).unwrap_or_else(Uuid::nil);
-    let name_th = read_str(row, 3).unwrap_or("").to_string();
+    let id = read_uuid(row, "id").unwrap_or_else(Uuid::nil);
+    let name_th = read_str(row, "name_th").unwrap_or("").to_string();
     ServiceCategory {
         id,
         code: name_th, // name_th serves as a placeholder code
         default_price: None,
         warranty_days: 30,
         active: true,
-        sort_order: read_i32(row, 11).unwrap_or(0),
+        sort_order: read_i32(row, "priority").unwrap_or(0),
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     }

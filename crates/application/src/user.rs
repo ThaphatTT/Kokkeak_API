@@ -1,15 +1,38 @@
-//! User use cases (M2 + M14).
+//! User use cases (M2 + M14 + M16).
 //!
 //! - `get_me`: fetch the public view of the current user.
 //! - `get_user`: fetch the full `User` aggregate (used by chat /
 //!   payment use cases that need the role list / status).
+//! - `list_users`: admin-only listing (M16 — backed by
+//!   `dbo.SP_PERMISSION_USER_LIST`; cursor pagination applied
+//!   in Rust on top of the SP result).
+//!
+//! **M17 cleanup**: `list_user_permissions` and the
+//! `SP_PERMISSION_USER_FIND_BY_USERNAME` plumbing moved to
+//! `kokkak_application::permission::PermissionUserService` (backed
+//! by the new [`kokkak_domain::PermissionUserRepository`] port).
+//! The permission flow no longer lives on the user/auth port.
 
 use std::sync::Arc;
 
-use kokkak_domain::{AuthError, PublicUser, UserRepository};
+use kokkak_domain::traits::user::RepoError;
+use kokkak_domain::{AuthError, PublicUser, UserListRow, UserRepository};
 use uuid::Uuid;
 
-/// User use case bundle (M2 + M14).
+/// One page of the admin user listing (M16).
+///
+/// Mirrors [`crate::order::OrderListPage`] 1:1 so the wire shape
+/// is consistent across admin list endpoints.
+pub struct UserListPage {
+    /// Items on this page ([`UserListRow`], 1:1 with the SP).
+    pub items: Vec<UserListRow>,
+    /// Opaque cursor for the next page (`None` when this is the
+    /// last page). The cursor value is the `email` of the last
+    /// item — see [`apply_cursor_pagination`].
+    pub next_cursor: Option<String>,
+}
+
+/// User use case bundle (M2 + M14 + M16).
 pub struct UserService {
     users: Arc<dyn UserRepository>,
 }
@@ -40,6 +63,66 @@ impl UserService {
             .map_err(|e| AuthError::Backend(e.to_string()))?
             .ok_or(AuthError::InvalidCredentials)
     }
+
+    /// M16: list users for the admin console.
+    ///
+    /// Backed by [`UserRepository::list_with_permissions`]
+    /// (`dbo.SP_PERMISSION_USER_LIST`). The SP returns the full
+    /// set of active users; the application layer applies
+    /// cursor pagination (`after` + `limit`) on top:
+    ///
+    /// - `after` is the `email` (login handle) of the last item
+    ///   on the previous page — the SP sorts by `user_username_username`
+    ///   so a "first row whose email > after" scan is correct.
+    /// - `limit` caps the slice size (handler clamps to 1..=100).
+    ///
+    /// `next_cursor` is the email of the last item on this page
+    /// when more rows remain; `None` otherwise.
+    ///
+    /// ponytail: the SP returns the full set; pagination lives
+    /// in Rust today. Ceiling: extend the SP with `@p_after_username`
+    /// plus `OFFSET` / `FETCH NEXT` once the user table grows past
+    /// the ten-thousand-row range. At that point the O(n) Rust-side
+    /// scan plus transport becomes the bottleneck.
+    pub async fn list_users(
+        &self,
+        after: Option<String>,
+        limit: u32,
+    ) -> Result<UserListPage, RepoError> {
+        let rows = self.users.list_with_permissions().await?;
+        Ok(apply_cursor_pagination(rows, after.as_deref(), limit))
+    }
+}
+
+/// Apply cursor pagination to the full SP result.
+///
+/// `after` is the email of the last item on the previous page;
+/// `limit` is the max number of rows on this page. The SP sorts
+/// by `user_username_username` (alias `email`) so a `>` scan is
+/// correct.
+///
+/// Returns a page with `next_cursor = Some(last_email)` when more
+/// rows remain; `None` otherwise.
+fn apply_cursor_pagination(
+    rows: Vec<UserListRow>,
+    after: Option<&str>,
+    limit: u32,
+) -> UserListPage {
+    let start = match after {
+        Some(cursor) => rows
+            .iter()
+            .position(|r| r.email.as_str() > cursor)
+            .unwrap_or(rows.len()),
+        None => 0,
+    };
+    let end = (start + limit as usize).min(rows.len());
+    let items = rows[start..end].to_vec();
+    let next_cursor = if end < rows.len() {
+        items.last().map(|r| r.email.clone())
+    } else {
+        None
+    };
+    UserListPage { items, next_cursor }
 }
 
 #[cfg(test)]
@@ -52,6 +135,10 @@ mod tests {
     struct MockUserRepository {
         by_id: std::sync::Mutex<std::collections::HashMap<uuid::Uuid, User>>,
         by_username: std::sync::Mutex<std::collections::HashMap<String, Uuid>>,
+        /// Pre-loaded rows for [`UserRepository::list_with_permissions`].
+        /// When empty, returns an empty Vec (the default for a
+        /// brand-new mock).
+        list_rows: std::sync::Mutex<Vec<kokkak_domain::UserListRow>>,
     }
 
     #[async_trait::async_trait]
@@ -92,6 +179,11 @@ mod tests {
             by_id.insert(user.id, user.clone());
             Ok(())
         }
+        async fn list_with_permissions(
+            &self,
+        ) -> Result<Vec<kokkak_domain::UserListRow>, kokkak_domain::RepoError> {
+            Ok(self.list_rows.lock().unwrap().clone())
+        }
     }
 
     use chrono::Utc;
@@ -129,4 +221,70 @@ mod tests {
         let err = svc.get_me(Uuid::new_v4()).await.unwrap_err();
         assert!(matches!(err, AuthError::InvalidCredentials));
     }
+
+    /// Helper: build a sample UserListRow for pagination tests.
+    ///
+    /// M17 cleanup: `permission_codes` was already removed in M16
+    /// round 2 (LIST = summary only). Detail codes now come from the
+    /// M17 [`kokkak_domain::PermissionUserDetailRow`] via
+    /// [`kokkak_application::permission::PermissionUserService`].
+    fn sample_list_row(email: &str) -> kokkak_domain::UserListRow {
+        kokkak_domain::UserListRow {
+            user_guid: Uuid::new_v4().to_string(),
+            full_name: format!("Test {email}"),
+            email: email.to_string(),
+            role_codes: vec!["customer".into()],
+            role_names: vec!["Customer".into()],
+            has_permission: true,
+            has_override: false,
+            user_status: UserStatus::Active,
+            user_username_status: 1,
+        }
+    }
+
+    /// M16: empty list → empty page, no cursor.
+    #[tokio::test]
+    async fn list_users_returns_empty_page_when_repo_empty() {
+        let repo: Arc<dyn UserRepository> = Arc::new(MockUserRepository::default());
+        let svc = UserService::new(repo);
+        let page = svc.list_users(None, 25).await.unwrap();
+        assert!(page.items.is_empty());
+        assert!(page.next_cursor.is_none());
+    }
+
+    /// M16: cursor pagination slices by `after` (email > cursor)
+    /// and caps by `limit`. The cursor is the email of the LAST
+    /// item on the previous page.
+    #[tokio::test]
+    async fn list_users_applies_cursor_pagination() {
+        let mock = MockUserRepository {
+            list_rows: std::sync::Mutex::new(vec![
+                sample_list_row("alice@example.com"),
+                sample_list_row("bob@example.com"),
+                sample_list_row("carol@example.com"),
+            ]),
+            ..Default::default()
+        };
+        let repo: Arc<dyn UserRepository> = Arc::new(mock);
+        let svc = UserService::new(repo);
+
+        // First page: 2 rows, cursor = bob (last email).
+        let page1 = svc.list_users(None, 2).await.unwrap();
+        assert_eq!(page1.items.len(), 2);
+        assert_eq!(page1.items[0].email, "alice@example.com");
+        assert_eq!(page1.items[1].email, "bob@example.com");
+        assert_eq!(page1.next_cursor.as_deref(), Some("bob@example.com"));
+
+        // Second page: starts after "bob", returns carol.
+        let page2 = svc.list_users(page1.next_cursor.clone(), 2).await.unwrap();
+        assert_eq!(page2.items.len(), 1);
+        assert_eq!(page2.items[0].email, "carol@example.com");
+        assert!(page2.next_cursor.is_none());
+    }
+
+    // M17 cleanup: the three `list_user_permissions_*` tests moved
+    // to `crates/application/src/permission.rs` alongside the new
+    // `PermissionUserService::get_permission_user_group` test set.
+    // The mock `UserRepository` no longer carries `perm_rows`; the
+    // permission flow's mock lives next to the service that uses it.
 }

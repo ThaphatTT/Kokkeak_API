@@ -7,5 +7,6 @@ pub mod chat;
 pub mod health;
 pub mod order;
 pub mod payment;
+pub mod permission;
 pub mod user;
 pub mod ws;

@@ -8,6 +8,7 @@ use kokkak_application::catalog::CatalogService;
 use kokkak_application::chat::{BroadcastTransport, ChatService};
 use kokkak_application::order::OrderService;
 use kokkak_application::payment::PaymentService;
+use kokkak_application::permission::PermissionUserService;
 use kokkak_application::user::UserService;
 use kokkak_application::user_role::UserRoleService;
 use kokkak_common::config::Settings;
@@ -56,6 +57,13 @@ pub struct AppState {
     pub chat: ChatHandle,
     /// Payment use cases (M9).
     pub payments: Arc<PaymentService>,
+    /// Permission-page use cases (`GET /api/v1/permission/...`).
+    ///
+    /// Strictly isolated from the admin user-management flow —
+    /// separate route prefix + separate service + separate handler,
+    /// even though both call the same SQL Server SPs today. See
+    /// [`kokkak_application::permission`] for the rationale.
+    pub permission: Arc<PermissionUserService>,
     /// M15-prep: role × permission use cases (`GET /api/v1/admin/permissions`).
     pub user_roles: Arc<UserRoleService>,
     /// JWT service (for extractor verification).
@@ -177,6 +185,7 @@ impl AppState {
         orders: Arc<OrderService>,
         chat: ChatHandle,
         payments: Arc<PaymentService>,
+        permission: Arc<PermissionUserService>,
         user_roles: Arc<UserRoleService>,
         jwt: Arc<JwtService>,
         health: HealthRegistry,
@@ -190,6 +199,7 @@ impl AppState {
             orders,
             chat,
             payments,
+            permission,
             user_roles,
             jwt,
             health,
@@ -210,6 +220,7 @@ impl AppState {
         orders: Arc<OrderService>,
         chat: Arc<ChatService>,
         payments: Arc<PaymentService>,
+        permission: Arc<PermissionUserService>,
         user_roles: Arc<UserRoleService>,
         jwt: Arc<JwtService>,
         health: HealthRegistry,
@@ -227,6 +238,7 @@ impl AppState {
             orders,
             chat: chat_handle,
             payments,
+            permission,
             user_roles,
             jwt,
             health,

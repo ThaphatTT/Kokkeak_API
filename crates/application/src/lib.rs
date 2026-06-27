@@ -15,6 +15,7 @@ pub mod catalog;
 pub mod chat;
 pub mod order;
 pub mod payment;
+pub mod permission;
 pub mod rate_limit;
 pub mod user;
 pub mod user_role;
@@ -25,6 +26,7 @@ pub use catalog::{CatalogService, ServiceListPage};
 pub use chat::{BroadcastTransport, ChatEvent, ChatService, ChatTransport, ChatUseCaseError};
 pub use order::{OrderListPage, OrderService};
 pub use payment::{ConfirmPaymentInput, ConfirmPaymentResult, CreatePaymentInput, PaymentService};
+pub use permission::{PermissionUserListPage, PermissionUserService};
 pub use rate_limit::{
     AllowAllLoginRateLimiter, LoginRateLimiter, NoopLoginRateLimiter, RateLimitDecision,
 };

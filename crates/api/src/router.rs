@@ -129,20 +129,74 @@ pub fn build(state: AppState) -> Router {
     // via the public `/auth/register` endpoint. Admin users
     // don't need the public-mobile idempotency guard — they are
     // created via the admin web console with auth, not retries.
+    //
+    // M16: Admin user listing (`GET /api/v1/admin/users`, backed by
+    // `dbo.SP_PERMISSION_USER_LIST`) and per-user permission lookup
+    // (`GET /api/v1/admin/users/:guid/permissions`, backed by
+    // `dbo.SP_PERMISSION_USER_FIND_BY_USERNAME`). The per-user
+    // endpoint keeps the GUID in the URL (stable for the admin UI)
+    // and translates GUID → username via the existing
+    // `UserRepository::find_by_id` path so the permission module
+    // is not touched. All three share the same `admin_flag` gate.
     let admin_users_routes = Router::new()
         .route(
             "/api/v1/admin/users",
-            post(handlers::admin::create_user_admin),
+            post(handlers::admin::create_user_admin).get(handlers::admin::list_users_admin),
+        )
+        .route(
+            "/api/v1/admin/users/:guid/permissions",
+            get(handlers::admin::list_user_permissions_admin),
         )
         .layer(from_fn(admin_flag(Arc::new(state.clone()))));
 
     // M15-prep: Admin role × permission matrix lookup. Read-only;
     // the route is gated by `admin_flag` so flipping the Strangler
     // flag hands it back to the legacy ASP.NET service.
+    //
+    // M15: the POST side handles bulk grant / revoke — same path,
+    // different verb. Both share `admin_flag`. No idempotency-key
+    // middleware: this is an authenticated admin web console,
+    // not a mobile client with flaky-network retries.
     let admin_permissions_routes = Router::new()
         .route(
             "/api/v1/admin/permissions",
-            get(handlers::admin::list_permissions),
+            get(handlers::admin::list_permissions).post(handlers::admin::update_permissions_admin),
+        )
+        .layer(from_fn(admin_flag(Arc::new(state.clone()))));
+
+    // Permission page (strictly isolated from admin flow).
+    //
+    // Two read-only routes backed by the same SQL Server SPs as the
+    // admin user-management screen, but on a separate route prefix
+    // (`/api/v1/permission/...`) and served by a separate handler +
+    // application service (`PermissionUserService`). The repository
+    // trait + adapter are shared — only the service + handler +
+    // router layer is duplicated, on purpose. See
+    // `crates/application/src/permission.rs` for the rationale.
+    //
+    // RBAC: same as the admin routes today (Admin / SuperAdmin via
+    // `admin_flag`). If a future permission-page-specific role is
+    // added, swap the middleware in one place here without touching
+    // the handler or the service.
+    let permission_page_routes = Router::new()
+        .route(
+            "/api/v1/permission/users",
+            get(handlers::permission::list_users_permission),
+        )
+        .route(
+            "/api/v1/permission/users/:guid/permissions",
+            get(handlers::permission::list_user_permissions_permission),
+        )
+        // M18: batch permission-override upsert. Read-side
+        // routes are GETs and need no idempotency-key middleware
+        // (admin web console, no flaky-network retries). The
+        // write route is also admin-only; the team's policy is
+        // to skip idempotency on authenticated admin web
+        // consoles (see M15 admin matrix for the same
+        // decision). Same `admin_flag` gate as the rest.
+        .route(
+            "/api/v1/permission/overrides",
+            post(handlers::permission::update_permission_overrides),
         )
         .layer(from_fn(admin_flag(Arc::new(state.clone()))));
 
@@ -163,6 +217,7 @@ pub fn build(state: AppState) -> Router {
         .merge(admin_payout_routes)
         .merge(admin_users_routes)
         .merge(admin_permissions_routes)
+        .merge(permission_page_routes)
         .merge(idempotent_routes)
         .merge(openapi_routes::<AppState>(state.settings.environment))
         .with_state(state)

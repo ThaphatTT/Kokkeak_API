@@ -45,6 +45,7 @@ async fn spec_documents_all_critical_paths() {
         "/api/v1/payments",
         "/api/v1/payments/me",
         "/api/v1/admin/users",
+        "/api/v1/admin/users/{guid}/permissions",
         "/api/v1/admin/payouts",
     ] {
         assert!(

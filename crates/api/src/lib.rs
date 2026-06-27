@@ -28,6 +28,7 @@ use kokkak_application::catalog::CatalogService;
 use kokkak_application::chat::{BroadcastTransport, ChatService, ChatTransport};
 use kokkak_application::order::OrderService;
 use kokkak_application::payment::PaymentService;
+use kokkak_application::permission::PermissionUserService;
 use kokkak_application::rate_limit::LoginRateLimiter;
 use kokkak_application::user::UserService;
 use kokkak_application::user_role::UserRoleService;
@@ -103,6 +104,7 @@ pub fn build_app_state_with(
         bundle.orders.clone(),
     ));
     let user_roles = Arc::new(UserRoleService::new(bundle.user_roles.clone()));
+    let permission = Arc::new(PermissionUserService::new(bundle.permission_users.clone()));
     let translation: Arc<dyn TranslationRepository> = bundle.translation;
     AppState::new(
         auth,
@@ -111,6 +113,7 @@ pub fn build_app_state_with(
         orders,
         chat,
         payments,
+        permission,
         user_roles,
         jwt,
         registry,
@@ -143,6 +146,7 @@ pub fn build_app_state(
     chat_repo: Arc<dyn kokkak_domain::ChatRepository>,
     payment_repo: Arc<dyn kokkak_domain::PaymentRepository>,
     user_role_repo: Arc<dyn kokkak_domain::UserRoleRepository>,
+    permission_user_repo: Arc<dyn kokkak_domain::PermissionUserRepository>,
     jwt: Arc<JwtService>,
     settings: Arc<kokkak_common::config::Settings>,
     registry: HealthRegistry,
@@ -159,6 +163,7 @@ pub fn build_app_state(
         chat: chat_repo,
         payments: payment_repo,
         user_roles: user_role_repo,
+        permission_users: permission_user_repo,
         translation,
         mssql_pool: backend_marker,
         topology: None,
@@ -177,6 +182,7 @@ pub fn build_app_state_json(
     chat_repo: Arc<dyn kokkak_domain::ChatRepository>,
     payment_repo: Arc<dyn kokkak_domain::PaymentRepository>,
     user_role_repo: Arc<dyn kokkak_domain::UserRoleRepository>,
+    permission_user_repo: Arc<dyn kokkak_domain::PermissionUserRepository>,
     jwt: Arc<JwtService>,
     registry: HealthRegistry,
     translation: Arc<dyn TranslationRepository>,
@@ -191,6 +197,7 @@ pub fn build_app_state_json(
         chat: chat_repo,
         payments: payment_repo,
         user_roles: user_role_repo,
+        permission_users: permission_user_repo,
         translation,
         mssql_pool: backend_marker,
         topology: None,

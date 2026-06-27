@@ -81,3 +81,9 @@ err_request:
 # -- Admin permissions (M15-prep: GET /api/v1/admin/permissions) --
 err_permission:
   mode_required: "ต้องระบุ query parameter `mode`"
+  invalid_role_guid: "user_role_guid ไม่ใช่ UUID ที่ถูกต้อง"
+  invalid_permission_guid: "user_permission_guid ไม่ใช่ UUID ที่ถูกต้อง"
+  empty_override_list: "items ต้องไม่ว่างเปล่า"
+  too_many_override_items: "items ต้องมี 1-500 รายการ"
+  invalid_override_effect: "effect ต้องเป็น 'allow' หรือ 'deny'"
+  invalid_override_status: "status ต้องเป็น 0 หรือ 1"

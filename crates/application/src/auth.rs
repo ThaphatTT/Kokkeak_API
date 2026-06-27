@@ -576,6 +576,15 @@ mod tests {
             by_id.insert(user.id, user.clone());
             Ok(())
         }
+        // M17 cleanup: only `list_with_permissions` remains (used by
+        // the admin user-list screen). `find_user_permissions_by_username`
+        // moved to the dedicated `PermissionUserRepository` port; the
+        // auth/login mock no longer needs to implement it.
+        async fn list_with_permissions(
+            &self,
+        ) -> Result<Vec<kokkak_domain::UserListRow>, kokkak_domain::RepoError> {
+            Ok(Vec::new())
+        }
     }
 
     use kokkak_infra::auth::jwt::JwtService;

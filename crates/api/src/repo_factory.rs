@@ -16,14 +16,15 @@ use std::sync::Arc;
 use kokkak_application::order::OrderService;
 use kokkak_common::config::DatabaseTopologySettings;
 use kokkak_domain::{
-    ChatRepository, OrderRepository, PaymentRepository, ServiceRepository, TranslationRepository,
-    UserRepository, UserRoleRepository,
+    ChatRepository, OrderRepository, PaymentRepository, PermissionUserRepository,
+    ServiceRepository, TranslationRepository, UserRepository, UserRoleRepository,
 };
 use kokkak_infra::cache::translation_cache::CachedTranslationRepository;
 use kokkak_infra::db::mssql_catalog::MssqlServiceRepository;
 use kokkak_infra::db::mssql_chat::MssqlChatRepository;
 use kokkak_infra::db::mssql_order::MssqlOrderRepository;
 use kokkak_infra::db::mssql_payment::MssqlPaymentRepository;
+use kokkak_infra::db::mssql_permission_user::MssqlPermissionUserRepository;
 use kokkak_infra::db::mssql_translation::MssqlTranslationRepository;
 use kokkak_infra::db::mssql_user::MssqlUserRepository;
 use kokkak_infra::db::mssql_user_role::MssqlUserRoleRepository;
@@ -55,6 +56,10 @@ pub struct RepoBundle {
     pub payments: Arc<dyn PaymentRepository>,
     /// M15-prep: role × permission matrix repo (admin endpoint).
     pub user_roles: Arc<dyn UserRoleRepository>,
+    /// M17: dedicated permission-page repository (decoupled from
+    /// `users`). Backs `GET /api/v1/permission/...` and the admin
+    /// per-user permission detail endpoint.
+    pub permission_users: Arc<dyn PermissionUserRepository>,
     /// Translation override store (M11). Now backed by SQL Server
     /// (`MssqlTranslationRepository` + moka L1 cache).
     pub translation: Arc<dyn TranslationRepository>,
@@ -126,6 +131,11 @@ pub async fn from_settings(
                         &primary_pool,
                     ))),
                     user_roles: Arc::new(MssqlUserRoleRepository::new(topo_pool(
+                        &topo,
+                        DbRole::Master,
+                        &primary_pool,
+                    ))),
+                    permission_users: Arc::new(MssqlPermissionUserRepository::new(topo_pool(
                         &topo,
                         DbRole::Master,
                         &primary_pool,

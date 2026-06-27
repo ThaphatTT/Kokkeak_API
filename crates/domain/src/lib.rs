@@ -39,14 +39,19 @@ pub use pagination::{Cursor, CursorError};
 pub use payment::{
     commission, Commission, Payment, PaymentError, PaymentStatus, Payout, PayoutStatus,
 };
-pub use permission::{UserRolePermission, UserRolePermissionRow, UserRoleWithPermissions};
+pub use permission::{
+    PermissionOverrideUpdateItem, PermissionOverrideUpdateResult, PermissionUpdateRow,
+    PermissionUserDetailRow, PermissionUserGroup, PermissionUserGroupEntry, PermissionUserListRow,
+    UserRolePermission, UserRolePermissionRow, UserRoleWithPermissions,
+};
 pub use queue::{QueueError, QueueMessage, QueuePort};
 pub use storage::{PutResult, Storage, StorageError, StorageKey};
 pub use traits::chat::{ChatMembership, ChatRepoError, ChatRepository, MessagePage};
 pub use traits::order::OrderRepository;
 pub use traits::payment::{PaymentRepoError, PaymentRepository};
+pub use traits::permission::PermissionUserRepository;
 pub use traits::translation::{TranslationError, TranslationRepository};
 pub use traits::user::RepoError;
 pub use traits::user_role::UserRoleRepository;
 pub use traits::{ServiceRepository, UserRepository};
-pub use user::{Permission, Role, User, UserStatus};
+pub use user::{Permission, Role, User, UserListRow, UserStatus};

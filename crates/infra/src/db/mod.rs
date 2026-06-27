@@ -19,6 +19,7 @@ pub mod mssql_catalog;
 pub mod mssql_chat;
 pub mod mssql_order;
 pub mod mssql_payment;
+pub mod mssql_permission_user;
 pub mod mssql_translation;
 pub mod mssql_user;
 pub mod mssql_user_role;

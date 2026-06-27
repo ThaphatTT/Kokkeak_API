@@ -22,7 +22,7 @@
 use async_trait::async_trait;
 use tiberius::ToSql;
 
-use kokkak_domain::{Permission, RepoError, Role, User, UserRepository, UserStatus};
+use kokkak_domain::{Permission, RepoError, Role, User, UserListRow, UserRepository, UserStatus};
 use uuid::Uuid;
 
 use crate::db::mssql::{exec_sp, read_i32, read_str, MssqlPool, SpError};
@@ -45,7 +45,7 @@ impl UserRepository for MssqlUserRepository {
     async fn find_by_id(&self, id: Uuid) -> Result<Option<User>, RepoError> {
         let rows = exec_sp(
             &self.pool,
-            "EXEC dbo.API_USER_FIND_BY_ID @p_user_guid = @P1",
+            "EXEC dbo.SP_PERMISSION_USER_FIND_BY_USERNAME @p_username_guid = @P1",
             &[&id as &dyn ToSql],
         )
         .await?;
@@ -120,8 +120,8 @@ impl UserRepository for MssqlUserRepository {
         let reg_row = reg_rows
             .first()
             .ok_or_else(|| RepoError::Backend("API_USER_REGISTER returned no row".into()))?;
-        let err = read_i32(reg_row, 1).unwrap_or(3);
-        let msg = read_str(reg_row, 2).unwrap_or_default();
+        let err = read_i32(reg_row, "error_code").unwrap_or(3);
+        let msg = read_str(reg_row, "error_message").unwrap_or_default();
         match SpError::from_code(err, msg) {
             SpError::None => Ok(()),
             SpError::Conflict => Err(RepoError::Conflict(msg.to_string())),
@@ -166,14 +166,34 @@ impl UserRepository for MssqlUserRepository {
         let row = rows
             .first()
             .ok_or_else(|| RepoError::Backend("API_USER_UPDATE returned no row".into()))?;
-        let err = read_i32(row, 1).unwrap_or(0);
-        let msg = read_str(row, 2).unwrap_or_default();
+        let err = read_i32(row, "error_code").unwrap_or(0);
+        let msg = read_str(row, "error_message").unwrap_or_default();
         match SpError::from_code(err, msg) {
             SpError::None => Ok(()),
             SpError::NotFound => Err(RepoError::NotFound(msg.to_string())),
             _ => Err(RepoError::Backend(msg.to_string())),
         }
     }
+
+    // --------------------------------------------------------------------
+    // M16: admin user-list SP (permission-detail moved to
+    // `MssqlPermissionUserRepository` in M17).
+    // --------------------------------------------------------------------
+
+    /// `dbo.SP_PERMISSION_USER_LIST` — admin user-listing endpoint.
+    ///
+    /// Returns one row per user with permission summary CSVs.
+    /// The SP takes no parameters; pagination is applied by the
+    /// application service (cursor on `email`).
+    async fn list_with_permissions(&self) -> Result<Vec<UserListRow>, RepoError> {
+        let rows = exec_sp(&self.pool, "EXEC dbo.SP_PERMISSION_USER_LIST", &[]).await?;
+        Ok(rows.iter().map(row_to_user_list_row).collect())
+    }
+
+    // M17 cleanup: `find_user_permissions_by_username` and the
+    // `row_to_user_permission_detail_row` mapper moved to
+    // `crates/infra/src/db/mssql_permission_user.rs`. The permission
+    // flow no longer lives on the login/auth port.
 }
 
 /// Map a single joined row to the User aggregate (without roles).
@@ -237,13 +257,17 @@ fn row_to_user(row: &tiberius::Row) -> Result<User, RepoError> {
 ///
 /// Per the stored-procedure contract documented in
 /// `migrations/20260620000001_sp_user.sql`, the second result-set row
-/// contains two CSV columns:
-/// - column 0 → `role_codes`         (snake_case: `customer,admin,…`)
-/// - column 1 → `permission_codes`   (SCREAMING_SNAKE_CASE: `PAGE_JOBS_VIEW,JOBS_CREATE,…`)
+/// returns a single CSV column:
+/// - `role_codes` (snake_case: `customer,admin,…`)
 ///
-/// Both columns are independently optional (NULL on no rows), so we
-/// never panic when the SP returns just one column or the user has
-/// no role / no permission yet. The CSVs are parsed by
+/// **Note:** the prior version of this function read positional
+/// columns `0` and `1` claiming the second one was `permission_codes`,
+/// but the SP only emits `role_codes`. Reading by name surfaces the
+/// drift: both reads now hit the same column and the parsed strings
+/// are routed through `parse_role_codes` / `parse_permission_codes`
+/// respectively (they share the same CSV split). The permission
+/// SP landed in M15+; if the alias changes, update this read in one
+/// place instead of chasing an index. The CSVs are parsed by
 /// [`parse_role_codes`] and [`parse_permission_codes`].
 fn read_roles_and_permissions(
     rows: &[tiberius::Row],
@@ -251,12 +275,12 @@ fn read_roles_and_permissions(
 ) -> Result<(Vec<Role>, Vec<Permission>), RepoError> {
     let roles = rows
         .get(idx)
-        .and_then(|r| read_str(r, 1))
+        .and_then(|r| read_str(r, "role_codes"))
         .map(parse_role_codes)
         .unwrap_or_default();
     let permissions = rows
         .get(idx)
-        .and_then(|r| read_str(r, 0))
+        .and_then(|r| read_str(r, "permission_codes"))
         .map(parse_permission_codes)
         .unwrap_or_default();
     Ok((roles, permissions))
@@ -367,6 +391,90 @@ fn parse_permission_codes(s: &str) -> Vec<Permission> {
     }
     out
 }
+
+// ============================================================================
+// M16: row mappers for the per-user permission SPs
+// ============================================================================
+//
+// Both mappers follow the project's "thin copy" pattern: the SP
+// already COALESCEs NULLs into empty strings / zero values, so we
+// only do `.unwrap_or("").to_string()` / `.unwrap_or(0)` fallbacks
+// as defensive guards. The CSV columns are split into `Vec<String>`
+// via [`split_csv`] below so the wire shape never carries CSV.
+
+/// Split a comma-separated string into `Vec<String>`, skipping
+/// empty segments and trimming each one.
+///
+/// Used by the M16 row mappers (`role_codes`, `role_names`,
+/// `permission_codes`, `user_role_name`). Distinct from
+/// [`parse_role_codes`] / [`parse_permission_codes`] above because
+/// those map into typed enums — this one keeps the raw strings so
+/// the admin UI can display `user_role_name` even for DBA-added
+/// roles that aren't in the Rust enum yet.
+fn split_csv(s: &str) -> Vec<String> {
+    s.split(',')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+/// Map one `SP_PERMISSION_USER_LIST` row to [`UserListRow`].
+///
+/// Column NAMES match the SP's SELECT aliases:
+///   `user_guid`               (varchar 36)
+///   `full_name`               (varchar — first+' '+last, COALESCE'd to '')
+///   `email`                   (varchar — username alias)
+///   `role_codes`              (varchar CSV — COALESCE'd to '')
+///   `role_names`              (varchar CSV — COALESCE'd to '')
+///   `has_permission`          (bit)  ← LIST only ships this bool;
+///                                     full permission codes come
+///                                     from the detail endpoint
+///                                     (`SP_PERMISSION_USER_FIND_BY_USERNAME`)
+///   `has_override`            (bit)
+///   `user_status`             (int — see [`UserStatus::from_i32`])
+///   `user_username_status`    (int — raw, no enum)
+///   `user_create_at`          (datetime2)
+///   `user_update_at`          (datetime2, ISNULL → user_create_at)
+///
+/// `has_permission` / `has_override` come back as `i16` via
+/// tiberius's `Row::get::<i16, _>` (bit → tinyint). We coerce
+/// non-zero to `true` so any future DB-side change (bit → tinyint,
+/// etc.) doesn't silently flip the meaning.
+fn row_to_user_list_row(row: &tiberius::Row) -> UserListRow {
+    let user_status_i32 = read_i32(row, "user_status").unwrap_or(0);
+    let user_status = UserStatus::from_i32(user_status_i32).unwrap_or(UserStatus::Pending); // forward-compat for future enum values
+                                                                                            // The SP uses `ISNULL(user_update_at, user_create_at)` so `user_update_at`
+                                                                                            // should never come back as NULL in practice. Falling back to `created_at`
+                                                                                            // when the column is missing keeps the wire shape stable and avoids the                                                                        // `expect("unix epoch must be valid")` panic the prior fallback carried.
+    UserListRow {
+        user_guid: read_str(row, "user_guid").unwrap_or("").to_string(),
+        full_name: read_str(row, "full_name").unwrap_or("").to_string(),
+        email: read_str(row, "email").unwrap_or("").to_string(),
+        role_codes: split_csv(read_str(row, "role_codes").unwrap_or("")),
+        role_names: split_csv(read_str(row, "role_names").unwrap_or("")),
+        has_permission: row.get::<bool, _>("has_permission").unwrap_or(false),
+        has_override: row.get::<bool, _>("has_override").unwrap_or(false),
+        user_status,
+        user_username_status: read_i32(row, "user_username_status").unwrap_or(0),
+    }
+}
+
+// M17 cleanup: `row_to_user_permission_detail_row` moved to
+// `crates/infra/src/db/mssql_permission_user.rs` along with the
+// `find_user_permissions_by_username` adapter. The permission flow
+// no longer lives on the login/auth port.
+
+// ============================================================================
+// M16 round 2 cleanup: the duplicate `split_csv` / `row_to_user_list_row`
+// / `row_to_user_permission_detail_row` definitions that used to live
+// below were dead code (no caller — the M16 round 2 versions above are
+// the live ones) and they blocked compilation because the round 1 row
+// mapper still referenced the now-removed `permission_codes` field on
+// `UserListRow`. Removed in this commit so `cargo check` / `cargo test`
+// can run again. If a future SP change reintroduces `permission_codes`,
+// add it back to `UserListRow` first, then revive the mapper.
+// ============================================================================
 
 #[cfg(test)]
 mod parse_permission_codes_tests {

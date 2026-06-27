@@ -27,6 +27,31 @@ use figment::Figment;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+/// Read `.env.production` or `.env.dev` from the current directory and set
+/// any key=value pairs as environment variables (skips keys already set).
+fn load_env_file() {
+    let candidates = [".env.production", ".env.dev"];
+    for path in &candidates {
+        if let Ok(contents) = std::fs::read_to_string(path) {
+            tracing::debug!("loading env file: {path}");
+            for line in contents.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                if let Some((key, val)) = line.split_once('=') {
+                    let key = key.trim();
+                    let val = val.trim().trim_matches('"').trim_matches('\'');
+                    if std::env::var(key).is_err() {
+                        std::env::set_var(key, val);
+                    }
+                }
+            }
+            return; // หยุดที่ไฟล์แรกที่เจอ
+        }
+    }
+}
+
 /// Errors when loading or validating configuration.
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -1059,7 +1084,12 @@ fn default_max_concurrency() -> usize {
 
 impl Settings {
     /// Load from environment variables. Fails fast on errors.
+    ///
+    /// Before reading env vars, looks for `.env.production` then `.env.dev`
+    /// in the current working directory and loads whichever is found first.
+    /// Variables already set in the environment take precedence.
     pub fn load() -> Result<Self, ConfigError> {
+        load_env_file();
         let figment = Figment::new()
             .merge(Toml::file("config.toml").nested())
             .merge(Env::prefixed("KOKKAK_").split("__"));

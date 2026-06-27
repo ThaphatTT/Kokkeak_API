@@ -39,9 +39,9 @@ impl ChatRepository for MssqlChatRepository {
         .await
         .map_err(|e| ChatRepoError::Backend(e.to_string()))?;
         for row in &rows {
-            if read_uuid(row, 0) == Some(room_id) {
-                let a = read_uuid(row, 3).unwrap_or_else(Uuid::nil);
-                let b = read_uuid(row, 4).unwrap_or_else(Uuid::nil);
+            if read_uuid(row, "id") == Some(room_id) {
+                let a = read_uuid(row, "participant_a").unwrap_or_else(Uuid::nil);
+                let b = read_uuid(row, "participant_b").unwrap_or_else(Uuid::nil);
                 return Ok(Some(ChatRoom {
                     id: room_id as Uuid,
                     participants: vec![
@@ -55,10 +55,10 @@ impl ChatRepository for MssqlChatRepository {
                         },
                     ],
                     created_at: row
-                        .get::<chrono::DateTime<chrono::Utc>, _>(5)
+                        .get::<chrono::DateTime<chrono::Utc>, _>("created_at")
                         .unwrap_or_else(Utc::now),
                     last_msg_at: row
-                        .get::<chrono::DateTime<chrono::Utc>, _>(6)
+                        .get::<chrono::DateTime<chrono::Utc>, _>("last_msg_at")
                         .unwrap_or_else(Utc::now),
                     title: None,
                 }));
@@ -120,14 +120,14 @@ impl ChatRepository for MssqlChatRepository {
         .map_err(|e| ChatRepoError::Backend(e.to_string()))?;
         let mut out = Vec::with_capacity(rows.len());
         for row in &rows {
-            let id = read_uuid(row, 0).unwrap_or_else(Uuid::nil);
-            let a = read_uuid(row, 3).unwrap_or_else(Uuid::nil);
-            let b = read_uuid(row, 4).unwrap_or_else(Uuid::nil);
+            let id = read_uuid(row, "id").unwrap_or_else(Uuid::nil);
+            let a = read_uuid(row, "participant_a").unwrap_or_else(Uuid::nil);
+            let b = read_uuid(row, "participant_b").unwrap_or_else(Uuid::nil);
             let created_at = row
-                .get::<chrono::DateTime<chrono::Utc>, _>(5)
+                .get::<chrono::DateTime<chrono::Utc>, _>("created_at")
                 .unwrap_or_else(Utc::now);
             let last_msg_at = row
-                .get::<chrono::DateTime<chrono::Utc>, _>(6)
+                .get::<chrono::DateTime<chrono::Utc>, _>("last_msg_at")
                 .unwrap_or_else(Utc::now);
             out.push(RoomSummary {
                 room: ChatRoom {
@@ -147,7 +147,7 @@ impl ChatRepository for MssqlChatRepository {
                     title: None,
                 },
                 last_message: None,
-                unread: read_i32(row, 7).unwrap_or(0).max(0) as u32,
+                unread: read_i32(row, "unread_count").unwrap_or(0).max(0) as u32,
             });
         }
         Ok(out)
@@ -175,12 +175,12 @@ impl ChatRepository for MssqlChatRepository {
         Ok(rows
             .iter()
             .map(|r| ChatMessage {
-                id: read_uuid(r, 0).unwrap_or_else(Uuid::nil),
+                id: read_uuid(r, "id").unwrap_or_else(Uuid::nil),
                 room_id,
-                sender_id: read_uuid(r, 2).unwrap_or_else(Uuid::nil),
-                body: read_str(r, 3).unwrap_or("").to_string(),
+                sender_id: read_uuid(r, "sender_id").unwrap_or_else(Uuid::nil),
+                body: read_str(r, "body").unwrap_or("").to_string(),
                 sent_at: r
-                    .get::<chrono::DateTime<chrono::Utc>, _>(4)
+                    .get::<chrono::DateTime<chrono::Utc>, _>("sent_at")
                     .unwrap_or_else(Utc::now),
                 read_by: Vec::new(),
             })
