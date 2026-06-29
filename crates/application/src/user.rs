@@ -84,12 +84,17 @@ impl UserService {
     /// plus `OFFSET` / `FETCH NEXT` once the user table grows past
     /// the ten-thousand-row range. At that point the O(n) Rust-side
     /// scan plus transport becomes the bottleneck.
+    ///
+    /// M19: `actor` is the authenticated admin's GUID forwarded as
+    /// `@p_user_guid` to `dbo.SP_PERMISSION_USER_LIST` for the
+    /// SP-level admin gate (defense-in-depth).
     pub async fn list_users(
         &self,
         after: Option<String>,
         limit: u32,
+        actor: Uuid,
     ) -> Result<UserListPage, RepoError> {
-        let rows = self.users.list_with_permissions().await?;
+        let rows = self.users.list_with_permissions(actor).await?;
         Ok(apply_cursor_pagination(rows, after.as_deref(), limit))
     }
 }
@@ -181,7 +186,11 @@ mod tests {
         }
         async fn list_with_permissions(
             &self,
+            _caller_guid: Uuid,
         ) -> Result<Vec<kokkak_domain::UserListRow>, kokkak_domain::RepoError> {
+            // M19: caller_guid accepted but ignored by the mock —
+            // the SP-side admin gate is exercised by the integration
+            // suite; the unit tests here verify pagination only.
             Ok(self.list_rows.lock().unwrap().clone())
         }
     }
@@ -247,7 +256,8 @@ mod tests {
     async fn list_users_returns_empty_page_when_repo_empty() {
         let repo: Arc<dyn UserRepository> = Arc::new(MockUserRepository::default());
         let svc = UserService::new(repo);
-        let page = svc.list_users(None, 25).await.unwrap();
+        let actor = Uuid::new_v4();
+        let page = svc.list_users(None, 25, actor).await.unwrap();
         assert!(page.items.is_empty());
         assert!(page.next_cursor.is_none());
     }
@@ -267,16 +277,20 @@ mod tests {
         };
         let repo: Arc<dyn UserRepository> = Arc::new(mock);
         let svc = UserService::new(repo);
+        let actor = Uuid::new_v4();
 
         // First page: 2 rows, cursor = bob (last email).
-        let page1 = svc.list_users(None, 2).await.unwrap();
+        let page1 = svc.list_users(None, 2, actor).await.unwrap();
         assert_eq!(page1.items.len(), 2);
         assert_eq!(page1.items[0].email, "alice@example.com");
         assert_eq!(page1.items[1].email, "bob@example.com");
         assert_eq!(page1.next_cursor.as_deref(), Some("bob@example.com"));
 
         // Second page: starts after "bob", returns carol.
-        let page2 = svc.list_users(page1.next_cursor.clone(), 2).await.unwrap();
+        let page2 = svc
+            .list_users(page1.next_cursor.clone(), 2, actor)
+            .await
+            .unwrap();
         assert_eq!(page2.items.len(), 1);
         assert_eq!(page2.items[0].email, "carol@example.com");
         assert!(page2.next_cursor.is_none());

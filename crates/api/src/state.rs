@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use kokkak_application::auth::AuthService;
 use kokkak_application::catalog::CatalogService;
 use kokkak_application::chat::{BroadcastTransport, ChatService};
+use kokkak_application::master::MasterDropdownService;
 use kokkak_application::order::OrderService;
 use kokkak_application::payment::PaymentService;
 use kokkak_application::permission::PermissionUserService;
@@ -51,6 +52,10 @@ pub struct AppState {
     pub user: Arc<UserService>,
     /// Catalog use cases.
     pub catalog: Arc<CatalogService>,
+    /// M20: Master-data dropdown use cases (country dropdown first;
+    /// provinces / banks / etc. land here as `list_provinces` etc.).
+    /// Same endpoint serves mobile / customer web / admin web.
+    pub master: Arc<MasterDropdownService>,
     /// Order use cases.
     pub orders: Arc<OrderService>,
     /// Chat use cases (M8).
@@ -182,6 +187,7 @@ impl AppState {
         auth: Arc<AuthService>,
         user: Arc<UserService>,
         catalog: Arc<CatalogService>,
+        master: Arc<MasterDropdownService>,
         orders: Arc<OrderService>,
         chat: ChatHandle,
         payments: Arc<PaymentService>,
@@ -196,6 +202,7 @@ impl AppState {
             auth,
             user: user.clone(),
             catalog,
+            master,
             orders,
             chat,
             payments,
@@ -217,6 +224,7 @@ impl AppState {
         auth: Arc<AuthService>,
         user: Arc<UserService>,
         catalog: Arc<CatalogService>,
+        master: Arc<MasterDropdownService>,
         orders: Arc<OrderService>,
         chat: Arc<ChatService>,
         payments: Arc<PaymentService>,
@@ -235,6 +243,7 @@ impl AppState {
             auth,
             user: user.clone(),
             catalog,
+            master,
             orders,
             chat: chat_handle,
             payments,

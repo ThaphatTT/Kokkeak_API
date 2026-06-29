@@ -19,6 +19,7 @@ use kokkak_infra::db::migrate;
 use kokkak_infra::db::mssql::build_pool;
 use kokkak_infra::db::mssql_catalog::MssqlServiceRepository;
 use kokkak_infra::db::mssql_chat::MssqlChatRepository;
+use kokkak_infra::db::mssql_master::MssqlMasterDropdownRepository;
 use kokkak_infra::db::mssql_order::MssqlOrderRepository;
 use kokkak_infra::db::mssql_payment::MssqlPaymentRepository;
 use kokkak_infra::db::mssql_permission_user::MssqlPermissionUserRepository;
@@ -99,6 +100,10 @@ async fn make_app() -> (axum::Router, Vec<PathBuf>) {
         // `users`). Auth tests don't exercise permission routes, so a
         // live MSSQL adapter against the same pool is sufficient.
         permission_users: Arc::new(MssqlPermissionUserRepository::new(pool.clone())),
+        // M20: master-data dropdowns. Auth tests don't exercise
+        // the new master routes, but the bundle requires the field
+        // so the wiring matches production.
+        master: Arc::new(MssqlMasterDropdownRepository::new(pool.clone())),
         translation,
         mssql_pool: None,
         topology: None,

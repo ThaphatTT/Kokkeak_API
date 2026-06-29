@@ -33,6 +33,8 @@
 
 use std::sync::Arc;
 
+use uuid::Uuid;
+
 use kokkak_domain::traits::user::RepoError;
 use kokkak_domain::{
     PermissionUpdateRow, UserRolePermission, UserRolePermissionRow, UserRoleRepository,
@@ -111,8 +113,10 @@ impl UserRoleService {
     pub async fn list_permissions(
         &self,
         mode: &str,
+        caller_guid: Uuid,
     ) -> Result<Vec<UserRoleWithPermissions>, RepoError> {
-        let flat = self.repo.list_permissions(mode).await?;
+        // M19: forward `caller_guid` to the SP for the admin gate.
+        let flat = self.repo.list_permissions(mode, caller_guid).await?;
         Ok(group_by_role(flat))
     }
 
@@ -267,7 +271,11 @@ mod tests {
         async fn list_permissions(
             &self,
             mode: &str,
+            _caller_guid: Uuid,
         ) -> Result<Vec<UserRolePermissionRow>, RepoError> {
+            // M19: caller_guid accepted but ignored by the mock —
+            // the admin gate lives on the SP side and the
+            // integration suite covers it.
             *self.last_mode.lock().unwrap() = Some(mode.to_string());
             Ok(self.rows.lock().unwrap().clone())
         }
@@ -373,7 +381,8 @@ mod tests {
             ..Default::default()
         });
         let svc = UserRoleService::new(repo.clone());
-        let groups = svc.list_permissions("SELECT_ADMIN").await.unwrap();
+        let actor = Uuid::new_v4();
+        let groups = svc.list_permissions("SELECT_ADMIN", actor).await.unwrap();
         assert_eq!(
             groups.len(),
             1,
@@ -428,7 +437,11 @@ mod tests {
             ..Default::default()
         });
         let svc = UserRoleService::new(repo);
-        let groups = svc.list_permissions("SELECT_EMPLOYEE").await.unwrap();
+        let actor = Uuid::new_v4();
+        let groups = svc
+            .list_permissions("SELECT_EMPLOYEE", actor)
+            .await
+            .unwrap();
 
         assert_eq!(groups.len(), 1, "EMPLOYEE must appear once");
         assert_eq!(groups[0].user_role_code, "EMPLOYEE");
@@ -499,7 +512,8 @@ mod tests {
             ..Default::default()
         });
         let svc = UserRoleService::new(repo);
-        let groups = svc.list_permissions("SELECT_ADMIN").await.unwrap();
+        let actor = Uuid::new_v4();
+        let groups = svc.list_permissions("SELECT_ADMIN", actor).await.unwrap();
         assert_eq!(
             groups.len(),
             2,
@@ -523,7 +537,11 @@ mod tests {
         // know about to confirm pass-through.
         let repo = Arc::new(MockUserRoleRepository::default());
         let svc = UserRoleService::new(repo.clone());
-        let _ = svc.list_permissions("SELECT_FUTURE_MODE_X").await.unwrap();
+        let actor = Uuid::new_v4();
+        let _ = svc
+            .list_permissions("SELECT_FUTURE_MODE_X", actor)
+            .await
+            .unwrap();
         let last = repo.last_mode.lock().unwrap().clone().unwrap();
         assert_eq!(last, "SELECT_FUTURE_MODE_X");
     }
@@ -532,7 +550,8 @@ mod tests {
     async fn empty_repo_returns_empty_vec() {
         let repo = Arc::new(MockUserRoleRepository::default());
         let svc = UserRoleService::new(repo);
-        let groups = svc.list_permissions("SELECT_ADMIN").await.unwrap();
+        let actor = Uuid::new_v4();
+        let groups = svc.list_permissions("SELECT_ADMIN", actor).await.unwrap();
         assert!(groups.is_empty());
     }
 

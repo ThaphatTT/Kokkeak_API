@@ -1,72 +1,32 @@
 -- =============================================================================
 -- M17: Permission-page stored procedures.
 -- -----------------------------------------------------------------------------
--- Decouples the permission flow from `dbo.SP_PERMISSION_USER_LIST` /
--- `dbo.SP_PERMISSION_USER_FIND_BY_USERNAME` (the M16 SPs that also back the
--- admin user-management screen). The new SPs:
+-- Decouples the permission flow from `dbo.SP_PERMISSION_USER_FIND_BY_USERNAME`
+-- (the M16 SP that also backed the admin user-management screen). The new
+-- SPs:
 --
 --   - take GUIDs directly (no GUID→username translation in Rust)
 --   - return a single `user_role_name` string instead of CSV
 --   - return `has_override` / `effective_status` as `INT` (0/1)
 --
 -- Both SPs are read-only and live in KOKKAK_MASTER (same DB as the M16 SPs).
+--
+-- M19 follow-up: the original M17 SP was named `SP_PERMISSION_USER_LIST_V2`
+-- (intentionally suffixed to coexist with the legacy M16
+-- `SP_PERMISSION_USER_LIST`). M19 renames the M17 SP to the canonical
+-- `SP_PERMISSION_USER_LIST` name and merges the M16 column set into the
+-- returned row shape so a single SP backs both the admin console and the
+-- permission page. The implementation + `@p_user_guid` admin gate live in
+-- `20260628000001_sp_caller_user_guid.sql` — this file keeps the stub
+-- `CREATE PROCEDURE` so a fresh install from scratch doesn't 500 on
+-- `ALTER PROCEDURE` of a non-existent object before the M19 migration runs.
 -- =============================================================================
 
 -- ----------------------------------------------------------------------------
--- SP_PERMISSION_USER_LIST_V2
+-- SP_PERMISSION_USER_LIST  (canonical — see M19 for body + @p_user_guid)
 -- ----------------------------------------------------------------------------
--- One row per active user for the permission page (and the admin user-list
--- when the new shape is adopted). Returns a single `user_role_name` string
--- (not the CSV the M16 SP returned) — the permission page does not need to
--- enumerate every role the user holds.
---
--- Result columns:
---   user_guid         UNIQUEIDENTIFIER
---   full_name         NVARCHAR(201)        -- first_name + ' ' + last_name
---   email             NVARCHAR(255)        -- user_username.user_username_username
---   user_role_name    NVARCHAR(64)         -- single role display name
--- ----------------------------------------------------------------------------
-IF OBJECT_ID('dbo.SP_PERMISSION_USER_LIST_V2', 'P') IS NULL
-EXEC ('CREATE PROCEDURE dbo.SP_PERMISSION_USER_LIST_V2 AS BEGIN SET NOCOUNT ON; END');
-GO
-
-ALTER PROCEDURE dbo.SP_PERMISSION_USER_LIST_V2
-AS
-BEGIN
-    SET NOCOUNT ON;
-
-    ;WITH user_active_role AS (
-        SELECT
-            u.user_guid,
-            r.user_role_name,
-            ROW_NUMBER() OVER (
-                PARTITION BY u.user_guid
-                ORDER BY r.user_role_code
-            ) AS rn
-        FROM [user] u
-        JOIN [user_user_role] ur
-            ON ur.user_user_role_user_guid = u.user_guid
-           AND ur.user_user_role_status = 1
-        JOIN [user_role] r
-            ON r.user_role_guid = ur.user_user_role_role_guid
-           AND r.user_role_status = 1
-        WHERE u.user_status = 1
-    )
-    SELECT
-        u.user_guid,
-        LTRIM(RTRIM(ISNULL(u.user_first_name, '') + ' ' + ISNULL(u.user_last_name, ''))) AS full_name,
-        un.user_username_username AS email,
-        ar.user_role_name
-    FROM [user] u
-    JOIN [user_username] un
-        ON un.user_username_user_guid = u.user_guid
-       AND un.user_username_status = 1
-    LEFT JOIN user_active_role ar
-        ON ar.user_guid = u.user_guid
-       AND ar.rn = 1
-    WHERE u.user_status = 1
-    ORDER BY un.user_username_username;
-END;
+IF OBJECT_ID('dbo.SP_PERMISSION_USER_LIST', 'P') IS NULL
+EXEC ('CREATE PROCEDURE dbo.SP_PERMISSION_USER_LIST AS BEGIN SET NOCOUNT ON; END');
 GO
 
 -- ----------------------------------------------------------------------------

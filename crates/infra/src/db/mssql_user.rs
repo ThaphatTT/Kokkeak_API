@@ -182,11 +182,24 @@ impl UserRepository for MssqlUserRepository {
 
     /// `dbo.SP_PERMISSION_USER_LIST` — admin user-listing endpoint.
     ///
-    /// Returns one row per user with permission summary CSVs.
-    /// The SP takes no parameters; pagination is applied by the
-    /// application service (cursor on `email`).
-    async fn list_with_permissions(&self) -> Result<Vec<UserListRow>, RepoError> {
-        let rows = exec_sp(&self.pool, "EXEC dbo.SP_PERMISSION_USER_LIST", &[]).await?;
+    /// Returns one row per user with permission summary CSVs (legacy
+    /// M16 columns) + permission-page columns (M17). Pagination is
+    /// applied by the application service (cursor on `email`).
+    ///
+    /// M19: `@p_user_guid` is the admin check — non-admin callers
+    /// receive zero rows. String-encoded per the project GUID-into-SP
+    /// rule (the SP declares `varchar(36)` + `TRY_CAST` inside).
+    async fn list_with_permissions(
+        &self,
+        caller_guid: Uuid,
+    ) -> Result<Vec<UserListRow>, RepoError> {
+        let caller_str = caller_guid.to_string();
+        let rows = exec_sp(
+            &self.pool,
+            "EXEC dbo.SP_PERMISSION_USER_LIST @p_by = @P1",
+            &[&caller_str as &dyn ToSql],
+        )
+        .await?;
         Ok(rows.iter().map(row_to_user_list_row).collect())
     }
 

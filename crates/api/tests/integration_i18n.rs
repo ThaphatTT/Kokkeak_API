@@ -36,6 +36,7 @@ use kokkak_infra::auth::jwt::JwtService;
 use kokkak_infra::cache::translation_cache::CachedTranslationRepository;
 use kokkak_infra::db::migrate;
 use kokkak_infra::db::mssql::build_pool;
+use kokkak_infra::db::mssql_master::MssqlMasterDropdownRepository;
 use kokkak_infra::db::mssql_permission_user::MssqlPermissionUserRepository;
 use kokkak_infra::db::mssql_translation::MssqlTranslationRepository;
 use kokkak_infra::db::mssql_user_role::MssqlUserRoleRepository;
@@ -122,6 +123,9 @@ async fn make_app() -> (axum::Router, Arc<MssqlTranslationRepository>) {
         // don't exercise permission routes, but the bundle
         // requires the field so the wiring matches production.
         permission_users: Arc::new(MssqlPermissionUserRepository::new(pool.clone())),
+        // M20: master-data dropdowns. i18n tests don't exercise
+        // the master routes but the bundle requires the field.
+        master: Arc::new(MssqlMasterDropdownRepository::new(pool.clone())),
         translation: cached,
         mssql_pool: None,
         topology: None,

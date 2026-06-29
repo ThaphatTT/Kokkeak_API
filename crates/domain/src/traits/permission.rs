@@ -80,7 +80,7 @@ use crate::traits::user::RepoError;
 pub trait PermissionUserRepository: Send + Sync {
     /// List users for the permission page (cursor-paginated).
     ///
-    /// Backed by `dbo.SP_PERMISSION_USER_LIST_V2`. Returns ALL
+    /// Backed by `dbo.SP_PERMISSION_USER_LIST`. Returns ALL
     /// active users (no parameters); the application layer applies
     /// cursor pagination on top of the result.
     ///
@@ -88,7 +88,17 @@ pub trait PermissionUserRepository: Send + Sync {
     /// Rust today. Ceiling: extend the SP with `@p_after_username` +
     /// `OFFSET / FETCH NEXT` when the user table grows past ~10K
     /// rows.
-    async fn list_permission_users(&self) -> Result<Vec<PermissionUserListRow>, RepoError>;
+    ///
+    /// M19: `caller_guid` is the authenticated admin's GUID — the SP
+    /// enforces an admin / super_admin check before returning rows
+    /// (defense-in-depth on top of the axum `admin_flag` middleware).
+    /// When the caller isn't admin, the SP returns 0 rows and this
+    /// trait surfaces them as `Ok(vec![])` per the read-empty-result
+    /// contract.
+    async fn list_permission_users(
+        &self,
+        caller_guid: Uuid,
+    ) -> Result<Vec<PermissionUserListRow>, RepoError>;
 
     /// Per-user detailed permission rows (one per `(user, permission)`
     /// pair) for the **permission page** AND the admin permission-detail
@@ -98,6 +108,8 @@ pub trait PermissionUserRepository: Send + Sync {
     /// SP's `@p_user_guid` parameter accepts the user's primary
     /// key directly — no GUID→username translation needed in the
     /// application layer (which was the coupling that M17 removed).
+    /// M19 adds `@p_caller_user_guid` — the authenticated admin's
+    /// GUID — used as the admin check on the SP side.
     ///
     /// Returns an empty `Vec` (not `NotFound`) when the user exists
     /// but has no effective permissions — that's a legitimate
@@ -107,6 +119,7 @@ pub trait PermissionUserRepository: Send + Sync {
     async fn find_permission_user_detail(
         &self,
         user_guid: Uuid,
+        caller_guid: Uuid,
     ) -> Result<Vec<PermissionUserDetailRow>, RepoError>;
 
     /// Batch upsert permission overrides — `POST /api/v1/permission/overrides`.

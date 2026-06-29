@@ -11,6 +11,7 @@
 //! adapter in `kokkak-infra` implements it.
 
 use async_trait::async_trait;
+use uuid::Uuid;
 
 use crate::permission::{PermissionUpdateRow, UserRolePermissionRow};
 use crate::traits::user::RepoError;
@@ -34,7 +35,16 @@ pub trait UserRoleRepository: Send + Sync {
     /// `SELECT_ADMIN`, `SELECT_EMPLOYEE`). The mode values are
     /// application-defined and may be extended over time; the
     /// Rust side does not enforce a closed set.
-    async fn list_permissions(&self, mode: &str) -> Result<Vec<UserRolePermissionRow>, RepoError>;
+    ///
+    /// M19: `caller_guid` is the authenticated admin's GUID. The
+    /// SP enforces an admin / super_admin check before returning
+    /// rows; a non-admin caller receives zero rows per the
+    /// fail-closed read contract.
+    async fn list_permissions(
+        &self,
+        mode: &str,
+        caller_guid: Uuid,
+    ) -> Result<Vec<UserRolePermissionRow>, RepoError>;
 
     /// Apply one `(role, permission, status)` update via
     /// `dbo.SP_USER_ROLE_PERMISSION_UPDATE`.

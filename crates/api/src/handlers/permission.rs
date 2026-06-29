@@ -110,7 +110,12 @@ pub async fn list_users_permission(
 
     // 3. Delegate to the permission-page application service. The
     //    SP returns the full set; pagination lives in Rust today.
-    let page = match state.permission.list_permission_users(q.after, limit).await {
+    //    M19: forward `user.id()` as caller for the SP admin gate.
+    let page = match state
+        .permission
+        .list_permission_users(q.after, limit, user.id())
+        .await
+    {
         Ok(p) => p,
         Err(e) => return Err(ApiError::from(e).into_localized_response(&state).await),
     };
@@ -178,7 +183,12 @@ pub async fn list_user_permissions_permission(
     //    service calls
     //    `dbo.SP_PERMISSION_USER_DETAIL_FIND_BY_GUID` with the
     //    GUID directly — no GUID→username translation needed.
-    let group = match state.permission.get_permission_user_group(guid).await {
+    //    M19: forward `user.id()` as caller for the SP admin gate.
+    let group = match state
+        .permission
+        .get_permission_user_group(guid, user.id())
+        .await
+    {
         Ok(g) => g,
         Err(RepoError::NotFound(_)) => {
             let locale = current_locale();

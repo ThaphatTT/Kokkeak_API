@@ -16,12 +16,14 @@ use std::sync::Arc;
 use kokkak_application::order::OrderService;
 use kokkak_common::config::DatabaseTopologySettings;
 use kokkak_domain::{
-    ChatRepository, OrderRepository, PaymentRepository, PermissionUserRepository,
-    ServiceRepository, TranslationRepository, UserRepository, UserRoleRepository,
+    ChatRepository, MasterDropdownRepository, OrderRepository, PaymentRepository,
+    PermissionUserRepository, ServiceRepository, TranslationRepository, UserRepository,
+    UserRoleRepository,
 };
 use kokkak_infra::cache::translation_cache::CachedTranslationRepository;
 use kokkak_infra::db::mssql_catalog::MssqlServiceRepository;
 use kokkak_infra::db::mssql_chat::MssqlChatRepository;
+use kokkak_infra::db::mssql_master::MssqlMasterDropdownRepository;
 use kokkak_infra::db::mssql_order::MssqlOrderRepository;
 use kokkak_infra::db::mssql_payment::MssqlPaymentRepository;
 use kokkak_infra::db::mssql_permission_user::MssqlPermissionUserRepository;
@@ -63,6 +65,9 @@ pub struct RepoBundle {
     /// Translation override store (M11). Now backed by SQL Server
     /// (`MssqlTranslationRepository` + moka L1 cache).
     pub translation: Arc<dyn TranslationRepository>,
+    /// M20: master-data dropdowns (country first). Read-mostly
+    /// reference data consumed by every client.
+    pub master: Arc<dyn MasterDropdownRepository>,
     /// Primary (catch-all) MSSQL pool. M12 adds [`RepoBundle::topology`]
     /// for per-role pool access.
     pub mssql_pool: Option<kokkak_infra::db::mssql::MssqlPool>,
@@ -143,6 +148,7 @@ pub async fn from_settings(
                     translation: Arc::new(CachedTranslationRepository::new(
                         MssqlTranslationRepository::new(primary_pool.clone()),
                     )),
+                    master: Arc::new(MssqlMasterDropdownRepository::new(primary_pool.clone())),
                     mssql_pool: Some(primary_pool),
                     topology: Some(topo),
                 })

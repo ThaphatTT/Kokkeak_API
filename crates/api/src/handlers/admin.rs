@@ -220,7 +220,8 @@ pub async fn list_users_admin(
     //    arrives — the wire shape is stable so swapping in the
     //    real implementation doesn't require any client-side
     //    change.
-    let page = match state.user.list_users(q.after, limit).await {
+    //    M19: forward `user.id()` as caller for the SP admin gate.
+    let page = match state.user.list_users(q.after, limit, user.id()).await {
         Ok(p) => p,
         Err(e) => return Err(ApiError::from(e).into_localized_response(&state).await),
     };
@@ -312,7 +313,12 @@ pub async fn list_user_permissions_admin(
     //    needed (M17). The wire payload is the grouped
     //    [`PermissionUserGroup`] (user identity hoisted, per-permission
     //    rows nested).
-    let group = match state.permission.get_permission_user_group(guid).await {
+    //    M19: forward `user.id()` as caller for the SP admin gate.
+    let group = match state
+        .permission
+        .get_permission_user_group(guid, user.id())
+        .await
+    {
         Ok(g) => g,
         Err(RepoError::NotFound(_)) => {
             let locale = current_locale();
@@ -427,10 +433,12 @@ pub async fn list_permissions(
     //    `Result<Response, Response>` and the utoipa
     //    `body = Vec<UserRoleWithPermissions>` annotation needs
     //    the concrete type to be in scope.
-    let groups: Vec<UserRoleWithPermissions> = match state.user_roles.list_permissions(mode).await {
-        Ok(r) => r,
-        Err(e) => return Err(ApiError::from(e).into_localized_response(&state).await),
-    };
+    //    M19: forward `user.id()` as caller for the SP admin gate.
+    let groups: Vec<UserRoleWithPermissions> =
+        match state.user_roles.list_permissions(mode, user.id()).await {
+            Ok(r) => r,
+            Err(e) => return Err(ApiError::from(e).into_localized_response(&state).await),
+        };
 
     Ok((
         StatusCode::OK,

@@ -72,6 +72,13 @@ pub fn build(state: AppState) -> Router {
             "/api/v1/catalog/services",
             get(handlers::catalog::list_services),
         )
+        // M20: country dropdown endpoint. Shared by mobile /
+        // customer web / admin web — authenticated only, no
+        // admin gate (the data is public to every role).
+        .route(
+            "/api/v1/master/countries",
+            get(handlers::master::list_countries),
+        )
         .route("/api/v1/orders/me", get(handlers::order::list_my_orders))
         .route(
             "/api/v1/orders/assigned",

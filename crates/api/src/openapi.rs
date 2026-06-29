@@ -57,6 +57,8 @@ use crate::handlers;
         // ---- User / catalog ----
         handlers::user::get_me,
         handlers::catalog::list_services,
+        // ---- M20: Master data ----
+        handlers::master::list_countries,
         // ---- Orders ----
         handlers::order::list_my_orders,
         handlers::order::list_assigned_orders,
@@ -87,6 +89,8 @@ use crate::handlers;
             handlers::auth::LogoutResponse,
             handlers::catalog::ListQuery,
             handlers::catalog::ServiceItem,
+            handlers::master::CountriesQuery,
+            kokkak_domain::MasterDropdownRow,
             handlers::admin::CreateUserRequest,
                                     handlers::admin::ListUsersQuery,
                                     handlers::admin::PermissionsQuery,

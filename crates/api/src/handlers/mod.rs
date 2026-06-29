@@ -5,6 +5,7 @@ pub mod auth;
 pub mod catalog;
 pub mod chat;
 pub mod health;
+pub mod master;
 pub mod order;
 pub mod payment;
 pub mod permission;

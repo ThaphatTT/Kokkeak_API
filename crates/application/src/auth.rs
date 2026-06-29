@@ -582,6 +582,7 @@ mod tests {
         // auth/login mock no longer needs to implement it.
         async fn list_with_permissions(
             &self,
+            _caller_guid: Uuid,
         ) -> Result<Vec<kokkak_domain::UserListRow>, kokkak_domain::RepoError> {
             Ok(Vec::new())
         }

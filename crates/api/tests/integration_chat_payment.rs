@@ -35,6 +35,7 @@ use kokkak_infra::db::migrate;
 use kokkak_infra::db::mssql::build_pool;
 use kokkak_infra::db::mssql_catalog::MssqlServiceRepository;
 use kokkak_infra::db::mssql_chat::MssqlChatRepository;
+use kokkak_infra::db::mssql_master::MssqlMasterDropdownRepository;
 use kokkak_infra::db::mssql_order::MssqlOrderRepository;
 use kokkak_infra::db::mssql_payment::MssqlPaymentRepository;
 use kokkak_infra::db::mssql_permission_user::MssqlPermissionUserRepository;
@@ -91,6 +92,8 @@ async fn make_app() -> (axum::Router, Vec<PathBuf>) {
         Arc::new(MssqlUserRoleRepository::new(pool.clone()));
     let permission_user_repo: Arc<dyn kokkak_domain::PermissionUserRepository> =
         Arc::new(MssqlPermissionUserRepository::new(pool.clone()));
+    let master_repo: Arc<dyn kokkak_domain::MasterDropdownRepository> =
+        Arc::new(MssqlMasterDropdownRepository::new(pool.clone()));
     let translation: Arc<dyn kokkak_domain::TranslationRepository> = Arc::new(
         CachedTranslationRepository::new(MssqlTranslationRepository::new(pool.clone())),
     );
@@ -111,6 +114,7 @@ async fn make_app() -> (axum::Router, Vec<PathBuf>) {
         payment_repo,
         user_role_repo,
         permission_user_repo,
+        master_repo,
         jwt,
         HealthRegistry::new(),
         translation,

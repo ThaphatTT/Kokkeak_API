@@ -89,7 +89,7 @@ impl PermissionUserService {
     /// List users for the permission page (cursor-paginated).
     ///
     /// Backed by [`PermissionUserRepository::list_permission_users`]
-    /// → `dbo.SP_PERMISSION_USER_LIST_V2`. Pagination is applied in
+    /// → `dbo.SP_PERMISSION_USER_LIST`. Pagination is applied in
     /// Rust on top of the SP's full result (the SP sorts by
     /// `user_username_username`, so a `>` scan on the email cursor
     /// is correct). The handler caps `limit` at 1..=100.
@@ -97,12 +97,17 @@ impl PermissionUserService {
     /// ponytail: full-result fetch + Rust-side pagination. Ceiling:
     /// extend the SP with `@p_after_username` + `OFFSET / FETCH NEXT`
     /// when the user table grows past the ten-thousand-row range.
+    ///
+    /// M19: `actor` is forwarded as `caller_guid` for the SP-level
+    /// admin check (defense-in-depth on top of the axum `admin_flag`
+    /// middleware).
     pub async fn list_permission_users(
         &self,
         after: Option<String>,
         limit: u32,
+        actor: Uuid,
     ) -> Result<PermissionUserListPage, RepoError> {
-        let rows = self.permission_users.list_permission_users().await?;
+        let rows = self.permission_users.list_permission_users(actor).await?;
         Ok(apply_cursor_pagination(rows, after.as_deref(), limit))
     }
 
@@ -122,13 +127,17 @@ impl PermissionUserService {
     /// An empty `permissions: []` is a legitimate response when the
     /// user exists but holds no effective permissions — the UI
     /// renders an empty-state placeholder.
+    ///
+    /// M19: `actor` is the authenticated admin's GUID forwarded as
+    /// `@p_caller_user_guid` for the SP-level admin gate.
     pub async fn get_permission_user_group(
         &self,
         user_guid: Uuid,
+        actor: Uuid,
     ) -> Result<PermissionUserGroup, RepoError> {
         let rows = self
             .permission_users
-            .find_permission_user_detail(user_guid)
+            .find_permission_user_detail(user_guid, actor)
             .await?;
         Ok(group_permission_user_rows(&rows))
     }
@@ -143,9 +152,10 @@ impl PermissionUserService {
     pub async fn get_permission_user_detail(
         &self,
         user_guid: Uuid,
+        actor: Uuid,
     ) -> Result<Vec<PermissionUserDetailRow>, RepoError> {
         self.permission_users
-            .find_permission_user_detail(user_guid)
+            .find_permission_user_detail(user_guid, actor)
             .await
     }
 
@@ -339,13 +349,19 @@ mod tests {
 
     #[async_trait::async_trait]
     impl PermissionUserRepository for MockPermissionUserRepo {
-        async fn list_permission_users(&self) -> Result<Vec<PermissionUserListRow>, RepoError> {
+        async fn list_permission_users(
+            &self,
+            _caller_guid: Uuid,
+        ) -> Result<Vec<PermissionUserListRow>, RepoError> {
+            // M19: caller_guid accepted but ignored — admin gate
+            // is exercised against the SP in the integration suite.
             Ok(self.list.clone())
         }
 
         async fn find_permission_user_detail(
             &self,
             _user_guid: Uuid,
+            _caller_guid: Uuid,
         ) -> Result<Vec<PermissionUserDetailRow>, RepoError> {
             Ok(self.detail.clone())
         }
@@ -449,7 +465,8 @@ mod tests {
     #[tokio::test]
     async fn list_permission_users_returns_empty_page_when_repo_empty() {
         let svc = make_svc(vec![], vec![]);
-        let page = svc.list_permission_users(None, 20).await.unwrap();
+        let actor = Uuid::new_v4();
+        let page = svc.list_permission_users(None, 20, actor).await.unwrap();
         assert!(page.items.is_empty());
         assert!(page.next_cursor.is_none());
     }
@@ -461,15 +478,16 @@ mod tests {
             .map(|e| list_row(e))
             .collect();
         let svc = make_svc(rows, vec![]);
+        let actor = Uuid::new_v4();
 
-        let page1 = svc.list_permission_users(None, 2).await.unwrap();
+        let page1 = svc.list_permission_users(None, 2, actor).await.unwrap();
         assert_eq!(page1.items.len(), 2);
         assert_eq!(page1.items[0].email, "a@x");
         assert_eq!(page1.items[1].email, "b@x");
         assert_eq!(page1.next_cursor.as_deref(), Some("b@x"));
 
         let page2 = svc
-            .list_permission_users(page1.next_cursor, 2)
+            .list_permission_users(page1.next_cursor, 2, actor)
             .await
             .unwrap();
         assert_eq!(page2.items.len(), 2);
@@ -478,7 +496,7 @@ mod tests {
         assert_eq!(page2.next_cursor.as_deref(), Some("d@x"));
 
         let page3 = svc
-            .list_permission_users(page2.next_cursor, 2)
+            .list_permission_users(page2.next_cursor, 2, actor)
             .await
             .unwrap();
         assert_eq!(page3.items.len(), 1);
@@ -496,7 +514,10 @@ mod tests {
         ];
         let svc = make_svc(vec![], rows);
 
-        let group = svc.get_permission_user_group(Uuid::nil()).await.unwrap();
+        let group = svc
+            .get_permission_user_group(Uuid::nil(), Uuid::new_v4())
+            .await
+            .unwrap();
         assert_eq!(group.user_guid, user_guid);
         assert_eq!(group.full_name, "Test User");
         assert_eq!(group.email, "test@x");
@@ -510,7 +531,10 @@ mod tests {
     #[tokio::test]
     async fn get_permission_user_group_returns_empty_permissions_when_no_rows() {
         let svc = make_svc(vec![], vec![]);
-        let group = svc.get_permission_user_group(Uuid::nil()).await.unwrap();
+        let group = svc
+            .get_permission_user_group(Uuid::nil(), Uuid::new_v4())
+            .await
+            .unwrap();
         // Empty rows → empty identity + empty permissions (the SP
         // returns empty set when the GUID is unknown; the trait
         // adapter maps that to NotFound instead, but the service
@@ -527,7 +551,10 @@ mod tests {
             detail_row(user_guid, "INVOICES_EXPORT", false, true),
         ];
         let svc = make_svc(vec![], rows);
-        let flat = svc.get_permission_user_detail(Uuid::nil()).await.unwrap();
+        let flat = svc
+            .get_permission_user_detail(Uuid::nil(), Uuid::new_v4())
+            .await
+            .unwrap();
         assert_eq!(flat.len(), 2);
         assert_eq!(flat[0].user_permission_code, "PAGE_DASHBOARD_VIEW");
         assert!(flat[0].effective_status);

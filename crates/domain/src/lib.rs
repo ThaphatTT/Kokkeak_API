@@ -17,6 +17,7 @@ pub mod chat;
 pub mod error;
 pub mod health;
 pub mod idempotency;
+pub mod master;
 pub mod matching;
 pub mod order;
 pub mod pagination;
@@ -34,6 +35,7 @@ pub use chat::{ChatError, ChatMessage, ChatRoom, MessageId, Participant, RoomId,
 pub use error::LocalizedError;
 pub use health::{CheckOutcome, HealthCheck, HealthError, HealthRegistry, ReadyReport};
 pub use idempotency::{CachedResponse, IdempotencyStore};
+pub use master::MasterDropdownRow;
 pub use order::{Order, OrderStatus};
 pub use pagination::{Cursor, CursorError};
 pub use payment::{
@@ -47,6 +49,7 @@ pub use permission::{
 pub use queue::{QueueError, QueueMessage, QueuePort};
 pub use storage::{PutResult, Storage, StorageError, StorageKey};
 pub use traits::chat::{ChatMembership, ChatRepoError, ChatRepository, MessagePage};
+pub use traits::master::MasterDropdownRepository;
 pub use traits::order::OrderRepository;
 pub use traits::payment::{PaymentRepoError, PaymentRepository};
 pub use traits::permission::PermissionUserRepository;

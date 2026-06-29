@@ -58,19 +58,41 @@ impl MssqlPermissionUserRepository {
 
 #[async_trait]
 impl PermissionUserRepository for MssqlPermissionUserRepository {
-    async fn list_permission_users(&self) -> Result<Vec<PermissionUserListRow>, RepoError> {
-        let rows = exec_sp(&self.pool, "EXEC dbo.SP_PERMISSION_USER_LIST", &[]).await?;
+    async fn list_permission_users(
+        &self,
+        caller_guid: Uuid,
+    ) -> Result<Vec<PermissionUserListRow>, RepoError> {
+        // Project convention: GUIDs into `dbo.SP_*` arrive as `&str`
+        // (the SP declares `varchar(36)` + `TRY_CAST` inside). See the
+        // rule recorded in palace: "SP_-prefixed GUID params go in as
+        // hyphenated 36-char strings, not native Uuid". This avoids
+        // tiberius sending the 16-byte binary form which SQL Server
+        // would refuse to bind to a varchar column.
+        let caller_str = caller_guid.to_string();
+        let rows = exec_sp(
+            &self.pool,
+            "EXEC dbo.SP_PERMISSION_USER_LIST @p_by = @P1",
+            &[&caller_str as &dyn ToSql],
+        )
+        .await?;
         Ok(rows.iter().map(row_to_permission_user_list_row).collect())
     }
 
     async fn find_permission_user_detail(
         &self,
         user_guid: Uuid,
+        caller_guid: Uuid,
     ) -> Result<Vec<PermissionUserDetailRow>, RepoError> {
+        // M19: caller GUID → `@p_caller_user_guid varchar(36)`. The
+        // lookup-target `@p_user_guid` (the user being inspected)
+        // stays first; it's also string-encoded per the same rule.
+        let user_str = user_guid.to_string();
+        let caller_str = caller_guid.to_string();
         let rows = exec_sp(
             &self.pool,
-            "EXEC dbo.SP_PERMISSION_USER_DETAIL_FIND_BY_GUID @p_username_guid = @P1",
-            &[&user_guid as &dyn ToSql],
+            "EXEC dbo.SP_PERMISSION_USER_DETAIL_FIND_BY_GUID \
+             @p_user_guid = @P1, @p_by = @P2",
+            &[&user_str as &dyn ToSql, &caller_str as &dyn ToSql],
         )
         .await?;
         if rows.is_empty() {
@@ -102,7 +124,7 @@ impl PermissionUserRepository for MssqlPermissionUserRepository {
 // Row mappers (thin — 1:1 with SP columns)
 // ----------------------------------------------------------------------------
 
-/// Map a single `SP_PERMISSION_USER_LIST_V2` row to
+/// Map a single `SP_PERMISSION_USER_LIST` row to
 /// [`PermissionUserListRow`].
 ///
 /// Column NAMES match the SP's SELECT aliases (one row per user):

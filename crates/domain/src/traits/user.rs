@@ -65,15 +65,21 @@ pub trait UserRepository: Send + Sync {
     /// permission summary CSVs.
     ///
     /// Backed by `dbo.SP_PERMISSION_USER_LIST`. Returns ALL active
-    /// users (no parameters); the application layer applies cursor
-    /// pagination (`after` + `limit`) on top of the result.
+    /// users; the application layer applies cursor pagination
+    /// (`after` + `limit`) on top of the result.
     ///
     /// ponytail: the SP returns the full set; pagination lives in
     /// Rust today. Ceiling: extend the SP with `@p_after_username`
     /// + `OFFSET`/`FETCH` when the admin list grows past ~10K
     /// users — at that point the O(n) Rust-side slice + `O(n)`
     /// transport becomes the bottleneck.
-    async fn list_with_permissions(&self) -> Result<Vec<UserListRow>, RepoError>;
+    ///
+    /// M19: `caller_guid` is the authenticated admin's GUID. The
+    /// SP enforces an admin / super_admin check before returning
+    /// rows; a non-admin caller receives zero rows per the
+    /// fail-closed read contract.
+    async fn list_with_permissions(&self, caller_guid: Uuid)
+        -> Result<Vec<UserListRow>, RepoError>;
 
     // M17 cleanup: the per-user detail row type + its SP
     // (`SP_PERMISSION_USER_FIND_BY_USERNAME`) moved to

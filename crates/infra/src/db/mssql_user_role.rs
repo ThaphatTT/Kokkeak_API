@@ -47,6 +47,7 @@
 use async_trait::async_trait;
 use tiberius::Row;
 use tiberius::ToSql;
+use uuid::Uuid;
 
 use kokkak_domain::traits::user::RepoError;
 use kokkak_domain::{PermissionUpdateRow, UserRolePermissionRow, UserRoleRepository};
@@ -68,15 +69,25 @@ impl MssqlUserRoleRepository {
 
 #[async_trait]
 impl UserRoleRepository for MssqlUserRoleRepository {
-    async fn list_permissions(&self, mode: &str) -> Result<Vec<UserRolePermissionRow>, RepoError> {
+    async fn list_permissions(
+        &self,
+        mode: &str,
+        caller_guid: Uuid,
+    ) -> Result<Vec<UserRolePermissionRow>, RepoError> {
         // The `mode` is a pass-through literal that the SP
         // uses to scope which role set to return. The Rust
         // side doesn't validate it (the SP does — unknown
         // modes return zero rows gracefully).
+        //
+        // M19: `@p_user_guid` is the admin check — non-admin
+        // callers receive zero rows. String-encoded (project
+        // rule: GUID into SP arrives as `varchar(36)` + TRY_CAST
+        // inside the SP body).
+        let caller_str = caller_guid.to_string();
         let rows = exec_sp(
             &self.pool,
-            "EXEC dbo.SP_USER_GROUP_ROLE @p_mode = @P1",
-            &[&mode as &dyn ToSql],
+            "EXEC dbo.SP_USER_GROUP_ROLE @p_mode = @P1, @p_by = @P2",
+            &[&mode as &dyn ToSql, &caller_str as &dyn ToSql],
         )
         .await?;
 
