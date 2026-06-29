@@ -41,26 +41,37 @@ pub enum Role {
 }
 
 impl Role {
-    /// Canonical snake_case identifier (stable, switch-friendly).
+    /// Canonical snake_case identifier. Lowercase to match the wire
+    /// format on both sides of the DB:
+    ///   - SP returns `"admin"` (CSV in `[user_role]` rows)
+    ///   - JSON serializer emits `"customer"` via `#[serde(rename_all = "snake_case")]`
+    ///   - i18n error messages interpolate this value into placeholders
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Customer => "CUSTOMER",
-            Self::Technician => "TECHNICIAN",
-            Self::Admin => "ADMIN",
-            Self::SuperAdmin => "SUPER_ADMIN",
+            Self::Customer => "customer",
+            Self::Technician => "technician",
+            Self::Admin => "admin",
+            Self::SuperAdmin => "super_admin",
         }
     }
 
-    /// Parse from the snake_case string. Returns `None` for unknown codes.
-    /// Used by the MSSQL repo to translate `user_role.user_role_code` →
-    /// Rust enum when assembling the `User` aggregate from a JOIN.
+    /// Case-insensitive parse. Returns `None` for unknown codes.
+    /// Used by:
+    ///   - The MSSQL repo (`parse_role_codes` in `infra/src/db/mssql_user.rs`)
+    ///     — the SP may emit `"ADMIN"` or `"admin"`; both must work.
+    ///   - The public register endpoint — mobile clients in the wild
+    ///     send `"Customer"` / `"customer"` interchangeably.
+    ///
+    /// ponytail: `to_ascii_lowercase` + 4-arm match. Any future role
+    /// adds one line. Ceiling: kebab-case (`"super-admin"`) is NOT
+    /// normalised — add it only if a real caller needs it.
     pub fn from_code(s: &str) -> Option<Self> {
-        match s {
-            "FINANCE_EXPORT" => Some(Self::Customer),
-            "CUSTOMER" => Some(Self::Customer),
-            "TECHNICIAN" => Some(Self::Technician),
-            "ADMIN" => Some(Self::Admin),
-            "SUPER_ADMIN" => Some(Self::SuperAdmin),
+        let lower = s.to_ascii_lowercase();
+        match lower.as_str() {
+            "customer" => Some(Self::Customer),
+            "technician" => Some(Self::Technician),
+            "admin" => Some(Self::Admin),
+            "super_admin" => Some(Self::SuperAdmin),
             _ => None,
         }
     }

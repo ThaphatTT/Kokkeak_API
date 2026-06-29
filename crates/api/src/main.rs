@@ -24,6 +24,7 @@ use std::time::Duration;
 
 use axum::{
     body::Body,
+    extract::Extension,
     http::{header::CONTENT_TYPE, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
@@ -77,15 +78,27 @@ fn main() {
 
     // ---- T02: load .env (if present) into process env BEFORE
     //   Settings::load() — figment's Env provider only reads from
-    //   std::env, not from disk. The file name is selected by
-    //   `KOKKAK_ENVIRONMENT` (default = `development`); production
-    //   deploys inject env vars via docker/k8s/systemd and usually
-    //   ship no .env file — `from_filename` is a no-op in that case. ----
-    let env_file = match std::env::var("KOKKAK_ENVIRONMENT").as_deref() {
-        Ok("production") => ".env.production",
-        _ => ".env.dev",
-    };
-    let _ = dotenvy::from_filename(env_file);
+    //   std::env, not from disk.
+    //
+    //   Resolution order:
+    //   1. `KOKKAK_ENV_FILE` env var (explicit path; lets a runner
+    //      script like `scripts/prod-run.ps1` point at the file
+    //      regardless of the current working directory).
+    //   2. `KOKKAK_ENVIRONMENT=production` → `.env.production`
+    //   3. Otherwise → `.env.dev` (development default).
+    //
+    //   Production deploys that inject env vars via docker / k8s /
+    //   systemd usually ship no .env file — `from_filename` is a
+    //   no-op in that case. ----
+    let env_file = std::env::var("KOKKAK_ENV_FILE")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| match std::env::var("KOKKAK_ENVIRONMENT").as_deref() {
+            Ok("production") => ".env.production".to_string(),
+            _ => ".env.dev".to_string(),
+        });
+    let _ = dotenvy::from_filename(&env_file);
 
     // ---- T02: load & validate configuration ----
     let settings = Settings::load().unwrap_or_else(|err| {
@@ -197,7 +210,8 @@ async fn run(settings: Settings) {
     }
 
     // ---- Build app state ----
-    let state = build_app_state_with(bundle, jwt, registry, Arc::new(settings.clone()));
+    let settings_arc = Arc::new(settings.clone());
+    let state = build_app_state_with(bundle, jwt, registry, settings_arc.clone());
 
     // ---- Routes ----
     let app = build_router(state).route("/metrics", get(metrics_handler));
@@ -402,6 +416,13 @@ async fn run(settings: Settings) {
         max_concurrency,
         "concurrency cap wired (sheds 503 when at capacity)"
     );
+
+    // ---- Expose `Arc<Settings>` as a request-scoped Extension so
+    //   extractors (e.g. `ClientIp`) can read feature flags without
+    //   changing their generic `S` constraint. Cheap to clone on
+    //   every request — Arc increments are ~5 ns. ----
+    let app = app.layer(Extension(settings_arc.clone()));
+    tracing::info!("settings Extension wired (extractors can read feature flags)");
 
     // ---- Bind + serve with graceful shutdown ----
     if settings.tls.enabled {

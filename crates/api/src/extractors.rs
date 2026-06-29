@@ -30,9 +30,11 @@ use axum::{
     http::request::Parts,
     Json,
 };
+use kokkak_common::config::Settings;
 use kokkak_common::error::AppError;
 use serde::de::DeserializeOwned;
 use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 use validator::Validate;
 
 use crate::error::ApiError;
@@ -131,11 +133,34 @@ where
         //    client. We accept IPv4 and IPv6; anything malformed is
         //    silently skipped so a misbehaving header can't lock
         //    out the whole endpoint.
-        if let Some(forwarded) = parts.headers.get("x-forwarded-for") {
-            if let Ok(s) = forwarded.to_str() {
-                if let Some(first) = s.split(',').next() {
-                    if let Ok(ip) = first.trim().parse::<IpAddr>() {
-                        return Ok(ClientIp(Some(ip)));
+        //
+        // Security: gated by `KOKKAK_SERVER__TRUST_FORWARDED_FOR`
+        // (default `true`). Production behind IIS / nginx / envoy /
+        // ALB MUST keep it `true`; the proxy strips any
+        // client-supplied header and appends the real peer IP.
+        // Direct-internet deployments (no proxy) MUST set it
+        // `false` — otherwise any client can spoof its IP and
+        // bypass per-(username, IP) rate limits / poison the
+        // audit log.
+        //
+        // ponytail: defaulting to `true` when the extension is
+        // missing preserves backward compatibility with the
+        // bare `Router<()>` tests below — they don't wire up
+        // `Arc<Settings>` so they implicitly trust the header.
+        // In production, `crates/api/src/main.rs` always injects
+        // the extension, so the gate is always live.
+        let trust_forwarded_for = parts
+            .extensions
+            .get::<Arc<Settings>>()
+            .map(|s| s.server.trust_forwarded_for)
+            .unwrap_or(true);
+        if trust_forwarded_for {
+            if let Some(forwarded) = parts.headers.get("x-forwarded-for") {
+                if let Ok(s) = forwarded.to_str() {
+                    if let Some(first) = s.split(',').next() {
+                        if let Ok(ip) = first.trim().parse::<IpAddr>() {
+                            return Ok(ClientIp(Some(ip)));
+                        }
                     }
                 }
             }

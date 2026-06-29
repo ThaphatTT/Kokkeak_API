@@ -23,3 +23,10 @@ cargo run --bin kokkak-api
 # → http://0.0.0.0:3000/readyz  returns 200 (with empty checks list)
 # → http://0.0.0.0:3000/metrics returns Prometheus text
 ```
+
+
+HOW TO DEPLOY
+  WINDOWS
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "scripts/publish-prod.ps1" -OutputZip
+
+    .\scripts\publish-prod.ps1

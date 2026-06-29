@@ -152,6 +152,18 @@ pub struct ServerSettings {
     /// containerised deploys match the pod's CPU limit.
     #[serde(default = "default_workers")]
     pub workers: usize,
+
+    /// Trust the `X-Forwarded-For` request header when extracting
+    /// the client IP. **MUST be `true` whenever the service runs
+    /// behind a reverse proxy** (IIS / nginx / envoy / ALB / CF)
+    /// — the proxy strips any client-supplied header and appends
+    /// the real peer IP. Set to `false` when the service is hit
+    /// directly from the internet (no proxy in front), where
+    /// trusting `X-Forwarded-For` would let any client spoof the
+    /// audit-log + per-(username, IP) rate-limit IP. Default `true`
+    /// because every Kokkeak deployment ships behind IIS.
+    #[serde(default = "default_trust_forwarded_for")]
+    pub trust_forwarded_for: bool,
 }
 
 impl Default for ServerSettings {
@@ -159,6 +171,7 @@ impl Default for ServerSettings {
         Self {
             addr: default_addr(),
             workers: default_workers(),
+            trust_forwarded_for: default_trust_forwarded_for(),
         }
     }
 }
@@ -729,6 +742,12 @@ fn default_addr() -> String {
 fn default_workers() -> usize {
     4
 }
+fn default_trust_forwarded_for() -> bool {
+    // Default `true` so production behind IIS keeps working out of
+    // the box. Direct-internet deploys MUST set
+    // `KOKKAK_SERVER__TRUST_FORWARDED_FOR=false`.
+    true
+}
 fn default_log_format() -> LogFormat {
     LogFormat::Pretty
 }
@@ -1190,17 +1209,37 @@ impl Settings {
                 });
             }
         }
-        // T-11: production deployments must serve over TLS. A
-        // bare-HTTP production rollout is the #1 way to leak
-        // JWTs and PII through misconfigured reverse proxies, so
-        // fail the process at startup rather than discover it
-        // in a post-mortem. The dev path is unaffected — plain
-        // HTTP stays the default.
-        if self.environment.is_production() && !self.tls.enabled {
-            return Err(ConfigError::Invalid {
-                key: "KOKKAK_TLS__ENABLED".into(),
-                message: "must be true when KOKKAK_ENVIRONMENT=production".into(),
-            });
+        // T-11 (post-IIS-front): production must bind to a
+        // **loopback** address so the only path to the API is the
+        // trusted upstream proxy (IIS / nginx / envoy / ALB) that
+        // terminates TLS and appends `X-Forwarded-For`. The Rust
+        // service itself no longer owns TLS — `KOKKAK_TLS__ENABLED`
+        // stays `false` in production; cert / private key live in
+        // the proxy's certificate store, not in this process.
+        // A non-loopback bind would expose plain HTTP directly to
+        // the internet, which is the #1 way to leak JWTs and PII
+        // through a misconfigured proxy. Dev is unaffected — the
+        // default `0.0.0.0:3000` is still valid for local runs.
+        if self.environment.is_production() {
+            match self.server.addr.parse::<std::net::SocketAddr>() {
+                Ok(addr) if addr.ip().is_loopback() => {}
+                Ok(_) => {
+                    return Err(ConfigError::Invalid {
+                        key: "KOKKAK_SERVER__ADDR".into(),
+                        message: format!(
+                            "must be a loopback address (127.0.0.1:<port> or [::1]:<port>) \
+                             when KOKKAK_ENVIRONMENT=production (got {:?})",
+                            self.server.addr
+                        ),
+                    });
+                }
+                Err(e) => {
+                    return Err(ConfigError::Invalid {
+                        key: "KOKKAK_SERVER__ADDR".into(),
+                        message: format!("invalid socket address {:?}: {e}", self.server.addr),
+                    });
+                }
+            }
         }
         // T-06: middleware defaults are all-zero / safe, but a
         // production deployment with CORS allowlist = [] means
@@ -1425,6 +1464,7 @@ mod tests {
             server: ServerSettings {
                 addr: "".into(),
                 workers: 4,
+                trust_forwarded_for: true,
             },
             ..Settings::default()
         };
@@ -1437,6 +1477,7 @@ mod tests {
             server: ServerSettings {
                 addr: "   ".into(),
                 workers: 4,
+                trust_forwarded_for: true,
             },
             ..Settings::default()
         };
@@ -1449,6 +1490,7 @@ mod tests {
             server: ServerSettings {
                 addr: "0.0.0.0:3000".into(),
                 workers: 0,
+                trust_forwarded_for: true,
             },
             ..Settings::default()
         };
@@ -1690,6 +1732,11 @@ mod tests {
         std::env::set_var("KOKKAK_TLS__REDIRECT_FROM_PORT", "80");
         std::env::set_var("KOKKAK_TLS__HSTS_MAX_AGE_SECS", "31536000");
         std::env::set_var("KOKKAK_ENVIRONMENT", "production");
+        // T-11 (post-IIS-front): production must bind loopback. Override
+        // the default `0.0.0.0:3000` so validate() accepts the config —
+        // this test exercises the TLS env-loading path, not the bind
+        // rule (which has its own dedicated tests).
+        std::env::set_var("KOKKAK_SERVER__ADDR", "127.0.0.1:8443");
         // T-11: production requires a non-empty CORS allowlist; mirror a
         // real deployment so validate() accepts the config.
         std::env::set_var(
@@ -1709,38 +1756,18 @@ mod tests {
         clear_kokkak_env();
     }
 
-    // ---- T-11: production enforcement ----
+    // ---- T-11 (post-IIS-front): production must bind loopback ----
 
     #[test]
-    fn production_without_tls_fails_validation() {
+    fn production_with_public_bind_addr_fails_validation() {
+        // T-11 inverted: production + non-loopback bind must be
+        // rejected so plain HTTP never escapes to the internet
+        // when the upstream TLS terminator (IIS) is misconfigured.
         let s = Settings {
             environment: Environment::Production,
-            ..Settings::default()
-        };
-        let err = s
-            .validate()
-            .expect_err("production + plain HTTP must be rejected");
-        assert!(
-            err.to_string().contains("KOKKAK_TLS__ENABLED")
-                && err.to_string().contains("production"),
-            "error should point at TLS in a production context, got: {err}"
-        );
-    }
-
-    #[test]
-    fn production_with_tls_enabled_validates() {
-        // T-06: a production deployment must also have a non-empty
-        // CORS allowlist (the browser blocks cross-origin requests
-        // otherwise). The TLS-only check is no longer sufficient.
-        let s = Settings {
-            environment: Environment::Production,
-            tls: TlsSettings {
-                enabled: true,
-                cert_path: Some("/etc/kokkak/cert.pem".into()),
-                key_path: Some("/etc/kokkak/key.pem".into()),
-                redirect_from_port: 80,
-                hsts_max_age_secs: 31_536_000,
-                auto_reload: false,
+            server: ServerSettings {
+                addr: "0.0.0.0:18080".into(),
+                ..ServerSettings::default()
             },
             middleware: MiddlewareSettings {
                 cors_allow_origins: vec!["https://app.example.com".into()],
@@ -1748,24 +1775,102 @@ mod tests {
             },
             ..Settings::default()
         };
-        assert!(s.validate().is_ok());
+        let err = s
+            .validate()
+            .expect_err("production + public bind must be rejected");
+        assert!(
+            err.to_string().contains("KOKKAK_SERVER__ADDR") && err.to_string().contains("loopback"),
+            "error should point at bind_addr + loopback, got: {err}"
+        );
+    }
+
+    #[test]
+    fn production_with_loopback_bind_and_tls_off_validates() {
+        // New normal: production binds 127.0.0.1 and TLS is off
+        // because IIS terminates it upstream. cert / key paths
+        // stay empty.
+        let s = Settings {
+            environment: Environment::Production,
+            server: ServerSettings {
+                addr: "127.0.0.1:18080".into(),
+                ..ServerSettings::default()
+            },
+            middleware: MiddlewareSettings {
+                cors_allow_origins: vec!["https://app.example.com".into()],
+                ..MiddlewareSettings::default()
+            },
+            ..Settings::default()
+        };
+        assert!(s.validate().is_ok(), "got: {:?}", s.validate());
+    }
+
+    #[test]
+    fn production_with_ipv6_loopback_bind_validates() {
+        // ::1 is the IPv6 loopback — accept it as well so the
+        // operator can choose.
+        let s = Settings {
+            environment: Environment::Production,
+            server: ServerSettings {
+                addr: "[::1]:18080".into(),
+                ..ServerSettings::default()
+            },
+            middleware: MiddlewareSettings {
+                cors_allow_origins: vec!["https://app.example.com".into()],
+                ..MiddlewareSettings::default()
+            },
+            ..Settings::default()
+        };
+        assert!(s.validate().is_ok(), "got: {:?}", s.validate());
+    }
+
+    #[test]
+    fn production_with_malformed_bind_addr_fails_validation() {
+        // T-11: a non-parseable bind address must fail loud at
+        // startup, not at the first `bind()` syscall.
+        let s = Settings {
+            environment: Environment::Production,
+            server: ServerSettings {
+                addr: "not-a-socket-addr".into(),
+                ..ServerSettings::default()
+            },
+            middleware: MiddlewareSettings {
+                cors_allow_origins: vec!["https://app.example.com".into()],
+                ..MiddlewareSettings::default()
+            },
+            ..Settings::default()
+        };
+        let err = s
+            .validate()
+            .expect_err("non-parseable bind addr must be rejected");
+        assert!(
+            err.to_string().contains("KOKKAK_SERVER__ADDR"),
+            "error should mention bind addr, got: {err}"
+        );
     }
 
     #[test]
     fn production_with_tls_enabled_but_missing_key_still_fails() {
-        // The TLS-on-but-blank-paths rule from T-08 must still
-        // trip in production. This guards against a future
-        // refactor that reorders the validation checks and
-        // accidentally lets a broken prod config through.
+        // TLS sub-rule from T-08 stays in force: when an operator
+        // DOES enable Rust-side TLS (e.g. local prod-mode smoke
+        // test without IIS), the cert + key paths still have to
+        // be present.
         let s = Settings {
             environment: Environment::Production,
+            server: ServerSettings {
+                addr: "127.0.0.1:18080".into(),
+                ..ServerSettings::default()
+            },
             tls: TlsSettings {
                 enabled: true,
                 cert_path: Some("/etc/kokkak/cert.pem".into()),
                 key_path: None,
-                redirect_from_port: 80,
-                hsts_max_age_secs: 31_536_000,
+                redirect_from_port: 0,
+                hsts_max_age_secs: 0,
                 auto_reload: false,
+            },
+            middleware: MiddlewareSettings {
+                cors_allow_origins: vec!["https://app.example.com".into()],
+                ..MiddlewareSettings::default()
             },
             ..Settings::default()
         };
@@ -1783,6 +1888,14 @@ mod tests {
         assert_eq!(s.environment, Environment::Development);
         assert!(!s.tls.enabled);
         assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn trust_forwarded_for_defaults_to_true() {
+        // Default-on: every Kokkeak deploy ships behind IIS so the
+        // header is trusted unless an operator explicitly opts out.
+        let s = Settings::default();
+        assert!(s.server.trust_forwarded_for);
     }
 
     // ---- T-06: middleware settings ----
@@ -1881,11 +1994,17 @@ mod tests {
 
     #[test]
     fn production_without_cors_allowlist_fails_validation() {
-        // Mirrors the T-11 TLS rule: a prod deployment with empty
-        // CORS allowlist means the BFF / mobile app cannot reach
-        // the API at all. Fail loudly at startup.
+        // Mirrors the post-IIS T-11 bind rule: a prod deployment
+        // with empty CORS allowlist means the BFF / mobile app
+        // cannot reach the API at all. Fail loudly at startup.
         let s = Settings {
             environment: Environment::Production,
+            // Loopback bind so we get past T-11 and reach the
+            // CORS check below.
+            server: ServerSettings {
+                addr: "127.0.0.1:8443".into(),
+                ..ServerSettings::default()
+            },
             tls: TlsSettings {
                 enabled: true,
                 cert_path: Some("/etc/kokkak/cert.pem".into()),
@@ -1912,6 +2031,14 @@ mod tests {
     fn production_with_cors_allowlist_validates() {
         let s = Settings {
             environment: Environment::Production,
+            // T-11 (post-IIS-front): production must bind loopback.
+            server: ServerSettings {
+                addr: "127.0.0.1:8443".into(),
+                ..ServerSettings::default()
+            },
+            // TLS can stay on for the local prod-mode smoke test path
+            // (Rust terminates TLS directly); cert + key paths are
+            // present, so the T-08 sub-rule is happy.
             tls: TlsSettings {
                 enabled: true,
                 cert_path: Some("/etc/kokkak/cert.pem".into()),
