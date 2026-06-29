@@ -43,16 +43,20 @@ impl MssqlUserRepository {
 #[async_trait]
 impl UserRepository for MssqlUserRepository {
     async fn find_by_id(&self, id: Uuid) -> Result<Option<User>, RepoError> {
+        // GUID stored as varchar(50) in DB per project convention — bind
+        // as String. SP_-prefixed SPs (e.g. SP_USER_FIND_BY_ID) accept
+        // varchar(50); API_-prefixed SPs keep UNIQUEIDENTIFIER.
+        let id_str = id.to_string();
         let rows = exec_sp(
             &self.pool,
-            "EXEC dbo.SP_PERMISSION_USER_FIND_BY_USERNAME @p_username_guid = @P1",
-            &[&id as &dyn ToSql],
+            "EXEC dbo.SP_USER_FIND_BY_ID @p_user_guid = @P1",
+            &[&id_str as &dyn ToSql],
         )
         .await?;
         // First row: profile. Second row: roles + permissions CSV.
         let profile = rows
             .first()
-            .ok_or_else(|| RepoError::Backend("API_USER_FIND_BY_ID returned no row".into()))?;
+            .ok_or_else(|| RepoError::Backend("SP_USER_FIND_BY_ID returned no row".into()))?;
         let user = row_to_user(profile)?;
         let (roles, permissions) = read_roles_and_permissions(&rows, 1)?;
         Ok(Some(User {

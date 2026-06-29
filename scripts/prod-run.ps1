@@ -1,19 +1,36 @@
 ﻿$ErrorActionPreference = "Stop"
 
-$base = Split-Path -Parent $MyInvocation.MyCommand.Path
-Set-Location $base
+try {
+    $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-# Point KOKKAK_ENV_FILE at the project root .env.production (one
-# level above scripts/). The Rust binary (main.rs) reads this env
-# var before falling back to KOKKAK_ENVIRONMENT-based naming, so
-# we don't depend on the working directory to find the config file.
-$projectRoot = Split-Path -Parent $base
-$envFile = Join-Path $projectRoot '.env.production'
-if (-not (Test-Path $envFile)) {
-    Write-Error "[prod-run] .env.production not found at $envFile"
-    exit 1
+    Set-Location $projectRoot
+
+    $envFile = Join-Path $projectRoot ".env.production"
+    $exeFile = Join-Path $projectRoot "kokkak-api.exe"
+
+    if (-not (Test-Path $envFile)) {
+        throw "[prod-run] .env.production not found at $envFile"
+    }
+
+    if (-not (Test-Path $exeFile)) {
+        throw "[prod-run] kokkak-api.exe not found at $exeFile"
+    }
+
+    $env:KOKKAK_ENV_FILE = $envFile
+
+    Write-Host "[prod-run] project root: $projectRoot"
+    Write-Host "[prod-run] using env file: $envFile"
+    Write-Host "[prod-run] starting: $exeFile"
+    Write-Host ""
+
+    & $exeFile
 }
-$env:KOKKAK_ENV_FILE = $envFile
-Write-Host "[prod-run] using env file: $envFile"
-
-.\kokkak-api.exe
+catch {
+    Write-Host ""
+    Write-Host "ERROR:" -ForegroundColor Red
+    Write-Host $_.Exception.Message -ForegroundColor Red
+}
+finally {
+    Write-Host ""
+    Read-Host "Press Enter to close"
+}
