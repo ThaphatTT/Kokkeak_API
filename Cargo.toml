@@ -72,6 +72,20 @@ rust_decimal_macros = "1.36"
 # Validation
 validator = { version = "0.18", features = ["derive"] }
 
+# ---- M9 / T-16 extra: image processing (JPEG / PNG decode, WebP encode) ----
+# `image` v0.25 has its bundled `image-webp` decoder (pure-Rust,
+# no libwebp system dep) but the encoder is lossless-only. We
+# pair `image` (decode) with the `webp` crate by `nicd` (lossy
+# encode) to get a full pipeline without C deps.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+webp   = "0.3"
+
+# Base64 decoder for `*_img_b64` fields on /admin/users/full.
+# Used by the admin handler when a caller sends raw image bytes
+# alongside the JSON DTO (the alternative — multipart — is
+# explicitly NOT used per project rules).
+base64 = "0.22"
+
 # ---- M2: Auth (argon2 + JWT) ----
 argon2 = { version = "0.5", default-features = false, features = ["std"] }
 jsonwebtoken = "9"

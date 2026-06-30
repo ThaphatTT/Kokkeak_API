@@ -22,6 +22,7 @@ pub use state::{AppState, ChatHandle};
 
 use std::sync::Arc;
 
+use kokkak_application::admin_user::AdminUserService;
 use kokkak_application::audit::{AuditLogger, NoopAuditLogger};
 use kokkak_application::auth::AuthService;
 use kokkak_application::catalog::CatalogService;
@@ -38,6 +39,8 @@ use kokkak_infra::audit::FileAuditLogger;
 use kokkak_infra::auth::jwt::JwtService;
 use kokkak_infra::auth::rate_limit::InMemoryLoginRateLimiter;
 use kokkak_infra::db::mssql::MssqlPool;
+use kokkak_infra::image_processor::{ImageProcessor, ImageProcessorConfig};
+use kokkak_infra::storage::MemoryStorage;
 
 use adapters::{JwtIssuerAdapter, PasswordHasherAdapter};
 
@@ -64,6 +67,7 @@ pub fn build_app_state_with(
     jwt: Arc<JwtService>,
     registry: HealthRegistry,
     settings: Arc<kokkak_common::config::Settings>,
+    storage: Arc<dyn kokkak_domain::Storage>,
 ) -> AppState {
     // Audit sink: try FileAuditLogger, fall back to no-op so a
     // permission error on the log dir doesn't break the API.
@@ -91,6 +95,8 @@ pub fn build_app_state_with(
         login_rl,
     ));
     let user = Arc::new(UserService::new(bundle.users.clone()));
+    let hasher = Arc::new(PasswordHasherAdapter::new());
+    let admin_users = Arc::new(AdminUserService::new(bundle.users.clone(), hasher));
     let catalog = Arc::new(CatalogService::new(bundle.services.clone()));
     let orders = Arc::new(OrderService::new(bundle.orders.clone()));
     let local: Arc<BroadcastTransport> = Arc::new(BroadcastTransport::default());
@@ -108,9 +114,21 @@ pub fn build_app_state_with(
     let permission = Arc::new(PermissionUserService::new(bundle.permission_users.clone()));
     let master = Arc::new(MasterDropdownService::new(bundle.master.clone()));
     let translation: Arc<dyn TranslationRepository> = bundle.translation;
+    // M9 / T-16 extra: image processor (decode → WebP → store).
+    // Configured from `Settings::image`. One per process — the
+    // processor is just a thin wrapper around `Storage` + the
+    // `image` / `webp` codecs, so sharing it across handlers is
+    // free.
+    let image_cfg = ImageProcessorConfig {
+        max_input_bytes: settings.image.max_input_bytes,
+        max_dimension_px: settings.image.max_dimension_px,
+        webp_quality: settings.image.webp_quality,
+    };
+    let image: Arc<ImageProcessor> = Arc::new(ImageProcessor::new(storage.clone(), image_cfg));
     AppState::new(
         auth,
         user,
+        admin_users,
         catalog,
         master,
         orders,
@@ -122,6 +140,8 @@ pub fn build_app_state_with(
         registry,
         translation,
         settings,
+        storage,
+        image,
     )
 }
 
@@ -156,6 +176,13 @@ pub fn build_app_state(
     registry: HealthRegistry,
     translation: Arc<dyn TranslationRepository>,
 ) -> AppState {
+    // Backwards-compat shim — tests pre-dating the storage wiring
+    // get an in-memory store. New code should call
+    // `build_app_state_with` (which lets the caller pass a real
+    // adapter) or `build_storage` to construct the right one.
+    // The image processor is built inside `build_app_state_with`
+    // from `Settings::image`, so the test doesn't need to pass one.
+    let storage: Arc<dyn kokkak_domain::Storage> = Arc::new(MemoryStorage::new());
     // M14.5: backend is always Mssql; the pool/mssql_pool are
     // optional because build_app_state_with doesn't need them.
     let backend_marker: Option<MssqlPool> = None;
@@ -173,7 +200,7 @@ pub fn build_app_state(
         mssql_pool: backend_marker,
         topology: None,
     };
-    build_app_state_with(bundle, jwt, registry, settings)
+    build_app_state_with(bundle, jwt, registry, settings, storage)
 }
 
 /// Convenience builder for tests/dev: pass chat + payments already
@@ -209,5 +236,9 @@ pub fn build_app_state_json(
         mssql_pool: backend_marker,
         topology: None,
     };
-    build_app_state_with(bundle, jwt, registry, settings)
+    // Same shim as `build_app_state` — in-memory storage. The
+    // image processor is built inside `build_app_state_with`
+    // from `Settings::image`, so this entry point stays simple.
+    let storage: Arc<dyn kokkak_domain::Storage> = Arc::new(MemoryStorage::new());
+    build_app_state_with(bundle, jwt, registry, settings, storage)
 }

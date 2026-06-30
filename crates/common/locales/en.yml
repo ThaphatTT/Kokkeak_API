@@ -85,3 +85,37 @@ err_permission:
   too_many_override_items: "items must contain 1-500 entries"
   invalid_override_effect: "effect must be 'allow' or 'deny'"
   invalid_override_status: "status must be 0 or 1"
+
+# -- M20-b: admin user creation (SP_USER_INSERT_FULL) --
+#
+# The SP returns English messages verbatim (admin operators work in
+# English), so these locale keys are only used for the localized
+# `error.message` field when the handler chooses to surface the
+# admin-facing version instead of the SP's debug string.
+err_admin_user:
+  actor_required: "actor is required"
+  actor_not_found: "actor user_username_guid not found or inactive"
+  permission_denied: "Only ADMIN can create user"
+  first_name_required: "user_first_name is required"
+  last_name_required: "user_last_name is required"
+  email_required: "user_email is required"
+  username_required: "username is required"
+  password_hash_required: "password_hash is required"
+  invalid_user_status: "user_status must be 0 or 1"
+  user_guid_exists: "user_guid already exists"
+  username_exists: "username already exists"
+  email_exists: "email already exists"
+  id_card_exists: "id card already exists"
+  country_required: "country_guid is required when user_is_foreign = 1"
+  country_not_found: "country_guid not found or inactive"
+  company_required: "company_guid is required when user_is_customer_company = 1"
+  company_not_found: "company_guid not found or inactive"
+  department_not_found: "department_guid not found or inactive"
+  department_team_not_found: "department_team_guid not found or inactive"
+  department_team_mismatch: "department_team does not belong to department"
+  position_not_found: "position_guid not found or inactive"
+  invalid_salary: "salary amount cannot be negative"
+  work_time_required: "working day must have start_time and end_time"
+  admin_role_not_found: "role ADMIN not found or inactive"
+  employee_role_not_found: "role EMPLOYEE not found or inactive"
+  image_invalid: "image upload failed for field \"{field}\""

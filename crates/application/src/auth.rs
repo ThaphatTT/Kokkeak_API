@@ -586,6 +586,22 @@ mod tests {
         ) -> Result<Vec<kokkak_domain::UserListRow>, kokkak_domain::RepoError> {
             Ok(Vec::new())
         }
+        async fn find_username_guid_by_user_guid(
+            &self,
+            _user_guid: Uuid,
+        ) -> Result<Option<String>, kokkak_domain::RepoError> {
+            Ok(None)
+        }
+        async fn admin_insert_full(
+            &self,
+            _req: &kokkak_domain::AdminInsertUserRequest,
+        ) -> Result<kokkak_domain::AdminInsertUserResult, kokkak_domain::AdminInsertUserError>
+        {
+            Err(kokkak_domain::AdminInsertUserError::new(
+                "internal",
+                "admin_insert_full not implemented in auth mock",
+            ))
+        }
     }
 
     use kokkak_infra::auth::jwt::JwtService;

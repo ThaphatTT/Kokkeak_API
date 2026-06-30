@@ -33,3 +33,82 @@ pub struct MasterDropdownRow {
     /// see the module docs for the i18n ceiling).
     pub label: String,
 }
+
+/// One row of the master-position autocomplete.
+///
+/// Sibling to [`MasterDropdownRow`] (not a widening of it) per the
+/// module-level ceiling doc: the autocomplete payload carries the
+/// extra columns (`code`, `level`, `description`, `status`) that
+/// the admin search box needs to render rich results, but the
+/// simple dropdown never requires.
+///
+/// `value` / `label` are intentionally duplicated from the SP's
+/// `master_position_guid` / `master_position_name` aliases so the
+/// admin UI can drop the row straight into its generic dropdown
+/// widget without re-shaping.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct MasterPositionAutocompleteRow {
+    /// Stable identifier — `master_position_guid` (GUID string).
+    pub value: String,
+    /// Human-readable label — `master_position_name`.
+    pub label: String,
+    /// Short admin code (`master_position_code`).
+    pub code: String,
+    /// Description shown in the autocomplete tooltip
+    /// (`master_position_description`). Empty string when NULL.
+    pub description: String,
+    /// Hierarchy / rank level (`master_position_level`).
+    /// `0` when NULL — positions without an explicit level sort
+    /// last under the SP's `ORDER BY master_position_level DESC`.
+    pub level: i32,
+    /// Row status (`master_position_status`). `1` = active, `0` =
+    /// inactive, `2` = any other non-deleted. The autocomplete SP
+    /// already filters to `status = 1`; the field is forwarded so
+    /// the UI can render an "(inactive)" badge if the row sneaks in
+    /// after a future SP change.
+    pub status: i32,
+}
+
+/// One row of the `user_department_team` autocomplete.
+///
+/// Richer than [`MasterDropdownRow`] because the autocomplete UI
+/// surfaces the parent department alongside the team so the user
+/// can disambiguate teams that share a name across departments.
+/// `value` / `label` mirror the dropdown contract so a generic
+/// `<Autocomplete>` component on the admin web can render the
+/// pair, while the rest of the fields populate the secondary
+/// line / hover tooltip.
+///
+/// ponytail: typed fields, no enum mapping. The status is kept as
+/// `i32` (not a Rust enum) because the SP owns the value list and
+/// the admin UI already understands the legacy numeric codes — a
+/// Rust-side mapping would silently drift from the SP. Ceiling:
+/// when a second autocomplete type needs its own shape, follow
+/// this struct with another sibling — don't unify into a
+/// generic `MasterAutocompleteRow` with optional fields (the
+/// `Option` soup would force every caller to defensive-match).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct UserDepartmentTeamAutocompleteRow {
+    /// `user_department_team.user_department_team_guid` — stable id.
+    pub value: String,
+    /// `user_department_team.user_department_team_name` — primary label.
+    pub label: String,
+    /// Same as `value`, echoed for callers that prefer the long name.
+    pub user_department_team_guid: String,
+    /// `user_department_team.user_department_team_code` (admin-facing).
+    pub user_department_team_code: String,
+    /// Same as `label`, echoed for callers that prefer the long name.
+    pub user_department_team_name: String,
+    /// `user_department_team.user_department_team_status` (1 = active,
+    /// 0 = inactive). The SP filters to active-only; kept on the row
+    /// so the admin UI can grey-out an item without a second query.
+    pub user_department_team_status: i32,
+    /// `user_department.user_department_guid` — parent department id.
+    pub user_department_guid: String,
+    /// `user_department.user_department_code` (admin-facing).
+    pub user_department_code: String,
+    /// `user_department.user_department_name` — secondary line.
+    pub user_department_name: String,
+}

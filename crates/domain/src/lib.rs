@@ -10,6 +10,7 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod admin_user;
 pub mod auth;
 pub mod cache;
 pub mod catalog;
@@ -28,6 +29,7 @@ pub mod storage;
 pub mod traits;
 pub mod user;
 
+pub use admin_user::{AdminInsertUserError, AdminInsertUserRequest, AdminInsertUserResult};
 pub use auth::{AuthError, AuthSession, Claims, PublicUser, TokenKind, TokenPair};
 pub use cache::{Cache, CacheError, CacheExt, CacheGroup, CacheKey, InvalidationStream};
 pub use catalog::ServiceCategory;
@@ -35,7 +37,9 @@ pub use chat::{ChatError, ChatMessage, ChatRoom, MessageId, Participant, RoomId,
 pub use error::LocalizedError;
 pub use health::{CheckOutcome, HealthCheck, HealthError, HealthRegistry, ReadyReport};
 pub use idempotency::{CachedResponse, IdempotencyStore};
-pub use master::MasterDropdownRow;
+pub use master::{
+    MasterDropdownRow, MasterPositionAutocompleteRow, UserDepartmentTeamAutocompleteRow,
+};
 pub use order::{Order, OrderStatus};
 pub use pagination::{Cursor, CursorError};
 pub use payment::{

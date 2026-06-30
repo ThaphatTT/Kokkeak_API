@@ -136,6 +136,200 @@ pub struct Settings {
     /// (deny CORS, 30 s timeout, compression on).
     #[serde(default)]
     pub middleware: MiddlewareSettings,
+
+    /// Object-storage settings (M9). Selects the `Storage` adapter
+    /// at startup. Precedence: `s3_bucket` wins → `local_path` →
+    /// in-memory fallback. See [`StorageSettings::build`] for the
+    /// wiring rules.
+    #[serde(default)]
+    pub storage: StorageSettings,
+
+    /// Image-processor settings (M9-extra). Controls the
+    /// `image_processor` module in `kokkak-infra` — input size
+    /// cap, resize ceiling, WebP quality.
+    #[serde(default)]
+    pub image: ImageProcessorSettings,
+}
+
+/// Object-storage adapter selection (M9 / T-16 variant).
+///
+/// The `Storage` port lives in `kokkak_domain::storage`; this
+/// struct only picks the concrete adapter at startup.
+///
+/// Env contract:
+/// - `KOKKAK_STORAGE__S3_BUCKET` — when set, build [`S3Storage`]
+///   (production default). Other S3 knobs live alongside it
+///   (`KOKKAK_STORAGE__S3_ENDPOINT`, `S3_REGION`, `S3_ACCESS_KEY`,
+///   `S3_SECRET_KEY`, `S3_PATH_STYLE`).
+/// - `KOKKAK_STORAGE__LOCAL_PATH` — when `S3_BUCKET` is unset but
+///   this is set, build [`LocalStorage`] with the given root.
+///   Useful for the Strangler transition (legacy ASP.NET files on
+///   a shared mount) and for dev runs without MinIO.
+/// - When both are unset, fall back to [`MemoryStorage`] (in-process
+///   `HashMap`; non-persistent — fine for unit tests only).
+///
+/// ponytail: the env-driven precedence (`s3 > local > memory`)
+/// matches the project's "S3 in prod, local in dev" reality
+/// without forcing a code change between the two. The factory
+/// returns `Arc<dyn Storage>` so call sites never branch on the
+/// concrete adapter.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StorageSettings {
+    /// S3 bucket name. Empty = S3 disabled.
+    #[serde(default)]
+    pub s3_bucket: String,
+
+    /// S3 endpoint (e.g. `https://s3.amazonaws.com`,
+    /// `http://minio.local:9000`). Empty = AWS default.
+    #[serde(default)]
+    pub s3_endpoint: String,
+
+    /// S3 region (e.g. `us-east-1` for MinIO).
+    #[serde(default = "default_storage_s3_region")]
+    pub s3_region: String,
+
+    /// S3 access key id. Empty = rely on the AWS SDK chain.
+    #[serde(default)]
+    pub s3_access_key: String,
+
+    /// S3 secret key. Empty = rely on the AWS SDK chain.
+    #[serde(default)]
+    pub s3_secret_key: String,
+
+    /// `true` for MinIO / non-AWS endpoints (path-style URLs).
+    #[serde(default)]
+    pub s3_path_style: bool,
+
+    /// Local-filesystem root directory. Empty = local disabled.
+    /// The `LocalStorage` adapter creates the directory on demand.
+    #[serde(default)]
+    pub local_path: String,
+}
+
+impl Default for StorageSettings {
+    fn default() -> Self {
+        Self {
+            s3_bucket: String::new(),
+            s3_endpoint: String::new(),
+            s3_region: default_storage_s3_region(),
+            s3_access_key: String::new(),
+            s3_secret_key: String::new(),
+            s3_path_style: false,
+            local_path: String::new(),
+        }
+    }
+}
+
+impl StorageSettings {
+    /// Pick the concrete adapter based on which env knobs are set.
+    ///
+    /// Precedence: **S3** (prod) → **Local** (transition / dev) →
+    /// **Memory** (unit tests). The fallback to memory is a
+    /// deliberate ponytail simplification — `cargo test` then
+    /// doesn't need MinIO running. Production deployments MUST set
+    /// `KOKKAK_STORAGE__S3_BUCKET` (or `KOKKAK_STORAGE__LOCAL_PATH`
+    /// for the Strangler transition) so the API doesn't run on a
+    /// non-persistent store.
+    pub fn adapter_kind(&self) -> StorageAdapterKind {
+        if !self.s3_bucket.trim().is_empty() {
+            StorageAdapterKind::S3
+        } else if !self.local_path.trim().is_empty() {
+            StorageAdapterKind::Local
+        } else {
+            StorageAdapterKind::Memory
+        }
+    }
+}
+
+/// Which concrete `Storage` adapter `StorageSettings::adapter_kind`
+/// resolved to. Useful for `tracing::info!` boot logs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StorageAdapterKind {
+    /// S3 / S3-compatible (MinIO). Production default.
+    S3,
+    /// Local filesystem. Strangler transition + dev without MinIO.
+    Local,
+    /// In-process `HashMap`. Unit tests only.
+    Memory,
+}
+
+impl StorageAdapterKind {
+    /// Short lowercase string for boot logs.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            StorageAdapterKind::S3 => "s3",
+            StorageAdapterKind::Local => "local",
+            StorageAdapterKind::Memory => "memory",
+        }
+    }
+}
+
+fn default_storage_s3_region() -> String {
+    "us-east-1".into()
+}
+
+/// Image-processor settings (M9-extra).
+///
+/// Drives the `image_processor` module in `kokkak-infra` —
+/// any caller (handler / seeder / test) feeds raw image bytes
+/// in, the processor decodes the format, transcodes to lossy
+/// WebP, stores via `Storage`, and returns the new key.
+///
+/// Env contract:
+/// - `KOKKAK_IMAGE__MAX_INPUT_BYTES`     — cap on raw input (default 5 MiB)
+/// - `KOKKAK_IMAGE__MAX_DIMENSION_PX`    — cap on longest side after resize (default 2048)
+/// - `KOKKAK_IMAGE__WEBP_QUALITY`        — 1-100, lossy quality (default 80)
+///
+/// Ponytail: the defaults are tuned for **user profile / ID /
+/// bank-book** uploads — i.e. documents + portraits, not high-res
+/// photography. A photographer-grade setting would push
+/// `max_dimension_px` to 4096 and `webp_quality` to 90, but that
+/// doubles the storage footprint for no benefit on a handyman
+/// marketplace.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ImageProcessorSettings {
+    /// Maximum raw input size in bytes. Anything bigger is
+    /// rejected before decode so a single malicious upload
+    /// can't blow up memory.
+    #[serde(default = "default_image_max_input_bytes")]
+    pub max_input_bytes: usize,
+
+    /// Longest-side cap after the resize step. Set to `0` to
+    /// disable resizing (original dimensions preserved).
+    #[serde(default = "default_image_max_dimension_px")]
+    pub max_dimension_px: u32,
+
+    /// WebP lossy quality, 1..=100. Higher = better quality,
+    /// bigger file. Default `80` (Google's recommended
+    /// sweet-spot for on-screen images).
+    #[serde(default = "default_image_webp_quality")]
+    pub webp_quality: u8,
+}
+
+impl Default for ImageProcessorSettings {
+    fn default() -> Self {
+        Self {
+            max_input_bytes: default_image_max_input_bytes(),
+            max_dimension_px: default_image_max_dimension_px(),
+            webp_quality: default_image_webp_quality(),
+        }
+    }
+}
+
+fn default_image_max_input_bytes() -> usize {
+    // 1 MiB — fits comfortably in the 16 MiB global body limit
+    // when the admin/users/full payload includes up to 6
+    // base64-encoded images. Larger images should be downscaled
+    // client-side before upload; the processor also caps
+    // dimensions at 2048 px.
+    1024 * 1024
+}
+fn default_image_max_dimension_px() -> u32 {
+    2048
+}
+fn default_image_webp_quality() -> u8 {
+    80
 }
 
 /// HTTP server settings.
@@ -1085,10 +1279,22 @@ fn default_compression_enabled() -> bool {
 }
 
 fn default_request_body_limit_bytes() -> usize {
-    // 2 MiB — fits the largest JSON DTO we expect + headroom for
-    // form-urlencoded and small image attachments. Raise per-route
-    // for upload endpoints (see T-16 spec).
-    2 * 1024 * 1024
+    // 16 MiB — accommodates the `POST /api/v1/admin/users/full`
+    // payload when the caller includes up to 6 base64-encoded
+    // user attachments (profile + bank book + 4 ID docs). Each
+    // raw image is capped at ~1 MiB by the image processor
+    // (KOKKAK_IMAGE__MAX_INPUT_BYTES); 6 images at 1 MiB raw
+    // become ~8 MiB base64 + JSON envelope ≈ 9 MiB total.
+    //
+    // ponytail: the global ceiling is widened to 16 MiB because
+    // the admin route legitimately needs that budget. The DoS
+    // risk is bounded by `admin_flag` (RBAC gate) — random
+    // internet callers can't reach the handler — so a 16 MiB
+    // per-request ceiling is acceptable for an authenticated
+    // admin web console. Lower this knob in
+    // `KOKKAK_MIDDLEWARE__REQUEST_BODY_LIMIT_BYTES` to harden
+    // non-admin deployments that may have removed the gate.
+    16 * 1024 * 1024
 }
 
 fn default_max_concurrency() -> usize {
@@ -1909,8 +2115,10 @@ mod tests {
         );
         assert_eq!(s.middleware.request_timeout_secs, 30);
         assert!(s.middleware.compression_enabled);
-        // T-16: safety knobs have positive defaults.
-        assert_eq!(s.middleware.request_body_limit_bytes, 2 * 1024 * 1024);
+        // T-16: safety knobs have positive defaults. Default
+        // was bumped to 16 MiB (M9-extra: accommodate the
+        // base64-encoded image attachments on /admin/users/full).
+        assert_eq!(s.middleware.request_body_limit_bytes, 16 * 1024 * 1024);
         assert_eq!(s.middleware.max_concurrency, 512);
         assert!(s.validate().is_ok());
     }

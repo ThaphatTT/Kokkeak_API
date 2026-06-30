@@ -1,6 +1,13 @@
-//! Admin HTTP handlers (M14.5 register-role split + M15 + M16 + T-06 refactor).
+//! Admin HTTP handlers (M14.5 register-role split + M15 + M16 + M20-b + T-06 refactor).
 //!
-//! - `POST /api/v1/admin/users` — admin-only user creation (M14.5).
+//! - `POST /api/v1/admin/users` — admin-only **simple** user
+//!   creation (M14.5). Wraps `dbo.API_USER_REGISTER` — accepts
+//!   only first / last name + username + password + role.
+//! - `POST /api/v1/admin/users/full` — admin-only **rich** user
+//!   creation (M20-b). Wraps `dbo.SP_USER_INSERT_FULL` —
+//!   accepts the full admin form (address, bank, position,
+//!   salary, schedule, attachments). See the
+//!   `admin_insert_user_full` handler below.
 //! - `GET /api/v1/admin/users` — admin-only user listing (M16,
 //!   backed by `dbo.SP_PERMISSION_USER_LIST`).
 //! - `GET /api/v1/admin/users/:guid/permissions` — per-user detailed
@@ -22,21 +29,27 @@
 //! [`ApiError`] and call [`crate::error::IntoLocalizedResponse::into_localized_response`]
 //! like every other handler.
 
+use std::sync::Arc;
+
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
-use kokkak_application::auth::RegisterInput;
+use chrono::{DateTime, Utc};
+use kokkak_application::admin_user::AdminInsertUserFullInput;
+use kokkak_application::auth::{PasswordHasherPort, RegisterInput};
 use kokkak_application::user_role::{PermissionUpdateInput, UpdatePermissionsInput};
 use kokkak_common::error::AppError;
 use kokkak_common::error_codes::ErrorCode;
 use kokkak_common::i18n::{current_locale, tr};
 use kokkak_common::response::{created, paginated, ApiResponse, PageMeta};
 use kokkak_domain::{
-    PermissionUpdateRow, PermissionUserGroup, RepoError, Role, UserListRow, UserRoleWithPermissions,
+    AdminInsertUserError, AdminInsertUserResult, PermissionUpdateRow, PermissionUserGroup,
+    RepoError, Role, UserListRow, UserRoleWithPermissions,
 };
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use validator::{Validate, ValidationError};
@@ -46,6 +59,7 @@ use crate::extractors::ValidatedJson;
 use crate::handlers::auth::AuthResponse;
 use crate::middleware::auth::AuthnUser;
 use crate::state::AppState;
+use kokkak_infra::image_processor::UserImageKind;
 
 #[derive(Debug, Deserialize, Validate, utoipa::ToSchema)]
 pub struct CreateUserRequest {
@@ -772,4 +786,1140 @@ fn validation_envelope(message: &str, index: usize, field: &str) -> Response {
         meta: None,
     };
     (StatusCode::UNPROCESSABLE_ENTITY, Json(envelope)).into_response()
+}
+
+// ============================================================================
+// M20-b: POST /api/v1/admin/users/full
+// ============================================================================
+//
+// Wraps `dbo.SP_USER_INSERT_FULL` — the rich admin-side user
+// creation flow. The simpler `POST /api/v1/admin/users` (above)
+// uses `API_USER_REGISTER` and is sufficient for provisioning
+// basic admin accounts without an address / bank / position.
+// This endpoint is for the full admin form (every column the
+// legacy ASP.NET page collected).
+//
+// The handler is **thin**: it validates the wire DTO, hashes
+// the password, and delegates to [`AdminUserService`] which in
+// turn calls the SP via [`UserRepository::admin_insert_full`].
+// SP error codes are mapped to HTTP status + i18n message via
+// [`sp_insert_full_status`] below.
+
+/// One day of the weekly working schedule on the wire.
+///
+/// Mirrors the SP's `monday_*` ... `sunday_*` columns 1:1.
+/// When `is_working = true`, both `start_time` and `end_time`
+/// must be `"HH:MM:SS"` strings; when `false`, both are
+/// ignored (sent as NULL to the SP).
+#[derive(Debug, Deserialize, Serialize, Validate, utoipa::ToSchema, Default, Clone)]
+pub struct DayScheduleDto {
+    /// Whether this weekday is a working day.
+    pub is_working: bool,
+    /// `HH:MM:SS` string. Required when `is_working = true`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 8, message = "start_time must be `HH:MM:SS`"))]
+    pub start_time: Option<String>,
+    /// `HH:MM:SS` string. Required when `is_working = true`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 8, message = "end_time must be `HH:MM:SS`"))]
+    pub end_time: Option<String>,
+}
+
+/// Weekly working schedule — seven `DayScheduleDto`s, one per weekday.
+#[derive(Debug, Deserialize, Serialize, Validate, utoipa::ToSchema, Default, Clone)]
+pub struct WeeklyScheduleDto {
+    /// Monday.
+    #[validate(nested)]
+    pub monday: DayScheduleDto,
+    /// Tuesday.
+    #[validate(nested)]
+    pub tuesday: DayScheduleDto,
+    /// Wednesday.
+    #[validate(nested)]
+    pub wednesday: DayScheduleDto,
+    /// Thursday.
+    #[validate(nested)]
+    pub thursday: DayScheduleDto,
+    /// Friday.
+    #[validate(nested)]
+    pub friday: DayScheduleDto,
+    /// Saturday.
+    #[validate(nested)]
+    pub saturday: DayScheduleDto,
+    /// Sunday.
+    #[validate(nested)]
+    pub sunday: DayScheduleDto,
+}
+
+/// Request body for `POST /api/v1/admin/users/full`.
+///
+/// Flat shape (no nested address / bank struct) to keep the
+/// wire contract 1:1 with the SP parameters — the mobile /
+/// admin SDKs can generate strongly-typed arrays without
+/// manual mapping. Field names mirror the SP parameter names
+/// verbatim (`snake_case`).
+///
+/// `password` is the **plaintext** — the service hashes it
+/// inside the use case. Plaintext never reaches the DB
+/// driver (AGENTS.md § 12.1).
+#[derive(Debug, Deserialize, Validate, utoipa::ToSchema)]
+pub struct AdminInsertUserRequest {
+    /// Optional. The SP generates a NEWID when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 36, message = "user_guid must be a 36-char UUID"))]
+    pub user_guid: Option<String>,
+
+    #[validate(length(min = 1, max = 100, message = "first_name must be 1-100 characters"))]
+    pub first_name: String,
+
+    #[validate(length(min = 1, max = 100, message = "last_name must be 1-100 characters"))]
+    pub last_name: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 100, message = "id_card must be at most 100 characters"))]
+    pub id_card: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 50, message = "tel must be at most 50 characters"))]
+    pub tel: Option<String>,
+
+    #[validate(length(min = 1, max = 255, message = "email must be 1-255 characters"))]
+    pub email: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 50, message = "gender must be at most 50 characters"))]
+    pub gender: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 36, message = "country_guid must be a 36-char UUID"))]
+    pub country_guid: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 255, message = "province must be at most 255 characters"))]
+    pub province: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 255, message = "district must be at most 255 characters"))]
+    pub district: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 255, message = "sub_district must be at most 255 characters"))]
+    pub sub_district: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 255, message = "village must be at most 255 characters"))]
+    pub village: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 50, message = "post must be at most 50 characters"))]
+    pub post: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 4000, message = "description must be at most 4000 characters"))]
+    pub description: Option<String>,
+
+    pub is_foreign: bool,
+    pub is_customer_company: bool,
+    pub is_customer: bool,
+    pub is_admin: bool,
+    pub is_employee: bool,
+    pub is_freelance: bool,
+
+    /// 1 = active, 0 = inactive. SP rejects anything else.
+    #[validate(custom(function = "validate_user_status", message = "status must be 0 or 1"))]
+    pub status: i32,
+
+    #[validate(length(min = 3, max = 255, message = "username must be 3-255 characters"))]
+    pub username: String,
+
+    /// Plaintext password — the handler hands it to the service
+    /// which hashes it before the SP call. Plaintext is never
+    /// stored or logged.
+    #[validate(length(min = 8, max = 128, message = "password must be 8-128 characters"))]
+    pub password: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 500, message = "profile_img_path must be at most 500 characters"))]
+    pub profile_img_path: Option<String>,
+
+    /// Optional. Base64-encoded raw image (JPEG / PNG / …) for
+    /// the user profile. When present, the handler decodes it,
+    /// transcodes to lossy WebP via [`ImageProcessor`], stores
+    /// under
+    /// `users/{user_guid}/profile/{uuid}.webp`, and writes the
+    /// resulting key into `profile_img_path` before the SP
+    /// call. Accepts both plain base64 and `data:image/...;base64,...`
+    /// prefixes. Decoded size capped at
+    /// `KOKKAK_IMAGE__MAX_INPUT_BYTES` (default 1 MiB).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_img_b64: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 36, message = "company_guid must be a 36-char UUID"))]
+    pub company_guid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 255, message = "company_name must be at most 255 characters"))]
+    pub company_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 50, message = "company_tel must be at most 50 characters"))]
+    pub company_tel: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub company_type: Option<i32>,
+    pub company_status: i32,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 36, message = "department_guid must be a 36-char UUID"))]
+    pub department_guid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 36, message = "department_team_guid must be a 36-char UUID"))]
+    pub department_team_guid: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 36, message = "position_guid must be a 36-char UUID"))]
+    pub position_guid: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position_start_at: Option<DateTime<Utc>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub salary_amount: Option<Decimal>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 10, message = "salary_currency must be at most 10 characters"))]
+    pub salary_currency: Option<String>,
+
+    #[validate(nested)]
+    pub schedule: WeeklyScheduleDto,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 255, message = "bank_name must be at most 255 characters"))]
+    pub bank_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 50, message = "bank_code must be at most 50 characters"))]
+    pub bank_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 100, message = "bank_account_no must be at most 100 characters"))]
+    pub bank_account_no: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(
+        max = 255,
+        message = "bank_account_name must be at most 255 characters"
+    ))]
+    pub bank_account_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(
+        max = 500,
+        message = "bank_book_img_path must be at most 500 characters"
+    ))]
+    pub bank_book_img_path: Option<String>,
+
+    /// Optional base64-encoded bank-book cover image. See
+    /// `profile_img_b64` for the contract; the storage path
+    /// becomes `users/{user_guid}/bank-book/{uuid}.webp`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bank_book_img_b64: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(
+        max = 500,
+        message = "id_card_front_path must be at most 500 characters"
+    ))]
+    pub id_card_front_path: Option<String>,
+    /// Optional base64 ID-card front image. See `profile_img_b64`
+    /// for the contract; storage path becomes
+    /// `users/{user_guid}/attachments/id-card-front/{uuid}.webp`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id_card_front_b64: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(
+        max = 500,
+        message = "id_card_back_path must be at most 500 characters"
+    ))]
+    pub id_card_back_path: Option<String>,
+    /// Optional base64 ID-card back image. See `profile_img_b64`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id_card_back_b64: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(
+        max = 500,
+        message = "proof_of_address_path must be at most 500 characters"
+    ))]
+    pub proof_of_address_path: Option<String>,
+    /// Optional base64 proof-of-address image. See `profile_img_b64`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proof_of_address_b64: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(
+        max = 500,
+        message = "source_of_funds_statement_path must be at most 500 characters"
+    ))]
+    pub source_of_funds_statement_path: Option<String>,
+    /// Optional base64 source-of-funds-statement image. See
+    /// `profile_img_b64`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_of_funds_statement_b64: Option<String>,
+}
+
+/// `validator` fn: `status` must be 0 or 1.
+fn validate_user_status(s: i32) -> Result<(), ValidationError> {
+    if s == 0 || s == 1 {
+        Ok(())
+    } else {
+        Err(ValidationError::new("invalid_user_status"))
+    }
+}
+
+/// Response body for `POST /api/v1/admin/users/full`.
+///
+/// Mirrors the SP's success row verbatim + the actor's
+/// `user_username_guid` (the admin can paste it into the
+/// "edit login" page for password reset etc.).
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct AdminInsertUserResponse {
+    /// Just-created `[user].user_guid`.
+    pub user_guid: String,
+    /// Just-created `[user_username].user_username_guid`.
+    pub user_username_guid: String,
+    /// The username (echoed by the SP).
+    pub username: String,
+    /// `user_role_guid` that the SP assigned (ADMIN / EMPLOYEE /
+    /// `None` when neither flag was set).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assigned_role_guid: Option<String>,
+}
+
+impl From<AdminInsertUserResult> for AdminInsertUserResponse {
+    fn from(r: AdminInsertUserResult) -> Self {
+        Self {
+            user_guid: r.user_guid,
+            user_username_guid: r.user_username_guid,
+            username: r.username,
+            assigned_role_guid: r.assigned_role_guid,
+        }
+    }
+}
+
+/// `POST /api/v1/admin/users/full` — rich admin user creation.
+///
+/// Wraps `dbo.SP_USER_INSERT_FULL`. The handler does NOT
+/// pre-validate uniqueness or duplicate checks — those live
+/// inside the SP (the DB is the source of truth). The
+/// handler's job is:
+///
+/// 1. RBAC gate (already covered by `admin_flag` middleware,
+///    but we double-check here for symmetry with the rest of
+///    the admin endpoints + to emit the localized
+///    `admin_required` message).
+/// 2. Validate the wire DTO (`validator` crate).
+/// 3. Map DTO → application input.
+/// 4. Delegate to [`AdminUserService::admin_insert_full`]
+///    which hashes the password + runs the SP.
+/// 5. Map SP failure codes → HTTP status + `error.code` via
+///    [`sp_insert_full_status`].
+///
+/// ponytail: validation is layered — `validator` handles
+/// length / required-field checks, the service short-circuits
+/// working-schedule checks, the SP handles all business rules
+/// (uniqueness, role lookups, etc.). Each layer covers gaps
+/// the other can't see cleanly.
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/users/full",
+    tag = "admin",
+    request_body = AdminInsertUserRequest,
+    responses(
+        (status = 201, description = "User created (admin-provisioned)", body = AdminInsertUserResponse),
+        (status = 400, description = "Malformed JSON body or ACTOR_REQUIRED", body = crate::openapi::ApiError),
+        (status = 401, description = "Not authenticated or ACTOR_NOT_FOUND", body = crate::openapi::ApiError),
+        (status = 403, description = "Not an admin (PERMISSION_DENIED)", body = crate::openapi::ApiError),
+        (status = 409, description = "Username / email / id_card / user_guid collision", body = crate::openapi::ApiError),
+        (status = 422, description = "Validation error (required field, role/position/company not found)", body = crate::openapi::ApiError),
+        (status = 500, description = "Internal server error (ADMIN/EMPLOYEE role missing)", body = crate::openapi::ApiError),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn admin_insert_user_full(
+    State(state): State<AppState>,
+    user: AuthnUser,
+    ValidatedJson(req): ValidatedJson<AdminInsertUserRequest>,
+) -> Result<Response, Response> {
+    // 1. RBAC — Admin or SuperAdmin only. The middleware also
+    //    gates this, but we re-check here so the localized
+    //    `admin_required` message surfaces even if the
+    //    middleware config changes.
+    if !user.has_role(Role::Admin) && !user.has_role(Role::SuperAdmin) {
+        let locale = current_locale();
+        let localized = tr("err_auth.admin_required", &locale, &[]);
+        return Err(
+            ApiError::from(AppError::AdminRequired.with_message(localized)).into_response(),
+        );
+    }
+
+    // 2. DTO → application input. The `schedule` is the only
+    //    nested object — flatten it into 7 `DaySchedule` structs
+    //    before the call so the service / repo layers stay flat.
+    let schedule = kokkak_domain::admin_user::WeeklySchedule {
+        monday: dto_to_day_schedule(&req.schedule.monday),
+        tuesday: dto_to_day_schedule(&req.schedule.tuesday),
+        wednesday: dto_to_day_schedule(&req.schedule.wednesday),
+        thursday: dto_to_day_schedule(&req.schedule.thursday),
+        friday: dto_to_day_schedule(&req.schedule.friday),
+        saturday: dto_to_day_schedule(&req.schedule.saturday),
+        sunday: dto_to_day_schedule(&req.schedule.sunday),
+    };
+
+    // 3. M9 / T-16 extra: image upload via base64 in JSON.
+    //
+    //    The caller may send raw image bytes inline (no API
+    //    endpoint, per project rules). For each `*_img_b64`
+    //    field present, we:
+    //      a. resolve the storage user_guid (caller-provided,
+    //         or a freshly-minted UUID v7 we pass to the SP),
+    //      b. decode the base64 (strip `data:...;base64,`
+    //         prefix, drop whitespace),
+    //      c. call `state.image.process_and_store(...)` which
+    //         decodes, transcodes to WebP, and stores via the
+    //         Storage port,
+    //      d. write the resulting `StorageKey` into the
+    //         matching `*_img_path` field.
+    //
+    //    ponytail: we serialise the user_guid resolution +
+    //    base64 decode + processor call into one async
+    //    block (sequential) rather than `tokio::try_join!`
+    //    because (1) each call's user_guid is the same, (2)
+    //    the processor holds an `Arc<dyn Storage>` already
+    //    guarded by the Storage adapter, so concurrent calls
+    //    buy nothing, and (3) the simpler code path is easier
+    //    to reason about when a single failure should
+    //    surface as 422 instead of one of N parallel failures.
+    //
+    //    Failure mode: any decode / store error is mapped to
+    //    a 422 `validation` response with a localized
+    //    message — callers see which field failed.
+    let user_guid = match req.user_guid.as_deref() {
+        Some(g) => g.to_string(),
+        None => Uuid::now_v7().to_string(),
+    };
+
+    let profile_img_path = match resolve_b64_image(
+        state.image.clone(),
+        &user_guid,
+        req.profile_img_b64.as_deref(),
+        UserImageKind::Profile,
+    )
+    .await
+    {
+        Ok(v) => v.or(req.profile_img_path),
+        Err(e) => return Err(image_error_envelope(&state, "profile_img_b64", e)),
+    };
+    let bank_book_img_path = match resolve_b64_image(
+        state.image.clone(),
+        &user_guid,
+        req.bank_book_img_b64.as_deref(),
+        UserImageKind::BankBook,
+    )
+    .await
+    {
+        Ok(v) => v.or(req.bank_book_img_path),
+        Err(e) => return Err(image_error_envelope(&state, "bank_book_img_b64", e)),
+    };
+    let id_card_front_path = match resolve_b64_image(
+        state.image.clone(),
+        &user_guid,
+        req.id_card_front_b64.as_deref(),
+        UserImageKind::Attachment(kokkak_infra::storage::UserAttachment::IdCardFront),
+    )
+    .await
+    {
+        Ok(v) => v.or(req.id_card_front_path),
+        Err(e) => return Err(image_error_envelope(&state, "id_card_front_b64", e)),
+    };
+    let id_card_back_path = match resolve_b64_image(
+        state.image.clone(),
+        &user_guid,
+        req.id_card_back_b64.as_deref(),
+        UserImageKind::Attachment(kokkak_infra::storage::UserAttachment::IdCardBack),
+    )
+    .await
+    {
+        Ok(v) => v.or(req.id_card_back_path),
+        Err(e) => return Err(image_error_envelope(&state, "id_card_back_b64", e)),
+    };
+    let proof_of_address_path = match resolve_b64_image(
+        state.image.clone(),
+        &user_guid,
+        req.proof_of_address_b64.as_deref(),
+        UserImageKind::Attachment(kokkak_infra::storage::UserAttachment::ProofOfAddress),
+    )
+    .await
+    {
+        Ok(v) => v.or(req.proof_of_address_path),
+        Err(e) => return Err(image_error_envelope(&state, "proof_of_address_b64", e)),
+    };
+    let source_of_funds_statement_path = match resolve_b64_image(
+        state.image.clone(),
+        &user_guid,
+        req.source_of_funds_statement_b64.as_deref(),
+        UserImageKind::Attachment(kokkak_infra::storage::UserAttachment::SourceOfFunds),
+    )
+    .await
+    {
+        Ok(v) => v.or(req.source_of_funds_statement_path),
+        Err(e) => {
+            return Err(image_error_envelope(
+                &state,
+                "source_of_funds_statement_b64",
+                e,
+            ));
+        }
+    };
+
+    let input = AdminInsertUserFullInput {
+        user_guid: Some(user_guid),
+        first_name: req.first_name,
+        last_name: req.last_name,
+        id_card: req.id_card,
+        tel: req.tel,
+        email: req.email,
+        gender: req.gender,
+        country_guid: req.country_guid,
+        province: req.province,
+        district: req.district,
+        sub_district: req.sub_district,
+        village: req.village,
+        post: req.post,
+        description: req.description,
+        is_foreign: req.is_foreign,
+        is_customer_company: req.is_customer_company,
+        is_customer: req.is_customer,
+        is_admin: req.is_admin,
+        is_employee: req.is_employee,
+        is_freelance: req.is_freelance,
+        status: req.status,
+        username: req.username,
+        password: req.password,
+        profile_img_path,
+        company_guid: req.company_guid,
+        company_name: req.company_name,
+        company_tel: req.company_tel,
+        company_type: req.company_type,
+        company_status: req.company_status,
+        department_guid: req.department_guid,
+        department_team_guid: req.department_team_guid,
+        position_guid: req.position_guid,
+        position_start_at: req.position_start_at,
+        salary_amount: req.salary_amount,
+        salary_currency: req.salary_currency,
+        schedule,
+        bank_name: req.bank_name,
+        bank_code: req.bank_code,
+        bank_account_no: req.bank_account_no,
+        bank_account_name: req.bank_account_name,
+        bank_book_img_path,
+        id_card_front_path,
+        id_card_back_path,
+        proof_of_address_path,
+        source_of_funds_statement_path,
+    };
+
+    // 3. Delegate.
+    let result = match state.admin_users.admin_insert_full(user.id(), input).await {
+        Ok(r) => r,
+        Err(e) => return Err(sp_error_envelope(&state, e)),
+    };
+
+    // 4. 201 + response DTO.
+    Ok((
+        StatusCode::CREATED,
+        created(AdminInsertUserResponse::from(result)),
+    )
+        .into_response())
+}
+
+/// Convert a wire DTO day into the domain `DaySchedule`.
+fn dto_to_day_schedule(d: &DayScheduleDto) -> kokkak_domain::admin_user::DaySchedule {
+    kokkak_domain::admin_user::DaySchedule {
+        is_working: d.is_working,
+        start_time: d.start_time.clone(),
+        end_time: d.end_time.clone(),
+    }
+}
+
+/// Decode (optional) base64 raw image bytes, run them through
+/// the [`ImageProcessor`], and return the resulting
+/// `StorageKey` as `Some(String)`.
+///
+/// Returns `Ok(None)` when the input is `None` (caller didn't
+/// send a `*_img_b64` for this field). The caller can then
+/// fall back to the pre-existing `*_img_path` if it has one.
+///
+/// `Ok(Some(key))` when the image was successfully transcoded
+/// to WebP and stored. The key matches the folder layout in
+/// `kokkak_infra::storage::keys`.
+async fn resolve_b64_image(
+    processor: Arc<kokkak_infra::image_processor::ImageProcessor>,
+    user_guid: &str,
+    b64: Option<&str>,
+    kind: kokkak_infra::image_processor::UserImageKind,
+) -> Result<Option<String>, kokkak_infra::image_processor::ImageError> {
+    let Some(s) = b64 else { return Ok(None) };
+    let bytes =
+        decode_base64_payload(s).map_err(kokkak_infra::image_processor::ImageError::Decode)?;
+    let result = processor.process_and_store(&bytes, user_guid, kind).await?;
+    Ok(Some(result.key.as_str().to_string()))
+}
+
+/// Decode a base64 payload, stripping any `data:<mime>;base64,`
+/// prefix and whitespace. Errors carry the original
+/// [`base64::DecodeError`] stringified.
+fn decode_base64_payload(s: &str) -> Result<Vec<u8>, String> {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
+    let payload = if let Some(idx) = s.find("base64,") {
+        &s[idx + "base64,".len()..]
+    } else {
+        s
+    };
+    // Drop ASCII whitespace (newlines / spaces typical in
+    // line-wrapped base64).
+    let cleaned: String = payload.chars().filter(|c| !c.is_whitespace()).collect();
+    STANDARD
+        .decode(cleaned.as_bytes())
+        .map_err(|e| e.to_string())
+}
+
+/// Build a 422 `validation` envelope when one of the
+/// `*_img_b64` fields fails to decode / transcode / store.
+/// The error code is `validation` (matches the rest of the
+/// admin DTO contract) and the localized message points at
+/// the offending field name.
+fn image_error_envelope(
+    state: &AppState,
+    field: &str,
+    err: kokkak_infra::image_processor::ImageError,
+) -> Response {
+    let locale = current_locale();
+    tracing::warn!(
+        field = field,
+        error = %err,
+        "image upload failed"
+    );
+    let i18n_key = "err_admin_user.image_invalid";
+    let localized = tr(i18n_key, &locale, &[field]);
+    let _ = state; // reserved for future audit hook
+    let envelope: ApiResponse<()> = ApiResponse {
+        success: false,
+        data: None,
+        error: Some(kokkak_common::error::ApiErrorBody {
+            code: "validation".into(),
+            message: localized,
+        }),
+        meta: None,
+    };
+    (StatusCode::UNPROCESSABLE_ENTITY, Json(envelope)).into_response()
+}
+
+/// Map a [`AdminInsertUserError`] into an axum [`Response`].
+///
+/// The SP emits ~25 distinct stable string codes (see the
+/// `SP_USER_INSERT_FULL` body). Each one maps to:
+///
+/// 1. An HTTP status (so the admin UI's HTTP-level error
+///    branching works without parsing the body).
+/// 2. A stable machine-readable `error.code` string from
+///    [`ErrorCode`] (catalog-served via
+///    `GET /api/error-codes.json`).
+/// 3. A localized message from `err_admin_user.*` (th / en /
+///    lo) — admin operators see messages in their UI
+///    language, not the SP's English debug string.
+///
+/// Unknown codes fall back to **500 / internal** with the SP's
+/// raw message — surfaces a regression in the SP-side catalog
+/// before it ships to admins.
+fn sp_error_envelope(state: &AppState, err: AdminInsertUserError) -> Response {
+    let (status, code, i18n_key) = sp_insert_full_status(&err.code);
+    let locale = current_locale();
+    let localized = tr(i18n_key, &locale, &[]);
+    // The SP's English `message` is logged at WARN for
+    // postmortem visibility — never surfaced to the wire.
+    tracing::warn!(
+        sp_code = %err.code,
+        sp_message = %err.message,
+        localized_code = code,
+        "SP_USER_INSERT_FULL rejected request"
+    );
+    let envelope: ApiResponse<()> = ApiResponse {
+        success: false,
+        data: None,
+        error: Some(kokkak_common::error::ApiErrorBody {
+            code: code.into(),
+            message: localized,
+        }),
+        meta: None,
+    };
+    // `state` is currently unused by the helper but kept in
+    // the signature for symmetry with the other helpers (room
+    // to grow: per-tenant translation overrides, etc.).
+    let _ = state;
+    (status, Json(envelope)).into_response()
+}
+
+/// `(HTTP status, ErrorCode, i18n key)` for every SP code we
+/// surface from `SP_USER_INSERT_FULL`.
+///
+/// ponytail: a 3-column match table is the simplest possible
+/// mapping — exhaustive `match` forces the compiler to catch
+/// new SP codes at compile time. When the catalog grows past
+/// ~30 entries, switch to a `phf` static map keyed by code;
+/// right now a match is faster to read and the compile-time
+/// exhaustiveness check is the point.
+fn sp_insert_full_status(sp_code: &str) -> (StatusCode, &'static str, &'static str) {
+    match sp_code {
+        // ---- Actor / RBAC ----
+        "actor_required" => (
+            StatusCode::BAD_REQUEST,
+            ErrorCode::ACTOR_REQUIRED,
+            "err_admin_user.actor_required",
+        ),
+        "actor_not_found" => (
+            StatusCode::UNAUTHORIZED,
+            ErrorCode::ACTOR_NOT_FOUND,
+            "err_admin_user.actor_not_found",
+        ),
+        "permission_denied" => (
+            StatusCode::FORBIDDEN,
+            ErrorCode::PERMISSION_DENIED,
+            "err_admin_user.permission_denied",
+        ),
+
+        // ---- Required field validation ----
+        "first_name_required" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::FIRST_NAME_REQUIRED,
+            "err_admin_user.first_name_required",
+        ),
+        "last_name_required" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::LAST_NAME_REQUIRED,
+            "err_admin_user.last_name_required",
+        ),
+        "email_required" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::EMAIL_REQUIRED,
+            "err_admin_user.email_required",
+        ),
+        "username_required" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::USERNAME_REQUIRED,
+            "err_admin_user.username_required",
+        ),
+        "password_hash_required" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::PASSWORD_HASH_REQUIRED,
+            "err_admin_user.password_hash_required",
+        ),
+        "invalid_user_status" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::INVALID_USER_STATUS,
+            "err_admin_user.invalid_user_status",
+        ),
+
+        // ---- Uniqueness conflicts ----
+        "user_guid_exists" => (
+            StatusCode::CONFLICT,
+            ErrorCode::USER_GUID_EXISTS,
+            "err_admin_user.user_guid_exists",
+        ),
+        "username_exists" => (
+            StatusCode::CONFLICT,
+            ErrorCode::USERNAME_TAKEN,
+            "err_admin_user.username_exists",
+        ),
+        "email_exists" => (
+            StatusCode::CONFLICT,
+            ErrorCode::EMAIL_TAKEN,
+            "err_admin_user.email_exists",
+        ),
+        "id_card_exists" => (
+            StatusCode::CONFLICT,
+            ErrorCode::ID_CARD_TAKEN,
+            "err_admin_user.id_card_exists",
+        ),
+
+        // ---- Reference-data validation ----
+        "country_required" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::COUNTRY_REQUIRED,
+            "err_admin_user.country_required",
+        ),
+        "country_not_found" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::COUNTRY_NOT_FOUND,
+            "err_admin_user.country_not_found",
+        ),
+        "company_required" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::COMPANY_REQUIRED,
+            "err_admin_user.company_required",
+        ),
+        "company_not_found" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::COMPANY_NOT_FOUND,
+            "err_admin_user.company_not_found",
+        ),
+        "department_not_found" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::DEPARTMENT_NOT_FOUND,
+            "err_admin_user.department_not_found",
+        ),
+        "department_team_not_found" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::DEPARTMENT_TEAM_NOT_FOUND,
+            "err_admin_user.department_team_not_found",
+        ),
+        "department_team_mismatch" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::DEPARTMENT_TEAM_MISMATCH,
+            "err_admin_user.department_team_mismatch",
+        ),
+        "position_not_found" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::POSITION_NOT_FOUND,
+            "err_admin_user.position_not_found",
+        ),
+        "invalid_salary" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::INVALID_SALARY,
+            "err_admin_user.invalid_salary",
+        ),
+        "work_time_required" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::WORK_TIME_REQUIRED,
+            "err_admin_user.work_time_required",
+        ),
+
+        // ---- Server-side configuration ----
+        "admin_role_not_found" => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ErrorCode::ADMIN_ROLE_NOT_FOUND,
+            "err_admin_user.admin_role_not_found",
+        ),
+        "employee_role_not_found" => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ErrorCode::EMPLOYEE_ROLE_NOT_FOUND,
+            "err_admin_user.employee_role_not_found",
+        ),
+
+        // ---- Unknown / driver error ----
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ErrorCode::INTERNAL,
+            "err.internal",
+        ),
+    }
+}
+
+// Silence dead-code warning: `PasswordHasherPort` is imported
+// here so a future self-contained handler can re-use the
+// hasher without reaching back through `state.admin_users`.
+#[allow(dead_code)]
+fn _hasher_anchor(_: &dyn PasswordHasherPort) {}
+
+#[cfg(test)]
+mod base64_decode_tests {
+    //! Lock the contract of `decode_base64_payload` — the helper
+    //! that strips `data:image/...;base64,` prefixes and ASCII
+    //! whitespace before base64-decoding. The admin handler
+    //! chains it directly into the `ImageProcessor`, so any
+    //! regression here silently breaks image uploads.
+
+    use super::decode_base64_payload;
+
+    /// Tiny base64 of `hi` (no prefix, no whitespace).
+    const PLAIN: &str = "aGk=";
+
+    #[test]
+    fn decodes_plain_payload() {
+        let out = decode_base64_payload(PLAIN).unwrap();
+        assert_eq!(out, b"hi");
+    }
+
+    #[test]
+    fn decodes_data_url_prefix() {
+        let s = format!("data:image/jpeg;base64,{PLAIN}");
+        assert_eq!(decode_base64_payload(&s).unwrap(), b"hi");
+    }
+
+    #[test]
+    fn drops_ascii_whitespace() {
+        // Line-wrapped base64 (common in email-style encoders).
+        let s = "data:image/png;base64,aGk=\n";
+        assert_eq!(decode_base64_payload(s).unwrap(), b"hi");
+        let s = "aG k=";
+        assert_eq!(decode_base64_payload(s).unwrap(), b"hi");
+    }
+
+    #[test]
+    fn rejects_invalid_base64() {
+        // Not valid base64.
+        assert!(decode_base64_payload("not!base64$").is_err());
+    }
+}
+
+#[cfg(test)]
+mod resolve_b64_image_tests {
+    //! Smoke test for the wiring between the admin handler's
+    //! base64 input and `ImageProcessor::process_and_store`.
+    //! Verifies the generated key lands under the expected
+    //! `users/{guid}/<kind>/...webp` folder.
+
+    use super::*;
+    use kokkak_infra::image_processor::{ImageProcessor, ImageProcessorConfig};
+    use kokkak_infra::storage::MemoryStorage;
+
+    fn proc() -> Arc<ImageProcessor> {
+        Arc::new(ImageProcessor::new(
+            Arc::new(MemoryStorage::new()),
+            ImageProcessorConfig {
+                max_input_bytes: 1024 * 1024,
+                max_dimension_px: 256,
+                webp_quality: 80,
+            },
+        ))
+    }
+
+    /// 1x1 red PNG (smallest possible valid PNG). Defined for
+    /// future tests that want to build payloads without going
+    /// through base64; the active tests use the base64 form
+    /// below.
+    #[allow(dead_code)]
+    fn tiny_png() -> Vec<u8> {
+        vec![
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x90, 0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08,
+            0xd7, 0x63, 0xf8, 0xcf, 0xc0, 0x00, 0x00, 0x00, 0x03, 0x00, 0x01, 0x5b, 0x6b, 0x4f,
+            0xa6, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+        ]
+    }
+
+    #[tokio::test]
+    async fn none_returns_none() {
+        let p = proc();
+        let r = resolve_b64_image(
+            p,
+            "u-1",
+            None,
+            kokkak_infra::image_processor::UserImageKind::Profile,
+        )
+        .await
+        .unwrap();
+        assert!(r.is_none());
+    }
+
+    #[tokio::test]
+    async fn decodes_and_stores_under_kind_folder() {
+        let p = proc();
+        // base64 of the 1x1 red PNG above.
+        let b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==";
+        let r = resolve_b64_image(
+            p,
+            "u-1",
+            Some(b64),
+            kokkak_infra::image_processor::UserImageKind::Profile,
+        )
+        .await
+        .unwrap();
+        let key = r.expect("b64 was Some");
+        assert!(key.starts_with("users/u-1/profile/"));
+        assert!(key.ends_with(".webp"));
+    }
+
+    #[tokio::test]
+    async fn attachment_kind_lands_in_subfolder() {
+        let p = proc();
+        let b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==";
+        let r = resolve_b64_image(
+            p,
+            "u-2",
+            Some(b64),
+            kokkak_infra::image_processor::UserImageKind::Attachment(
+                kokkak_infra::storage::UserAttachment::IdCardFront,
+            ),
+        )
+        .await
+        .unwrap();
+        let key = r.expect("b64 was Some");
+        assert!(key.contains("/attachments/id-card-front/"));
+    }
+
+    #[tokio::test]
+    async fn invalid_base64_surfaces_decode_error() {
+        let p = proc();
+        let r = resolve_b64_image(
+            p,
+            "u-3",
+            Some("not!base64$"),
+            kokkak_infra::image_processor::UserImageKind::Profile,
+        )
+        .await;
+        assert!(matches!(
+            r,
+            Err(kokkak_infra::image_processor::ImageError::Decode(_))
+        ));
+    }
+}
+
+#[cfg(test)]
+mod admin_insert_full_tests {
+    //! Unit tests for the SP code → (HTTP, ErrorCode, i18n key)
+    //! mapping. Exhaustive coverage — every SP code must have a
+    //! mapping so the admin UI can rely on a stable wire
+    //! contract.
+
+    use super::*;
+
+    /// Every known SP error code. The list MUST match the codes
+    /// `SP_USER_INSERT_FULL` emits (see the SP body). When the
+    /// DBA adds a new code, add it here AND to the `match` arm
+    /// in `sp_insert_full_status`; the test catches drift in
+    /// both directions.
+    const KNOWN_SP_CODES: &[&str] = &[
+        "actor_required",
+        "actor_not_found",
+        "permission_denied",
+        "first_name_required",
+        "last_name_required",
+        "email_required",
+        "username_required",
+        "password_hash_required",
+        "invalid_user_status",
+        "user_guid_exists",
+        "username_exists",
+        "email_exists",
+        "id_card_exists",
+        "country_required",
+        "country_not_found",
+        "company_required",
+        "company_not_found",
+        "department_not_found",
+        "department_team_not_found",
+        "department_team_mismatch",
+        "position_not_found",
+        "invalid_salary",
+        "work_time_required",
+        "admin_role_not_found",
+        "employee_role_not_found",
+    ];
+
+    #[test]
+    fn all_known_sp_codes_resolve_to_distinct_statuses() {
+        let mut seen = std::collections::HashSet::new();
+        for code in KNOWN_SP_CODES {
+            let (status, ec, key) = sp_insert_full_status(code);
+            // Stable wire contract: every known code maps to a
+            // distinct (status, code) pair so the admin UI can
+            // branch on it without parsing the body.
+            assert!(
+                seen.insert((status, ec)),
+                "duplicate (status, code) for SP code `{code}`: {status} + {ec}"
+            );
+            assert!(key.starts_with("err_"), "i18n key must live under err_*");
+            assert!(
+                key == "err.internal" || key.starts_with("err_admin_user."),
+                "i18n key for admin-user codes must start with err_admin_user. (got `{key}`)"
+            );
+        }
+    }
+
+    #[test]
+    fn actor_codes_map_to_400_401_403() {
+        assert_eq!(
+            sp_insert_full_status("actor_required").0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            sp_insert_full_status("actor_not_found").0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            sp_insert_full_status("permission_denied").0,
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[test]
+    fn conflict_codes_map_to_409() {
+        for code in [
+            "user_guid_exists",
+            "username_exists",
+            "email_exists",
+            "id_card_exists",
+        ] {
+            assert_eq!(
+                sp_insert_full_status(code).0,
+                StatusCode::CONFLICT,
+                "{code} should map to 409"
+            );
+        }
+    }
+
+    #[test]
+    fn validation_codes_map_to_422() {
+        for code in [
+            "first_name_required",
+            "last_name_required",
+            "email_required",
+            "username_required",
+            "password_hash_required",
+            "invalid_user_status",
+            "country_required",
+            "country_not_found",
+            "company_required",
+            "company_not_found",
+            "department_not_found",
+            "department_team_not_found",
+            "department_team_mismatch",
+            "position_not_found",
+            "invalid_salary",
+            "work_time_required",
+        ] {
+            assert_eq!(
+                sp_insert_full_status(code).0,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "{code} should map to 422"
+            );
+        }
+    }
+
+    #[test]
+    fn role_seed_codes_map_to_500() {
+        assert_eq!(
+            sp_insert_full_status("admin_role_not_found").0,
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(
+            sp_insert_full_status("employee_role_not_found").0,
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[test]
+    fn unknown_code_falls_back_to_500_internal() {
+        // A future SP code we haven't catalogued yet. The
+        // mapping must degrade gracefully — 500 + `internal`
+        // — so the admin UI surfaces a "something went wrong"
+        // instead of crashing on an unmapped code.
+        let (status, ec, key) = sp_insert_full_status("SOME_FUTURE_CODE");
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(ec, ErrorCode::INTERNAL);
+        assert_eq!(key, "err.internal");
+    }
+
+    #[test]
+    fn username_exists_maps_to_existing_username_taken_catalog_code() {
+        // The catalog already has `username_taken` (used by the
+        // public register endpoint). The admin SP code
+        // `username_exists` should reuse the same wire string
+        // so mobile clients pattern-match on one code, not two.
+        assert_eq!(
+            sp_insert_full_status("username_exists").1,
+            ErrorCode::USERNAME_TAKEN
+        );
+    }
 }

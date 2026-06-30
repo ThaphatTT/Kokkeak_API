@@ -14,9 +14,10 @@ use kokkak_application::user::UserService;
 use kokkak_application::user_role::UserRoleService;
 use kokkak_common::config::Settings;
 use kokkak_domain::{
-    ChatMembership, ChatRepoError, ChatRepository, HealthRegistry, TranslationRepository,
+    ChatMembership, ChatRepoError, ChatRepository, HealthRegistry, Storage, TranslationRepository,
 };
 use kokkak_infra::auth::jwt::JwtService;
+use kokkak_infra::image_processor::ImageProcessor;
 
 /// Internal bridge: takes a `&dyn ChatRepository` and exposes
 /// `is_participant` via the blanket `ChatMembership for T: ChatRepository`
@@ -50,6 +51,11 @@ pub struct AppState {
     pub auth: Arc<AuthService>,
     /// User use cases.
     pub user: Arc<UserService>,
+    /// M20-b: admin user use cases (`POST /api/v1/admin/users/full`).
+    /// Kept separate from `AuthService::register` because the
+    /// rich admin-provisioning flow wraps a different SP and has
+    /// its own password-hashing + actor-lookup flow.
+    pub admin_users: Arc<kokkak_application::admin_user::AdminUserService>,
     /// Catalog use cases.
     pub catalog: Arc<CatalogService>,
     /// M20: Master-data dropdown use cases (country dropdown first;
@@ -87,6 +93,19 @@ pub struct AppState {
     /// Wrapped in Arc so the same instance is shared with the
     /// runtime config + main loop without copying.
     pub settings: Arc<Settings>,
+
+    /// M9 / T-16: object storage adapter. S3 in prod, local FS
+    /// during the Strangler transition, in-memory for unit
+    /// tests. Selected at startup from `KOKKAK_STORAGE__*`.
+    pub storage: Arc<dyn Storage>,
+
+    /// M9 / T-16 extra: image processor (decode → WebP → store).
+    /// Constructed from [`Settings::storage`] +
+    /// [`Settings::image`] in `build_app_state_with`. The admin
+    /// user-full handler calls
+    /// `state.image.process_and_store(...)` for each
+    /// `*_img_b64` field the caller sent.
+    pub image: Arc<ImageProcessor>,
 }
 
 /// Chat state bundle — the service + the local broadcast
@@ -186,6 +205,7 @@ impl AppState {
     pub fn new(
         auth: Arc<AuthService>,
         user: Arc<UserService>,
+        admin_users: Arc<kokkak_application::admin_user::AdminUserService>,
         catalog: Arc<CatalogService>,
         master: Arc<MasterDropdownService>,
         orders: Arc<OrderService>,
@@ -197,10 +217,13 @@ impl AppState {
         health: HealthRegistry,
         translation: Arc<dyn TranslationRepository>,
         settings: Arc<Settings>,
+        storage: Arc<dyn Storage>,
+        image: Arc<ImageProcessor>,
     ) -> Self {
         Self {
             auth,
             user: user.clone(),
+            admin_users,
             catalog,
             master,
             orders,
@@ -213,6 +236,8 @@ impl AppState {
             users: user,
             translation,
             settings,
+            storage,
+            image,
         }
     }
 
@@ -223,6 +248,7 @@ impl AppState {
     pub fn legacy(
         auth: Arc<AuthService>,
         user: Arc<UserService>,
+        admin_users: Arc<kokkak_application::admin_user::AdminUserService>,
         catalog: Arc<CatalogService>,
         master: Arc<MasterDropdownService>,
         orders: Arc<OrderService>,
@@ -234,6 +260,8 @@ impl AppState {
         health: HealthRegistry,
         translation: Arc<dyn TranslationRepository>,
         settings: Arc<Settings>,
+        storage: Arc<dyn Storage>,
+        image: Arc<ImageProcessor>,
     ) -> Self {
         let chat_handle = ChatHandle {
             service: chat,
@@ -242,6 +270,7 @@ impl AppState {
         Self {
             auth,
             user: user.clone(),
+            admin_users,
             catalog,
             master,
             orders,
@@ -254,6 +283,8 @@ impl AppState {
             users: user,
             translation,
             settings,
+            storage,
+            image,
         }
     }
 }

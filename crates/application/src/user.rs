@@ -193,6 +193,22 @@ mod tests {
             // suite; the unit tests here verify pagination only.
             Ok(self.list_rows.lock().unwrap().clone())
         }
+        async fn find_username_guid_by_user_guid(
+            &self,
+            _user_guid: Uuid,
+        ) -> Result<Option<String>, kokkak_domain::RepoError> {
+            Ok(None)
+        }
+        async fn admin_insert_full(
+            &self,
+            _req: &kokkak_domain::AdminInsertUserRequest,
+        ) -> Result<kokkak_domain::AdminInsertUserResult, kokkak_domain::AdminInsertUserError>
+        {
+            Err(kokkak_domain::AdminInsertUserError::new(
+                "internal",
+                "admin_insert_full not implemented in user mock",
+            ))
+        }
     }
 
     use chrono::Utc;

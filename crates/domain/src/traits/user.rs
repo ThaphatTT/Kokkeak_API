@@ -15,6 +15,7 @@ use async_trait::async_trait;
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::admin_user::{AdminInsertUserError, AdminInsertUserRequest, AdminInsertUserResult};
 use crate::user::{User, UserListRow};
 
 /// Repository-level error (one of the few `domain` types that maps
@@ -87,4 +88,39 @@ pub trait UserRepository: Send + Sync {
     // `crates/domain/src/traits/permission.rs`). The permission
     // flow no longer lives on the login/auth port — it owns its
     // own port, its own SPs, and its own DTOs.
+
+    /// M20-b: lookup the `user_username_guid` for a given
+    /// `user_guid`. Returns `None` when the user has no active
+    /// `[user_username]` row (suspended / deleted accounts do
+    /// not surface here because the SP filters `status <> 3`).
+    ///
+    /// Backed by a simple `SELECT user_username_guid ... WHERE
+    /// user_username_user_guid = @P1 AND user_username_status = 1`.
+    /// Used by `admin_insert_full` to resolve the JWT's
+    /// `user_guid` → the SP's required `user_username_guid`.
+    async fn find_username_guid_by_user_guid(
+        &self,
+        user_guid: uuid::Uuid,
+    ) -> Result<Option<String>, RepoError>;
+
+    /// M20-b: rich admin user creation — wraps
+    /// `dbo.SP_USER_INSERT_FULL`. The actor is identified by
+    /// `user_username_guid` (resolved upstream via
+    /// [`UserRepository::find_username_guid_by_user_guid`]). The
+    /// SP re-checks ADMIN server-side as defense-in-depth — the
+    /// Rust handler still gates on `admin_flag`.
+    ///
+    /// The password MUST arrive at the SP pre-hashed (argon2id
+    /// PHC string); the service layer is responsible for
+    /// hashing. Plaintext is never sent over the wire to SQL
+    /// Server (AGENTS.md § 12.1).
+    ///
+    /// On SP failure, returns the structured
+    /// [`AdminInsertUserError`] (the SP's `code` + `message`
+    /// verbatim) so the handler can map to the right HTTP
+    /// status + `error.code` for the admin UI.
+    async fn admin_insert_full(
+        &self,
+        req: &AdminInsertUserRequest,
+    ) -> Result<AdminInsertUserResult, AdminInsertUserError>;
 }

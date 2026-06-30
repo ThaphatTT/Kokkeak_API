@@ -16,6 +16,7 @@ pub mod cache;
 pub mod db;
 pub mod health;
 pub mod idempotency;
+pub mod image_processor;
 pub mod pubsub;
 pub mod queue;
 pub mod storage;

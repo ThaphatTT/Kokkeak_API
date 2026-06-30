@@ -79,6 +79,26 @@ pub fn build(state: AppState) -> Router {
             "/api/v1/master/countries",
             get(handlers::master::list_countries),
         )
+        // M20+: user-department-team autocomplete for the admin
+        // user form. Same gate as the country dropdown — the
+        // admin web console enforces the admin role client-side.
+        .route(
+            "/api/v1/master/user-department-teams/autocomplete",
+            get(handlers::master::autocomplete_user_department_team),
+        )
+        .route(
+            "/api/v1/master/user-departments/autocomplete",
+            get(handlers::master::autocomplete_user_department),
+        )
+        // M20+: master-position autocomplete for the admin
+        // user form (tech/admin/operator role). Richer wire
+        // shape than the user-department autocomplete — the
+        // admin UI shows `code` + `description` + `level`
+        // alongside the `value` / `label` pair.
+        .route(
+            "/api/v1/master/positions/autocomplete",
+            get(handlers::master::autocomplete_master_positions),
+        )
         .route("/api/v1/orders/me", get(handlers::order::list_my_orders))
         .route(
             "/api/v1/orders/assigned",
@@ -144,11 +164,25 @@ pub fn build(state: AppState) -> Router {
     // endpoint keeps the GUID in the URL (stable for the admin UI)
     // and translates GUID → username via the existing
     // `UserRepository::find_by_id` path so the permission module
-    // is not touched. All three share the same `admin_flag` gate.
+    // is not touched.
+    //
+    // M20-b: Rich admin user creation
+    // (`POST /api/v1/admin/users/full`, backed by
+    // `dbo.SP_USER_INSERT_FULL`). Same `admin_flag` gate — the
+    // simple `create_user_admin` (above) uses `API_USER_REGISTER`
+    // and only takes first/last/username/password/role; the `full`
+    // variant takes every column the legacy ASP.NET admin form
+    // collected (address / bank / position / salary / schedule /
+    // attachments). Both are exposed so the admin UI can pick
+    // the lighter flow when only the basic fields are needed.
     let admin_users_routes = Router::new()
         .route(
             "/api/v1/admin/users",
             post(handlers::admin::create_user_admin).get(handlers::admin::list_users_admin),
+        )
+        .route(
+            "/api/v1/admin/users/full",
+            post(handlers::admin::admin_insert_user_full),
         )
         .route(
             "/api/v1/admin/users/:guid/permissions",

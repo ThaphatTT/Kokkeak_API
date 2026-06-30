@@ -9,6 +9,7 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod admin_user;
 pub mod audit;
 pub mod auth;
 pub mod catalog;

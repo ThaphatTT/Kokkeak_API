@@ -100,6 +100,78 @@ impl ErrorCode {
     /// 500 — unexpected internal error. Catch-all; specific failures
     /// should use a more targeted code.
     pub const INTERNAL: &'static str = "internal";
+
+    // ---- M20-b: SP_USER_INSERT_FULL (admin user creation) ----
+    //
+    // These codes mirror the stable string codes emitted by the
+    // `dbo.SP_USER_INSERT_FULL` stored procedure (see
+    // `crates/domain/src/admin_user.rs`). The handler forwards
+    // them verbatim on the wire so admin operators can pattern-
+    // match on them. The handler also maps them to the right
+    // HTTP status (some 4xx codes here map to 5xx on the wire —
+    // see `handlers::admin::sp_insert_full_status`).
+
+    /// 400 — `actor_user_username_guid` is required (admin
+    /// creating the user could not be resolved from the JWT).
+    pub const ACTOR_REQUIRED: &'static str = "actor_required";
+
+    /// 401 — actor's `user_username_guid` could not be found or is
+    /// inactive (deleted / suspended admin tried to create a user).
+    pub const ACTOR_NOT_FOUND: &'static str = "actor_not_found";
+
+    /// 403 — actor does not hold the `ADMIN` role (defense-in-depth
+    /// check inside the SP — `admin_flag` middleware already gated
+    /// this, so a hit here means the role was revoked between JWT
+    /// issuance and request handling).
+    pub const PERMISSION_DENIED: &'static str = "permission_denied";
+
+    /// 422 — required profile field missing on insert.
+    pub const FIRST_NAME_REQUIRED: &'static str = "first_name_required";
+    /// 422 — required profile field missing on insert.
+    pub const LAST_NAME_REQUIRED: &'static str = "last_name_required";
+    /// 422 — required profile field missing on insert.
+    pub const EMAIL_REQUIRED: &'static str = "email_required";
+    /// 422 — required login field missing on insert.
+    pub const USERNAME_REQUIRED: &'static str = "username_required";
+    /// 422 — `password_hash` missing on insert (Rust layer bug —
+    /// the service always hashes before calling the SP).
+    pub const PASSWORD_HASH_REQUIRED: &'static str = "password_hash_required";
+    /// 422 — `status` was neither 0 nor 1.
+    pub const INVALID_USER_STATUS: &'static str = "invalid_user_status";
+
+    /// 409 — caller-supplied `user_guid` collided with an existing row.
+    pub const USER_GUID_EXISTS: &'static str = "user_guid_exists";
+    /// 409 — email already in use by another active user.
+    pub const EMAIL_TAKEN: &'static str = "email_taken";
+    /// 409 — id_card already in use by another active user.
+    pub const ID_CARD_TAKEN: &'static str = "id_card_taken";
+
+    /// 422 — `country_guid` required when `is_foreign = 1`.
+    pub const COUNTRY_REQUIRED: &'static str = "country_required";
+    /// 422 — `country_guid` not found in master_country.
+    pub const COUNTRY_NOT_FOUND: &'static str = "country_not_found";
+    /// 422 — `company_guid` required when `is_customer_company = 1`.
+    pub const COMPANY_REQUIRED: &'static str = "company_required";
+    /// 422 — `company_guid` not found in company.
+    pub const COMPANY_NOT_FOUND: &'static str = "company_not_found";
+    /// 422 — `department_guid` not found or inactive.
+    pub const DEPARTMENT_NOT_FOUND: &'static str = "department_not_found";
+    /// 422 — `department_team_guid` not found or inactive.
+    pub const DEPARTMENT_TEAM_NOT_FOUND: &'static str = "department_team_not_found";
+    /// 422 — `department_team_guid` does not belong to `department_guid`.
+    pub const DEPARTMENT_TEAM_MISMATCH: &'static str = "department_team_mismatch";
+    /// 422 — `position_guid` not found or inactive.
+    pub const POSITION_NOT_FOUND: &'static str = "position_not_found";
+    /// 422 — `salary_amount` is negative.
+    pub const INVALID_SALARY: &'static str = "invalid_salary";
+    /// 422 — a working day has `is_working = 1` but start/end time missing.
+    pub const WORK_TIME_REQUIRED: &'static str = "work_time_required";
+
+    /// 500 — role `ADMIN` not seeded in master table (operator
+    /// must run the seed migration before this endpoint works).
+    pub const ADMIN_ROLE_NOT_FOUND: &'static str = "admin_role_not_found";
+    /// 500 — role `EMPLOYEE` not seeded in master table.
+    pub const EMPLOYEE_ROLE_NOT_FOUND: &'static str = "employee_role_not_found";
 }
 
 #[cfg(test)]
@@ -130,6 +202,31 @@ mod tests {
         ErrorCode::INVALID_BODY,
         ErrorCode::RATE_LIMITED,
         ErrorCode::INTERNAL,
+        // M20-b: SP_USER_INSERT_FULL codes
+        ErrorCode::ACTOR_REQUIRED,
+        ErrorCode::ACTOR_NOT_FOUND,
+        ErrorCode::PERMISSION_DENIED,
+        ErrorCode::FIRST_NAME_REQUIRED,
+        ErrorCode::LAST_NAME_REQUIRED,
+        ErrorCode::EMAIL_REQUIRED,
+        ErrorCode::USERNAME_REQUIRED,
+        ErrorCode::PASSWORD_HASH_REQUIRED,
+        ErrorCode::INVALID_USER_STATUS,
+        ErrorCode::USER_GUID_EXISTS,
+        ErrorCode::EMAIL_TAKEN,
+        ErrorCode::ID_CARD_TAKEN,
+        ErrorCode::COUNTRY_REQUIRED,
+        ErrorCode::COUNTRY_NOT_FOUND,
+        ErrorCode::COMPANY_REQUIRED,
+        ErrorCode::COMPANY_NOT_FOUND,
+        ErrorCode::DEPARTMENT_NOT_FOUND,
+        ErrorCode::DEPARTMENT_TEAM_NOT_FOUND,
+        ErrorCode::DEPARTMENT_TEAM_MISMATCH,
+        ErrorCode::POSITION_NOT_FOUND,
+        ErrorCode::INVALID_SALARY,
+        ErrorCode::WORK_TIME_REQUIRED,
+        ErrorCode::ADMIN_ROLE_NOT_FOUND,
+        ErrorCode::EMPLOYEE_ROLE_NOT_FOUND,
     ];
 
     #[test]

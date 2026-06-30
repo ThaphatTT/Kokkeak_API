@@ -53,6 +53,7 @@ use kokkak_api::middleware::rate_limit_redis::{rate_limit_redis_middleware, Redi
 use kokkak_api::middleware::safety::ConcurrencyCap;
 use kokkak_api::redirect::redirect_router;
 use kokkak_api::tls::{build_rustls_config, hsts_layer};
+use kokkak_infra::storage::build_from_settings as build_storage;
 
 /// T03: serve Prometheus text-format metrics.
 async fn metrics_handler() -> impl IntoResponse {
@@ -209,9 +210,26 @@ async fn run(settings: Settings) {
         );
     }
 
+    // ---- M9 / T-16: build the object-storage adapter (S3 in
+    //   prod, local FS in the Strangler transition, in-memory
+    //   fallback for unit tests). Failure to build exits the
+    //   process — there's no useful behaviour for an API with
+    //   no working storage when handlers ask for it.
+    let (storage, storage_kind) = match build_storage(&settings.storage).await {
+        Ok(pair) => pair,
+        Err(e) => {
+            eprintln!("[kokkak-api] failed to build storage adapter: {e}");
+            std::process::exit(1);
+        }
+    };
+    tracing::info!(
+        adapter = storage_kind.as_str(),
+        "object-storage adapter ready"
+    );
+
     // ---- Build app state ----
     let settings_arc = Arc::new(settings.clone());
-    let state = build_app_state_with(bundle, jwt, registry, settings_arc.clone());
+    let state = build_app_state_with(bundle, jwt, registry, settings_arc.clone(), storage);
 
     // ---- Routes ----
     let app = build_router(state).route("/metrics", get(metrics_handler));

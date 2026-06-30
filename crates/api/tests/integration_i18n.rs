@@ -40,6 +40,7 @@ use kokkak_infra::db::mssql_master::MssqlMasterDropdownRepository;
 use kokkak_infra::db::mssql_permission_user::MssqlPermissionUserRepository;
 use kokkak_infra::db::mssql_translation::MssqlTranslationRepository;
 use kokkak_infra::db::mssql_user_role::MssqlUserRoleRepository;
+use kokkak_infra::storage::MemoryStorage;
 use std::path::PathBuf;
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -135,6 +136,7 @@ async fn make_app() -> (axum::Router, Arc<MssqlTranslationRepository>) {
         jwt,
         kokkak_domain::HealthRegistry::new(),
         Arc::new(Settings::default()),
+        Arc::new(MemoryStorage::new()),
     );
     let app = build_router(state);
     (app, repo)

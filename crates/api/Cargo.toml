@@ -47,6 +47,12 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 # Validation
 validator = { workspace = true }
 
+# M9 / T-16: base64 decoder for `*_img_b64` fields on
+# /api/v1/admin/users/full (admin handler calls
+# `ImageProcessor::process_and_store` after stripping the
+# data-URL prefix and decoding the body).
+base64 = { workspace = true }
+
 # M10 repo_factory
 thiserror = { workspace = true }
 

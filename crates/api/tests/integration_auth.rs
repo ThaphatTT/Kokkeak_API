@@ -26,6 +26,7 @@ use kokkak_infra::db::mssql_permission_user::MssqlPermissionUserRepository;
 use kokkak_infra::db::mssql_translation::MssqlTranslationRepository;
 use kokkak_infra::db::mssql_user::MssqlUserRepository;
 use kokkak_infra::db::mssql_user_role::MssqlUserRoleRepository;
+use kokkak_infra::storage::MemoryStorage;
 use std::path::PathBuf;
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -113,6 +114,7 @@ async fn make_app() -> (axum::Router, Vec<PathBuf>) {
         jwt,
         HealthRegistry::new(),
         Arc::new(kokkak_common::config::Settings::default()),
+        Arc::new(MemoryStorage::new()),
     );
     (build_router(state), vec![])
 }
