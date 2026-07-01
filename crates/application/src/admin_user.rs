@@ -34,9 +34,9 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use kokkak_domain::admin_user::{
-    AdminInsertUserError, AdminInsertUserRequest, AdminInsertUserResult, DaySchedule,
-    WeeklySchedule,
+pub use kokkak_domain::admin_user::{
+    AdminInsertUserError, AdminInsertUserRequest, AdminInsertUserResult, AdminUserListPagingInput,
+    AdminUserListPagingPage, DaySchedule, WeeklySchedule,
 };
 use kokkak_domain::traits::user::RepoError;
 use kokkak_domain::UserRepository;
@@ -241,6 +241,53 @@ impl AdminUserService {
 
         self.users.admin_insert_full(&req).await
     }
+
+    /// Admin user listing with page-based pagination (M21).
+    ///
+    /// Wraps `UserRepository::list_users_paging` (which calls
+    /// `dbo.SP_USER_LIST_PAGING`). The actor is the JWT
+    /// `user_guid` — forwarded for audit log consistency; the SP
+    /// itself does NOT enforce admin gating (that lives at the
+    /// handler layer via [`Permission::PageUsersView`]).
+    ///
+    /// ## Validation
+    ///
+    /// - `page < 1` → coerced to `1` (the SP does the same on its
+    ///   side; we mirror it for a stable wire contract).
+    /// - `page_size` clamped to `1..=100` (matches the SP's own cap,
+    ///   also matches the M16 admin list endpoint's cap).
+    /// - `keyword` is trimmed; an all-whitespace string collapses
+    ///   to empty so the SP's `LIKE N'%%'` path runs (no filter).
+    /// - `user_status` is forwarded verbatim — the SP accepts `NULL`
+    ///   to mean "all statuses".
+    ///
+    /// ponytail: clamping lives here AND in the SP — the application
+    /// layer's clamp guarantees the wire shape (`page_size` is
+    /// always 1..=100, `page` is always ≥ 1) so the frontend never
+    /// has to special-case the response. The SP's own clamp is the
+    /// defense-in-depth backup.
+    pub async fn list_users_paging(
+        &self,
+        actor: Uuid,
+        input: AdminUserListPagingInput,
+    ) -> Result<AdminUserListPagingPage, RepoError> {
+        // Normalize inputs — keep the wire contract predictable.
+        let normalized = AdminUserListPagingInput {
+            keyword: input.keyword.trim().to_string(),
+            user_status: input.user_status,
+            page: input.page.max(1),
+            page_size: input.page_size.clamp(1, 100),
+        };
+
+        let mut page = self.users.list_users_paging(&normalized, actor).await?;
+
+        // Mirror the normalized page / page_size back onto the
+        // envelope so the frontend sees the same numbers we sent
+        // down (instead of whatever the SP echoed).
+        page.page = normalized.page as i32;
+        page.page_size = normalized.page_size as i32;
+        Ok(page)
+    }
 }
 
 /// Check every day in the weekly schedule: when `is_working = 1`,
@@ -352,5 +399,211 @@ mod tests {
         let days = [off(), off(), off(), off(), bad.clone(), off(), off()];
         let err = schedule_missing_times(&ws(&days)).unwrap_err();
         assert_eq!(err, "friday");
+    }
+
+    // ----- M21: list_users_paging normalization tests -----
+
+    use std::sync::Arc;
+
+    use kokkak_domain::{
+        admin_user::{AdminUserListPagingPage, UserListPagingRow},
+        RepoError, UserRepository,
+    };
+
+    /// In-memory mock that records the last `list_users_paging` input
+    /// and returns a canned page. All other trait methods are
+    /// stubs that return `Backend` — they're not exercised by these
+    /// tests.
+    #[derive(Default)]
+    struct RecordingRepo {
+        last_input: std::sync::Mutex<Option<AdminUserListPagingInput>>,
+    }
+
+    #[async_trait::async_trait]
+    impl UserRepository for RecordingRepo {
+        async fn find_by_id(&self, _id: Uuid) -> Result<Option<kokkak_domain::User>, RepoError> {
+            Err(RepoError::Backend("recording mock: find_by_id".into()))
+        }
+        async fn find_by_username(
+            &self,
+            _u: &str,
+        ) -> Result<Option<kokkak_domain::User>, RepoError> {
+            Err(RepoError::Backend(
+                "recording mock: find_by_username".into(),
+            ))
+        }
+        async fn insert(&self, _u: &kokkak_domain::User) -> Result<(), RepoError> {
+            Err(RepoError::Backend("recording mock: insert".into()))
+        }
+        async fn update(&self, _u: &kokkak_domain::User) -> Result<(), RepoError> {
+            Err(RepoError::Backend("recording mock: update".into()))
+        }
+        async fn list_with_permissions(
+            &self,
+            _caller: Uuid,
+        ) -> Result<Vec<kokkak_domain::UserListRow>, RepoError> {
+            Err(RepoError::Backend(
+                "recording mock: list_with_permissions".into(),
+            ))
+        }
+        async fn find_username_guid_by_user_guid(
+            &self,
+            _id: Uuid,
+        ) -> Result<Option<String>, RepoError> {
+            Err(RepoError::Backend(
+                "recording mock: find_username_guid_by_user_guid".into(),
+            ))
+        }
+        async fn admin_insert_full(
+            &self,
+            _req: &kokkak_domain::AdminInsertUserRequest,
+        ) -> Result<kokkak_domain::AdminInsertUserResult, kokkak_domain::AdminInsertUserError>
+        {
+            Err(kokkak_domain::AdminInsertUserError::new(
+                "internal",
+                "recording mock: admin_insert_full",
+            ))
+        }
+        async fn list_users_paging(
+            &self,
+            input: &AdminUserListPagingInput,
+            _actor: Uuid,
+        ) -> Result<AdminUserListPagingPage, RepoError> {
+            *self.last_input.lock().unwrap() = Some(input.clone());
+            Ok(AdminUserListPagingPage {
+                items: vec![UserListPagingRow {
+                    user_guid: Uuid::new_v4().to_string(),
+                    ..Default::default()
+                }],
+                total_count: 1,
+                page: input.page as i32,
+                page_size: input.page_size as i32,
+            })
+        }
+    }
+
+    /// AdminUserService only needs a repo for `list_users_paging`; the
+    /// password hasher is unused for this method so we pass `None` is
+    /// impossible — build a no-op hasher instead.
+    fn svc_with(repo: Arc<dyn UserRepository>) -> AdminUserService {
+        // The password hasher isn't called by list_users_paging, but
+        // `AdminUserService::new` requires one. Use a never-invoked
+        // closure-style adapter via the PasswordHasherPort trait.
+        use crate::auth::PasswordHasherPort;
+        struct NoopHasher;
+        impl PasswordHasherPort for NoopHasher {
+            fn hash(&self, _plain: &str) -> Result<String, kokkak_domain::AuthError> {
+                Err(kokkak_domain::AuthError::Backend(
+                    "noop hasher: not used in list_users_paging tests".into(),
+                ))
+            }
+            fn verify(&self, _plain: &str, _hash: &str) -> Result<(), kokkak_domain::AuthError> {
+                Err(kokkak_domain::AuthError::Backend("noop".into()))
+            }
+            fn dummy_hash(&self) -> &str {
+                // Tests never call verify / dummy_hash — only
+                // `list_users_paging` is exercised. Return a
+                // syntactically-valid argon2id PHC string to satisfy
+                // the port contract without inventing a path.
+                "$argon2id$v=19$m=19456,t=2,p=1$YWFhYWFhYWFhYWFh$YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE"
+            }
+        }
+        AdminUserService::new(repo, Arc::new(NoopHasher))
+    }
+
+    #[tokio::test]
+    async fn list_users_paging_clamps_page_size_to_100() {
+        let repo = Arc::new(RecordingRepo::default());
+        let svc = svc_with(repo.clone());
+        let actor = Uuid::new_v4();
+
+        let page = svc
+            .list_users_paging(
+                actor,
+                AdminUserListPagingInput {
+                    keyword: "x".into(),
+                    user_status: None,
+                    page: 1,
+                    page_size: 9999, // way over the cap
+                },
+            )
+            .await
+            .unwrap();
+
+        // Service clamps page_size to 100.
+        assert_eq!(page.page_size, 100);
+        // Forwarded to the repo with the clamped value.
+        assert_eq!(
+            repo.last_input.lock().unwrap().as_ref().unwrap().page_size,
+            100
+        );
+    }
+
+    #[tokio::test]
+    async fn list_users_paging_clamps_page_to_at_least_one() {
+        let repo = Arc::new(RecordingRepo::default());
+        let svc = svc_with(repo.clone());
+        let actor = Uuid::new_v4();
+
+        let page = svc
+            .list_users_paging(
+                actor,
+                AdminUserListPagingInput {
+                    keyword: String::new(),
+                    user_status: None,
+                    page: 0, // < 1 should clamp to 1
+                    page_size: 20,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(page.page, 1);
+        assert_eq!(repo.last_input.lock().unwrap().as_ref().unwrap().page, 1);
+    }
+
+    #[tokio::test]
+    async fn list_users_paging_trims_whitespace_keyword() {
+        let repo = Arc::new(RecordingRepo::default());
+        let svc = svc_with(repo.clone());
+        let actor = Uuid::new_v4();
+
+        svc.list_users_paging(
+            actor,
+            AdminUserListPagingInput {
+                keyword: "   somchai   ".into(),
+                user_status: None,
+                page: 1,
+                page_size: 20,
+            },
+        )
+        .await
+        .unwrap();
+
+        let sent = repo.last_input.lock().unwrap();
+        assert_eq!(sent.as_ref().unwrap().keyword, "somchai");
+    }
+
+    #[tokio::test]
+    async fn list_users_paging_clamps_page_size_lower_bound_to_one() {
+        let repo = Arc::new(RecordingRepo::default());
+        let svc = svc_with(repo.clone());
+        let actor = Uuid::new_v4();
+
+        let page = svc
+            .list_users_paging(
+                actor,
+                AdminUserListPagingInput {
+                    keyword: String::new(),
+                    user_status: None,
+                    page: 1,
+                    page_size: 0,
+                },
+            )
+            .await
+            .unwrap();
+
+        // page_size=0 → clamped to 1 (don't allow empty pages).
+        assert_eq!(page.page_size, 1);
     }
 }

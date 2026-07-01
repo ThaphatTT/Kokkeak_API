@@ -204,8 +204,15 @@ impl IntoLocalizedResponse for AppError {
 /// AND the `from_auth_error_maps_to_localizable_variant` test so
 /// drift is caught at `cargo test` time.
 fn l10n_key_for_app_error(err: &AppError) -> &'static str {
+    // ponytail: key prefix migration (2026-07-01). The catalog at
+    // crates/common/locales/*.yml uses `err.*` (no `_general` infix);
+    // the previous `err_general.*` keys rendered as literal `<key>`
+    // to API consumers. `err_auth.role_not_allowed` is a brand-new
+    // key added to all three locales in the same commit — keeping
+    // the lookup table here single-sourced so future variants only
+    // touch one place.
     match err {
-        AppError::BadRequest(_) => "err_general.bad_request",
+        AppError::BadRequest(_) => "err.bad_request",
         AppError::Unauthorized => "err_auth.invalid_credentials",
         AppError::InvalidToken(_) => "err_auth.invalid_token",
         AppError::TokenExpired => "err_auth.token_expired",
@@ -216,8 +223,8 @@ fn l10n_key_for_app_error(err: &AppError) -> &'static str {
         AppError::UsernameTaken => "err_auth.username_taken",
         AppError::Validation(_) => "err_auth.validation",
         AppError::RoleNotAllowed(_) => "err_auth.role_not_allowed",
-        AppError::RateLimited { .. } => "err_general.rate_limited",
-        AppError::Internal(_) => "err_general.internal",
+        AppError::RateLimited { .. } => "err.rate_limited",
+        AppError::Internal(_) => "err.internal",
         // Handled by the early return in `into_localized_response` —
         // unreachable in practice.
         AppError::Localized { .. } => "",
@@ -257,10 +264,10 @@ mod tests {
         // Each AuthError variant must map to an ApiError variant
         // whose l10n_key matches the AuthError's own LocalizedError
         // key — EXCEPT AuthError::Backend, which collapses into the
-        // shared AppError::Internal catch-all (key
-        // `err_general.internal`). That trade-off is intentional:
-        // Internal is the cross-source catch-all and a per-source
-        // key would force a typed AppError variant per source.
+        // shared AppError::Internal catch-all (key `err.internal`).
+        // That trade-off is intentional: Internal is the cross-source
+        // catch-all and a per-source key would force a typed
+        // AppError variant per source.
         let pairs: Vec<(AuthError, &str)> = vec![
             (
                 AuthError::InvalidCredentials,
@@ -288,7 +295,49 @@ mod tests {
 
         // AuthError::Backend gets the shared catch-all key.
         let api_err: ApiError = ApiError::from(AuthError::Backend("x".into()));
-        assert_eq!(l10n_key_for_app_error(&api_err.0), "err_general.internal");
+        assert_eq!(l10n_key_for_app_error(&api_err.0), "err.internal");
+    }
+
+    /// Locks the 5 keys fixed on 2026-07-01 against drift back to
+    /// the broken `err_general.*` / missing-role_not_allowed state.
+    /// Each variant renders to a stable dotted key that **must**
+    /// exist in `crates/common/locales/{en,th,lo}.yml` — when the
+    /// yml is missing the entry, `tr()` wraps the key in `<...>`
+    /// and the user sees literal `<err.bad_request>` in the
+    /// response body. If this test ever fails, the lookup table
+    /// here and the catalog are out of sync.
+    #[test]
+    fn i18n_key_drift_2026_07_01_locked_in() {
+        let cases: Vec<(AppError, &str)> = vec![
+            (AppError::BadRequest("x".into()), "err.bad_request"),
+            (
+                AppError::RateLimited {
+                    retry_after_secs: 1,
+                },
+                "err.rate_limited",
+            ),
+            (AppError::Internal("x".into()), "err.internal"),
+            (
+                AppError::RoleNotAllowed("x".into()),
+                "err_auth.role_not_allowed",
+            ),
+            (AppError::NotFound("x".into()), "err_repo.not_found"),
+        ];
+        for (variant, expected) in cases {
+            assert_eq!(
+                l10n_key_for_app_error(&variant),
+                expected,
+                "key drift for {variant:?}"
+            );
+        }
+    }
+
+    /// `AuthError::RateLimited` (domain layer) must match the API
+    /// layer's `AppError::RateLimited` key. Both point at the
+    /// same `err.rate_limited` yml entry.
+    #[test]
+    fn auth_error_rate_limited_key_matches_api_layer() {
+        assert_eq!(AuthError::RateLimited(60).l10n_key(), "err.rate_limited");
     }
 
     #[test]

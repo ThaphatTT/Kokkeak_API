@@ -69,7 +69,10 @@ impl LocalizedError for AuthError {
             Self::UsernameTaken => "err_auth.username_taken",
             Self::Validation(_) => "err_auth.validation",
             Self::Backend(_) => "err_auth.backend",
-            Self::RateLimited(_) => "err_general.rate_limited",
+            // ponytail: matches the `err.*` rename in api/error.rs
+            // l10n_key_for_app_error (2026-07-01). yml catalogs use
+            // `err.rate_limited` not `err_general.rate_limited`.
+            Self::RateLimited(_) => "err.rate_limited",
         }
     }
 

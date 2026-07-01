@@ -286,3 +286,127 @@ pub struct AdminInsertUserRequest {
     /// Type 4 — Source of Funds Statement.
     pub source_of_funds_statement_path: Option<String>,
 }
+
+// ============================================================================
+// Admin user listing — wraps `dbo.SP_USER_LIST_PAGING`.
+// ============================================================================
+//
+// Distinct from [`UserListRow`](crate::user::UserListRow) (which mirrors
+// `SP_PERMISSION_USER_LIST` for the permission-page view). The admin
+// user-list screen needs a **wider** row — the legacy ASP.NET form shows
+// status label / phone / role name(s) / position name per user — and
+// uses **page-based pagination** rather than keyset.
+//
+// ponytail: two distinct row types share a similar prefix because they
+// back two distinct UIs (permission page vs. user list page). The
+// ceiling is when the admin screen wants to merge both views — at that
+// point widen the SP to return both shapes and pick a single Rust
+// struct; for now a one-to-one mirror of the SP keeps the mapper
+// trivial.
+
+/// Filter / paging parameters for `SP_USER_LIST_PAGING`.
+///
+/// Mirrors the SP's parameter list 1:1 so the infra layer can pass
+/// them through positionally without renaming.
+///
+/// ponytail: `keyword` and `user_status` are the two filter axes the
+/// SP exposes. The ceiling is adding `role_code` / `position_guid` /
+/// date-range filters — at that point promote to a builder pattern so
+/// the SP signature stays flat while the Rust side stays readable.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[allow(missing_docs)]
+pub struct AdminUserListPagingInput {
+    /// `@p_keyword` — free-form search across first/last name, phone,
+    /// email, and `"<first> <last>"`. Empty string (or all-whitespace)
+    /// means "no keyword filter".
+    pub keyword: String,
+    /// `@p_user_status` — `None` means "all statuses" (the SP itself
+    /// never receives `NULL`, it gets a sentinel — see infra layer).
+    pub user_status: Option<i32>,
+    /// `@p_page` — 1-based page number. The SP defaults to 1 when
+    /// the input is `< 1`.
+    pub page: u32,
+    /// `@p_page_size` — rows per page. The SP defaults to 20 / caps
+    /// at 100; the application layer mirrors the same bounds.
+    pub page_size: u32,
+}
+
+/// One row of `SP_USER_LIST_PAGING` — flat per-user summary for the
+/// admin user-list screen.
+///
+/// Column NAMES match the SP's SELECT aliases verbatim:
+///   `total_count`       (bigint — same value on every row of a page)
+///   `page`              (int     — echo of `@p_page`)
+///   `page_size`         (int     — echo of `@p_page_size`)
+///   `user_guid`         (varchar 36 — `[user].user_guid`)
+///   `full_name`         (varchar — COALESCEd to "")
+///   `phone`             (varchar — `[user].user_tel`, COALESCEd to "")
+///   `user_status`       (int — 0..3, see note below)
+///   `user_status_name`  (varchar — "Inactive"/"Active"/"Suspended"/"Deleted")
+///   `role_name`         (varchar CSV — COALESCEd "", already joined at SP level)
+///   `position_name`     (varchar — COALESCEd "", the *current* position)
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct UserListPagingRow {
+    /// Total rows matching the filter (not the page size). SP returns
+    /// the same value on every row of a page — application layer
+    /// collapses to a single number.
+    pub total_count: i64,
+    /// Echoed page index (1-based). Useful when the caller paginates
+    /// client-side and wants to confirm the SP saw the same `page`
+    /// it sent.
+    pub page: i32,
+    /// Echoed page size. Same use as `page` — surfaces any
+    /// server-side clamping the SP applied.
+    pub page_size: i32,
+    /// `[user].user_guid` (36-char UUID).
+    pub user_guid: String,
+    /// `first_name + ' ' + last_name` from `[user]`, COALESCEd to "".
+    pub full_name: String,
+    /// `[user].user_tel`, COALESCEd to "".
+    pub phone: String,
+    /// `[user].user_status` raw `int` (0..3). The caller should
+    /// prefer [`user_status_name`](Self::user_status_name) for
+    /// display, but the raw int is kept for any future "filter
+    /// by status" UX without forcing a re-fetch.
+    ///
+    /// **Note on semantics**: the SP aliases `0` as `"Inactive"`
+    /// (legacy label) — the NEW_DB Rust enum ([`crate::user::UserStatus`])
+    /// uses `"pending"` for `0`. The legacy SP's labels are what the
+    /// admin UI shows today, so we surface the SP string verbatim
+    /// and let the Rust enum diverge until the admin screen is
+    /// migrated to the new vocabulary.
+    pub user_status: i32,
+    /// Human-readable status label as computed by the SP:
+    /// `Inactive` / `Active` / `Suspended` / `Deleted` / `Unknown`.
+    pub user_status_name: String,
+    /// Active role names, comma-joined (e.g. `"Admin, Finance Manager"`).
+    /// The SP applies `STRING_AGG` with `DISTINCT` and an active-only
+    /// filter — we keep it as a single `String` to match the SP shape
+    /// 1:1 (the admin UI splits on `,` for badge rendering).
+    pub role_name: String,
+    /// Current position name (`master_position.master_position_name`),
+    /// COALESCEd to "" when the user has no current position row.
+    pub position_name: String,
+}
+
+/// One page of admin user-listing results.
+///
+/// `total_count` lives on the row level (the SP returns it on every
+/// row); the application layer hoists it to the page so the wire
+/// envelope carries it once.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct AdminUserListPagingPage {
+    /// Rows on this page (each row also carries `total_count`,
+    /// `page`, `page_size` — the page-level fields below are the
+    /// authoritative ones for the envelope).
+    pub items: Vec<UserListPagingRow>,
+    /// Total matching rows across all pages (1+ when items is non-empty;
+    /// `0` when no rows match the filter).
+    pub total_count: i64,
+    /// Page index returned (1-based).
+    pub page: i32,
+    /// Page size returned.
+    pub page_size: i32,
+}

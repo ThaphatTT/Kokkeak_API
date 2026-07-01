@@ -103,6 +103,12 @@ pub struct Settings {
     #[serde(default)]
     pub redis: RedisSettings,
 
+    /// Permission-cache TTL (M15-prep). The cache stores per-user
+    /// `(user_guid, code) -> bool` results keyed at
+    /// `kokkak:v1:perm:{user_guid}:{code}` (AGENTS.md §9.2).
+    #[serde(default)]
+    pub permission_cache: PermissionCacheSettings,
+
     /// NATS JetStream queue settings (T08).
     #[serde(default)]
     pub nats: NatsSettings,
@@ -711,6 +717,23 @@ impl Default for RedisSettings {
     }
 }
 
+/// M15-prep: TTL for the permission-check Redis cache (AGENTS.md §9.3
+/// group B — short-TTL because permission changes must propagate).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PermissionCacheSettings {
+    /// Cache TTL in seconds. Default: 300 (5 min).
+    #[serde(default = "default_permission_cache_ttl_secs")]
+    pub ttl_secs: u64,
+}
+
+impl Default for PermissionCacheSettings {
+    fn default() -> Self {
+        Self {
+            ttl_secs: default_permission_cache_ttl_secs(),
+        }
+    }
+}
+
 /// NATS JetStream settings (T08).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NatsSettings {
@@ -959,6 +982,10 @@ fn default_redis_url() -> String {
 }
 fn default_redis_pool_size() -> usize {
     16
+}
+
+fn default_permission_cache_ttl_secs() -> u64 {
+    300
 }
 fn default_nats_url() -> String {
     "nats://disabled".into()

@@ -75,6 +75,14 @@ pub struct RegisterRequest {
     /// here (length) and semantically in `parse_public_register_role`.
     #[validate(length(max = 20, message = "role must be 20 characters or fewer"))]
     pub role: Option<String>,
+    /// Optional language override for the **error response** only
+    /// (`th` / `en` / `lo`). Mobile retries on flaky networks may
+    /// not carry `Accept-Language`, and the public register endpoint
+    /// is unauthenticated so the user-profile locale isn't available
+    /// yet. Mirrors `LoginRequest::language` so the same client
+    /// pattern works for both.
+    #[validate(length(max = 8, message = "language must be 8 characters or fewer"))]
+    pub language: Option<String>,
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -147,6 +155,12 @@ pub async fn register(
     State(state): State<AppState>,
     ValidatedJson(req): ValidatedJson<RegisterRequest>,
 ) -> Result<Response, Response> {
+    // Apply the caller-supplied language **before** any error path
+    // so the localized 422 (`role_not_allowed`) and 409 (`username_taken`)
+    // messages render in the user's chosen language. Unknown codes
+    // fall through to the middleware-set locale.
+    apply_login_language(req.language.as_deref());
+
     // M14.5: reject roles the public endpoint isn't allowed to
     // grant. Both cases share the same 422 + role_not_allowed code —
     // the message tells the client which case it is.
@@ -314,7 +328,7 @@ fn parse_login_language(language: Option<&str>) -> Option<String> {
     let lang = language?;
     let primary = lang.split('-').next().unwrap_or("").trim().to_lowercase();
     match primary.as_str() {
-        "th" | "en" | "lo" => Some(primary),
+        "th" | "en" | "lo" | "zh" => Some(primary),
         _ => None,
     }
 }
@@ -327,6 +341,12 @@ pub struct RefreshRequest {
     pub refresh_token: String,
     #[validate(length(max = 16, message = "scope must be 16 characters or fewer"))]
     pub scope: Option<String>,
+    /// Optional language override for the error response (`th` /
+    /// `en` / `lo`). See `LoginRequest::language` for rationale —
+    /// the same allowlist applies, unknown codes are silently
+    /// ignored so the middleware-set locale stays in effect.
+    #[validate(length(max = 8, message = "language must be 8 characters or fewer"))]
+    pub language: Option<String>,
 }
 
 /// POST /api/v1/auth/refresh
@@ -345,6 +365,11 @@ pub async fn refresh(
     State(state): State<AppState>,
     ValidatedJson(req): ValidatedJson<RefreshRequest>,
 ) -> Result<Response, Response> {
+    // Same as login / register: caller-supplied language overrides
+    // the middleware-set locale so the 401 (`refresh_invalid`) and
+    // 500 envelopes render in the user's chosen language.
+    apply_login_language(req.language.as_deref());
+
     let scope = req.scope.unwrap_or_else(|| "mobile".into());
     let outcome = match state.auth.refresh(&req.refresh_token, &scope).await {
         Ok(o) => o,
@@ -463,6 +488,7 @@ mod tests {
             first_name: "Alice".into(),
             last_name: "Doe".into(),
             role: None,
+            language: None,
         }
     }
 
@@ -542,9 +568,9 @@ mod tests {
     #[test]
     fn login_request_accepts_language_codes_within_length() {
         // Mobile clients send BCP-47-ish codes ("th", "en-US",
-        // "lo"). 8 chars covers every current locale and leaves
-        // headroom for future additions.
-        for lang in ["th", "en", "lo", "en-US", "th-TH"] {
+        // "lo", "zh-CN"). 8 chars covers every current locale and
+        // leaves headroom for future additions.
+        for lang in ["th", "en", "lo", "zh", "en-US", "th-TH", "zh-CN"] {
             let mut r = valid_login();
             r.language = Some(lang.into());
             assert!(r.validate().is_ok(), "language={lang} should be valid");
@@ -564,11 +590,14 @@ mod tests {
         assert_eq!(parse_login_language(Some("th")), Some("th".into()));
         assert_eq!(parse_login_language(Some("en")), Some("en".into()));
         assert_eq!(parse_login_language(Some("lo")), Some("lo".into()));
+        assert_eq!(parse_login_language(Some("zh")), Some("zh".into()));
         // BCP-47-ish: only the primary subtag matters
         assert_eq!(parse_login_language(Some("en-US")), Some("en".into()));
         assert_eq!(parse_login_language(Some("th-TH")), Some("th".into()));
+        assert_eq!(parse_login_language(Some("zh-CN")), Some("zh".into()));
         // Case insensitive
         assert_eq!(parse_login_language(Some("TH")), Some("th".into()));
+        assert_eq!(parse_login_language(Some("ZH")), Some("zh".into()));
         assert_eq!(parse_login_language(Some("  en  ")), Some("en".into()));
     }
 
@@ -591,6 +620,7 @@ mod tests {
             // check the floor here.
             refresh_token: "x".repeat(150),
             scope: None,
+            language: None,
         }
     }
 

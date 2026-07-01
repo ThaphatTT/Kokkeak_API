@@ -76,7 +76,11 @@ impl Locale {
         for raw in value.split(',') {
             let tag = raw.split(';').next().unwrap_or("").trim();
             let primary = tag.split('-').next().unwrap_or("").to_lowercase();
-            if matches!(primary.as_str(), "th" | "en" | "lo") {
+            // Closed allowlist — `th` (Thai), `en` (English), `lo`
+            // (Lao), `zh` (Simplified Chinese). Unknown codes
+            // fall through to the default locale, never to a
+            // silently-picked one.
+            if matches!(primary.as_str(), "th" | "en" | "lo" | "zh") {
                 return Locale(primary);
             }
         }
@@ -107,7 +111,7 @@ impl Default for Locale {
 pub fn detect_locale(query_lang: Option<&str>, accept_lang: Option<&str>, default: &str) -> String {
     if let Some(q) = query_lang {
         let primary = q.split('-').next().unwrap_or("").to_lowercase();
-        if matches!(primary.as_str(), "th" | "en" | "lo") {
+        if matches!(primary.as_str(), "th" | "en" | "lo" | "zh") {
             return primary;
         }
     }
@@ -251,6 +255,46 @@ mod tests {
     fn parse_la_explicit() {
         let l = Locale::from_header("lo");
         assert_eq!(l.as_str(), "lo");
+    }
+
+    #[test]
+    fn parse_zh_explicit() {
+        // Added 2026-07-01 — Simplified Chinese support.
+        let l = Locale::from_header("zh");
+        assert_eq!(l.as_str(), "zh");
+        // BCP-47: zh-CN (Simplified, Mainland China) primary subtag
+        // collapses to "zh". zh-TW (Traditional) is NOT covered
+        // — that needs a separate locale file if requested later.
+        let l = Locale::from_header("zh-CN,en;q=0.5");
+        assert_eq!(l.as_str(), "zh");
+    }
+
+    #[test]
+    fn zh_catalog_resolves_known_keys() {
+        // Lock-in: every key referenced by AppError / AuthError /
+        // etc. must resolve to the Chinese translation (not the
+        // `<key>` fallback). If zh.yml ever drifts (missing key
+        // or indentation break), this test catches it before the
+        // Chinese UI silently renders literal `<err.foo>`.
+        let cases: &[(&str, &str)] = &[
+            ("err_auth.invalid_credentials", "用户名或密码错误"),
+            ("err_auth.admin_required", "需要管理员权限"),
+            ("err_auth.username_taken", "该用户名已被使用"),
+            ("err_repo.not_found", "未找到"),
+            ("err.bad_request", "请求无效"),
+            ("err.rate_limited", "请求频率超限"),
+        ];
+        for (key, expected_fragment) in cases {
+            let resolved = tr(key, "zh", &[]);
+            assert!(
+                resolved.contains(expected_fragment),
+                "zh translation of {key} = {resolved:?}, expected fragment {expected_fragment:?}"
+            );
+            assert!(
+                !resolved.starts_with('<'),
+                "zh key {key} unresolved (rust_i18n returned the key verbatim)"
+            );
+        }
     }
 
     #[test]

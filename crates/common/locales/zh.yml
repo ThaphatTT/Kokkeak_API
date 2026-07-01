@@ -1,0 +1,121 @@
+# Simplified Chinese locale.
+#
+# Added 2026-07-01 to support Chinese-speaking customers and admins.
+# Uses Simplified characters (zh-CN / zh-Hans); Traditional (zh-TW)
+# is NOT covered — request that separately if needed.
+#
+# NOTE: This is **starter copy** — native Chinese speakers on the
+# KOKKAK team must review every string before shipping. The
+# translation conveys the *meaning* of the English original, not
+# a literal word-for-word rendering. Formal register (您-style) is
+# used throughout — the admin web and mobile customer/technician
+# clients are both business contexts.
+
+# -- generic error envelope --
+err:
+  bad_request: "请求无效：{0}"
+  unauthorized: "未授权"
+  forbidden: "禁止访问：{0}"
+  not_found: "未找到：{0}"
+  conflict: "冲突：{0}"
+  validation: "数据校验失败：{0}"
+  rate_limited: "请求频率超限"
+  internal: "服务器内部错误：{0}"
+
+# -- AuthError / auth handlers --
+err_auth:
+  invalid_credentials: "用户名或密码错误"
+  token_expired: "令牌已过期"
+  invalid_token: "令牌无效：{0}"
+  forbidden: "禁止访问：{0}"
+  username_taken: "该用户名已被使用"
+  validation: "数据校验失败：{0}"
+  backend: "身份认证服务出错：{0}"
+  missing_header: "缺少或 Authorization 请求头无效"
+  not_access_token: "此令牌不是访问令牌"
+  role_required: "需要以下角色：{0}"
+  admin_required: "需要管理员权限"
+  role_not_allowed: "不允许使用该角色：{0}"
+  user_not_found: "未找到用户：{0}"
+
+# -- RepoError (generic) --
+err_repo:
+  not_found: "未找到：{0}"
+  conflict: "冲突：{0}"
+  backend: "数据存储服务出错：{0}"
+
+# -- ChatError + ChatRepoError --
+err_chat:
+  not_participant: "您不是房间 {0} 的成员"
+  room_not_found: "未找到房间 {0}"
+  invalid_body: "消息内容无效：{0}"
+  backend: "聊天服务出错：{0}"
+  not_participant_msg: "您不是该房间的成员"
+  membership_check_failed: "房间成员校验失败：{0}"
+  bad_other_role: "other_role 只能是 customer、technician 或 admin"
+
+err_chat_repo:
+  not_found: "未找到：{0}"
+  backend: "聊天服务出错：{0}"
+
+# -- PaymentError + PaymentRepoError --
+err_payment:
+  order_not_payable: "订单 {0} 当前状态不可支付"
+  not_found: "未找到支付记录 {0}"
+  not_found_msg: "未找到支付记录"
+  invalid_amount: "金额无效：{0}"
+  backend: "支付服务出错：{0}"
+  bad_amount: "金额必须为小数"
+  not_yours: "该支付记录不属于您"
+  unknown_payout_status: "未知的付款状态：{0}"
+
+err_payment_repo:
+  not_found: "未找到：{0}"
+  backend: "支付服务出错：{0}"
+
+# -- Order handlers --
+err_order:
+  invalid_total: "金额无效"
+
+# -- Generic request validation --
+err_request:
+  bad_timestamp: "after 必须是 RFC3339 格式的时间戳"
+
+# -- Admin permissions (M15-prep: GET /api/v1/admin/permissions) --
+err_permission:
+  mode_required: "必须提供 query 参数 `mode`"
+  invalid_role_guid: "user_role_guid 不是有效的 UUID"
+  invalid_permission_guid: "user_permission_guid 不是有效的 UUID"
+  empty_override_list: "items 不能为空"
+  too_many_override_items: "items 必须包含 1-500 条记录"
+  invalid_override_effect: "effect 必须是 'allow' 或 'deny'"
+  invalid_override_status: "status 必须是 0 或 1"
+
+# -- M20-b: admin user creation (SP_USER_INSERT_FULL) --
+err_admin_user:
+  actor_required: "必须提供 actor"
+  actor_not_found: "未找到 actor 或 actor 未启用"
+  permission_denied: "仅管理员可创建用户"
+  first_name_required: "必须提供名字"
+  last_name_required: "必须提供姓氏"
+  email_required: "必须提供邮箱"
+  username_required: "必须提供用户名"
+  password_hash_required: "必须提供 password_hash"
+  invalid_user_status: "user_status 必须是 0 或 1"
+  user_guid_exists: "user_guid 已存在"
+  username_exists: "该用户名已被使用"
+  email_exists: "该邮箱已被使用"
+  id_card_exists: "该身份证号已被使用"
+  country_required: "当 user_is_foreign = 1 时必须提供 country_guid"
+  country_not_found: "未找到 country_guid 或未启用"
+  company_required: "当 user_is_customer_company = 1 时必须提供 company_guid"
+  company_not_found: "未找到 company_guid 或未启用"
+  department_not_found: "未找到 department_guid 或未启用"
+  department_team_not_found: "未找到 department_team_guid 或未启用"
+  department_team_mismatch: "department_team 不属于该 department"
+  position_not_found: "未找到 position_guid 或未启用"
+  invalid_salary: "薪资不能为负数"
+  work_time_required: "工作日必须提供 start_time 和 end_time"
+  admin_role_not_found: "未找到 ADMIN 角色或未启用"
+  employee_role_not_found: "未找到 EMPLOYEE 角色或未启用"
+  image_invalid: "字段 \"{field}\" 的图片上传失败"

@@ -24,7 +24,8 @@ use axum::{
 use chrono::{DateTime, Utc};
 use kokkak_common::i18n::{current_locale, tr};
 use kokkak_common::response::ApiResponse;
-use kokkak_domain::{AuthError, AuthSession, Role};
+use kokkak_domain::{AuthError, AuthSession, Permission, Role};
+use kokkak_infra::permission_checker::PermissionChecker;
 use uuid::Uuid;
 
 use crate::state::AppState;
@@ -52,6 +53,33 @@ impl AuthnUser {
     /// Convenience: has the given role.
     pub fn has_role(&self, role: Role) -> bool {
         self.0.has_role(role)
+    }
+
+    /// M15-prep: check whether this user has a given permission.
+    /// Async because the check may go through the permission cache
+    /// + SQL Server.
+    ///
+    /// Fail-secure: a DB or cache error logs WARN and returns
+    /// `false`. Handlers should map that to a 403 just like a
+    /// genuine `false` result.
+    ///
+    /// ponytail: thin pass-through to [`PermissionChecker`]. The
+    /// ceiling is a bulk `effective_permissions()` helper that
+    /// fetches the whole set in one round-trip; add when handlers
+    /// start checking 2+ permissions per request.
+    pub async fn has_permission(&self, code: Permission, checker: &PermissionChecker) -> bool {
+        match checker.has_permission(self.0.user_id, code).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    user_id = %self.0.user_id,
+                    code = code.code(),
+                    error = %e,
+                    "AuthnUser::has_permission failed — denying (fail-secure)"
+                );
+                false
+            }
+        }
     }
 }
 

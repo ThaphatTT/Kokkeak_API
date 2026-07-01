@@ -38,14 +38,22 @@ pub struct MasterDropdownRow {
 ///
 /// Sibling to [`MasterDropdownRow`] (not a widening of it) per the
 /// module-level ceiling doc: the autocomplete payload carries the
-/// extra columns (`code`, `level`, `description`, `status`) that
-/// the admin search box needs to render rich results, but the
-/// simple dropdown never requires.
+/// extra columns (`code`, `level`, `description`, `status`,
+/// joined team + department) that the admin search box needs to
+/// render rich results, but the simple dropdown never requires.
 ///
 /// `value` / `label` are intentionally duplicated from the SP's
 /// `master_position_guid` / `master_position_name` aliases so the
 /// admin UI can drop the row straight into its generic dropdown
 /// widget without re-shaping.
+///
+/// The joined `user_department_team_*` / `user_department_*` fields
+/// are populated by the SP's `LEFT JOIN` and stay empty strings when
+/// the position has no team (NULL FK + no matching row). They let the
+/// admin UI render `position — team — department` breadcrumbs without
+/// a second lookup, mirroring the `UserDepartmentTeamAutocompleteRow`
+/// shape so a generic `<Autocomplete>` component on the admin web
+/// can render both pickers the same way.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct MasterPositionAutocompleteRow {
@@ -68,6 +76,26 @@ pub struct MasterPositionAutocompleteRow {
     /// the UI can render an "(inactive)" badge if the row sneaks in
     /// after a future SP change.
     pub status: i32,
+    /// `user_department_team.user_department_team_guid` — parent
+    /// team's GUID. Empty string when the position has no team
+    /// (LEFT JOIN miss).
+    pub user_department_team_guid: String,
+    /// `user_department_team.user_department_team_code` (admin-facing).
+    /// Empty string when no team.
+    pub user_department_team_code: String,
+    /// `user_department_team.user_department_team_name` — breadcrumb
+    /// line. Empty string when no team.
+    pub user_department_team_name: String,
+    /// `user_department.user_department_guid` — grandparent
+    /// department GUID. Empty string when no team (or team has no
+    /// department).
+    pub user_department_guid: String,
+    /// `user_department.user_department_code` (admin-facing).
+    /// Empty string when no department.
+    pub user_department_code: String,
+    /// `user_department.user_department_name` — secondary line.
+    /// Empty string when no department.
+    pub user_department_name: String,
 }
 
 /// One row of the `user_department_team` autocomplete.

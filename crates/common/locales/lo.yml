@@ -32,6 +32,8 @@ err_auth:
   not_access_token: "ໂທເຄັນນີ້ບໍ່ແມ່ນ access token"
   role_required: "ຕ້ອງມີສິດ: {0}"
   admin_required: "ຕ້ອງເປັນຜູ້ດູແລລະບົບ"
+  permission_denied: "ບໍ່ມີສິດ: {0}"
+  role_not_allowed: "ບໍ່ອະນຸຍາດໃຫ້ໃຊ້ບົດບາດນີ້: {0}"
   user_not_found: "ບໍ່ພົບຜູ້ໃຊ້: {0}"
 
 # -- RepoError (generic) --
@@ -114,4 +116,4 @@ err_admin_user:
   work_time_required: "ວັນເຮັດວຽກຕ້ອງລະບຸ start_time ແລະ end_time"
   admin_role_not_found: "ບໍ່ພົບ role ADMIN ຫຼືບໍ່ໄດ້ເປີດໃຊ້ງານ"
   employee_role_not_found: "ບໍ່ພົບ role EMPLOYEE ຫຼືບໍ່ໄດ້ເປີດໃຊ້ງານ"
-  image_invalid: "ອັບໂຫລດຮູບບໍ່ສຳເລັດສຳລັບຟິວສ \"{field}\""
+  image_invalid: 'ອັບໂຫລດຮູບບໍ່ສຳເລັດສຳລັບຟິວສ "{field}"'

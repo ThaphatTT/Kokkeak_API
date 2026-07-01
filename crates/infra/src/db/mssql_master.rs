@@ -109,6 +109,7 @@ impl MasterDropdownRepository for MssqlMasterDropdownRepository {
 
     async fn autocomplete_master_positions(
         &self,
+        user_department_team_guid: Option<&str>,
         keyword: Option<&str>,
         take: Option<i32>,
     ) -> Result<Vec<MasterPositionAutocompleteRow>, RepoError> {
@@ -120,8 +121,12 @@ impl MasterDropdownRepository for MssqlMasterDropdownRepository {
         let rows = exec_sp(
             &self.pool,
             "EXEC dbo.SP_AUTOCOMPLETE_MASTER_POSITION_GET \
-                @p_keyword = @P1, @p_take = @P2",
-            &[&keyword as &dyn ToSql, &take_param as &dyn ToSql],
+                    @p_department_team_guid = @P1, @p_keyword = @P2, @p_take = @P3",
+            &[
+                &user_department_team_guid as &dyn ToSql,
+                &keyword as &dyn ToSql,
+                &take_param as &dyn ToSql,
+            ],
         )
         .await?;
         Ok(rows
@@ -183,18 +188,26 @@ fn row_to_master_dropdown_row(row: &tiberius::Row) -> MasterDropdownRow {
 /// Column NAMES match the SP's SELECT aliases (the SP aliases the
 /// position GUID / name as `value` / `label` so the admin UI can
 /// reuse the dropdown contract on top):
-///   `value`                       varchar GUID-string
-///   `label`                       nvarchar display name
+///   `value`                       varchar GUID-string (position)
+///   `label`                       nvarchar display name (position)
 ///   `master_position_guid`        varchar GUID-string
 ///   `master_position_code`        nvarchar
 ///   `master_position_name`        nvarchar
 ///   `master_position_description` nvarchar
 ///   `master_position_level`       int
 ///   `master_position_status`      int
+///   `user_department_team_guid`   varchar GUID-string (joined team)
+///   `user_department_team_code`   nvarchar
+///   `user_department_team_name`   nvarchar
+///   `user_department_guid`        varchar GUID-string (joined dept)
+///   `user_department_code`        nvarchar
+///   `user_department_name`        nvarchar
 ///
-/// `description` is optional (NULL → empty string); `level` /
-/// `status` default to `0` on NULL so the JSON wire shape stays
-/// stable when the SP returns rows without those columns filled.
+/// All string columns default to `""` on NULL (the SP's `LEFT JOIN`
+/// can leave the team / department slots empty when a position has
+/// no team, or the team has no parent department); `level` / `status`
+/// default to `0` on NULL. This keeps the JSON wire shape stable
+/// even when the SP returns partially-filled rows.
 fn row_to_master_position_autocomplete(row: &tiberius::Row) -> MasterPositionAutocompleteRow {
     MasterPositionAutocompleteRow {
         value: read_str(row, "value").unwrap_or("").to_string(),
@@ -207,6 +220,24 @@ fn row_to_master_position_autocomplete(row: &tiberius::Row) -> MasterPositionAut
             .to_string(),
         level: read_i32(row, "master_position_level").unwrap_or(0),
         status: read_i32(row, "master_position_status").unwrap_or(0),
+        user_department_team_guid: read_str(row, "user_department_team_guid")
+            .unwrap_or("")
+            .to_string(),
+        user_department_team_code: read_str(row, "user_department_team_code")
+            .unwrap_or("")
+            .to_string(),
+        user_department_team_name: read_str(row, "user_department_team_name")
+            .unwrap_or("")
+            .to_string(),
+        user_department_guid: read_str(row, "user_department_guid")
+            .unwrap_or("")
+            .to_string(),
+        user_department_code: read_str(row, "user_department_code")
+            .unwrap_or("")
+            .to_string(),
+        user_department_name: read_str(row, "user_department_name")
+            .unwrap_or("")
+            .to_string(),
     }
 }
 

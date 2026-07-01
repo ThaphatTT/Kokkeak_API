@@ -31,6 +31,8 @@ err_auth:
   not_access_token: "not an access token"
   role_required: "role required: {0}"
   admin_required: "admin required"
+  permission_denied: "permission denied: {0}"
+  role_not_allowed: "role not allowed: {0}"
   user_not_found: "user not found: {0}"
 
 # -- RepoError (generic; used by all repos) --
@@ -118,4 +120,4 @@ err_admin_user:
   work_time_required: "working day must have start_time and end_time"
   admin_role_not_found: "role ADMIN not found or inactive"
   employee_role_not_found: "role EMPLOYEE not found or inactive"
-  image_invalid: "image upload failed for field \"{field}\""
+  image_invalid: 'image upload failed for field "{field}"'

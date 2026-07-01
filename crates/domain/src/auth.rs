@@ -152,7 +152,7 @@ pub struct PublicUser {
     /// Roles assigned via `[user_user_role]` join (M14).
     pub roles: Vec<Role>,
     /// Effective permissions (SCREAMING_SNAKE_CASE codes, e.g.
-    /// `"PAGE_JOBS_VIEW"`, `"JOBS_CREATE"`). Empty vec means the
+    /// `"JOBS_VIEW"`, `"JOBS_CREATE"`). Empty vec means the
     /// SP returned no rows or all codes were unknown to Rust.
     pub permissions: Vec<Permission>,
     /// Account lifecycle status (0=Active, 1=Suspended, 2=Locked, 3=Disabled).
@@ -262,6 +262,12 @@ mod tests {
     fn public_user_exposes_permissions_as_codes() {
         // The frontend matches these exact strings, so the
         // serialization shape is part of the API contract.
+        //
+        // M21 cleanup: the `PAGE_*_VIEW` prefix was dropped from page
+        // permissions when `code()` was renamed (e.g.
+        // `PAGE_PERMISSIONS_VIEW` → `PERMISSIONS_VIEW`). This test
+        // had drifted to the old `PAGE_JOBS_VIEW` expectation; updated
+        // to match the current code() output.
         let now = Utc::now();
         let u = crate::user::User {
             id: Uuid::new_v4(),
@@ -280,7 +286,7 @@ mod tests {
             serde_json::from_str(&serde_json::to_string(&pubu).unwrap()).unwrap();
         assert_eq!(
             v["permissions"],
-            serde_json::json!(["PAGE_JOBS_VIEW", "JOBS_CREATE"])
+            serde_json::json!(["JOBS_VIEW", "JOBS_CREATE"])
         );
     }
 }

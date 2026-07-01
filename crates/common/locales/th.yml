@@ -33,6 +33,8 @@ err_auth:
   not_access_token: "โทเคนนี้ไม่ใช่ access token"
   role_required: "ต้องมีสิทธิ์: {0}"
   admin_required: "ต้องเป็นผู้ดูแลระบบ"
+  permission_denied: "ไม่มีสิทธิ์: {0}"
+  role_not_allowed: "ไม่อนุญาตให้ใช้บทบาทนี้: {0}"
   user_not_found: "ไม่พบผู้ใช้: {0}"
 
 # -- RepoError (generic) --
@@ -115,4 +117,4 @@ err_admin_user:
   work_time_required: "วันทำงานต้องระบุ start_time และ end_time"
   admin_role_not_found: "ไม่พบ role ADMIN หรือไม่ได้ใช้งาน"
   employee_role_not_found: "ไม่พบ role EMPLOYEE หรือไม่ได้ใช้งาน"
-  image_invalid: "อัปโหลดรูปไม่สำเร็จสำหรับฟิลด์ \"{field}\""
+  image_invalid: 'อัปโหลดรูปไม่สำเร็จสำหรับฟิลด์ "{field}"'

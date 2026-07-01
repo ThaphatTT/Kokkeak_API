@@ -15,7 +15,10 @@ use async_trait::async_trait;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::admin_user::{AdminInsertUserError, AdminInsertUserRequest, AdminInsertUserResult};
+use crate::admin_user::{
+    AdminInsertUserError, AdminInsertUserRequest, AdminInsertUserResult, AdminUserListPagingInput,
+    AdminUserListPagingPage,
+};
 use crate::user::{User, UserListRow};
 
 /// Repository-level error (one of the few `domain` types that maps
@@ -123,4 +126,38 @@ pub trait UserRepository: Send + Sync {
         &self,
         req: &AdminInsertUserRequest,
     ) -> Result<AdminInsertUserResult, AdminInsertUserError>;
+
+    /// Admin user listing with page-based pagination.
+    ///
+    /// Backed by `dbo.SP_USER_LIST_PAGING` — one row per user with
+    /// status label / phone / role names / current position name.
+    /// Filters on `keyword` (free-form across name + phone + email)
+    /// and `user_status` (raw int, `None` = no filter).
+    ///
+    /// `actor` is forwarded for audit logging consistency (the SP
+    /// itself doesn't enforce admin gating — that lives at the
+    /// handler layer via [`Permission::PageUsersView`]).
+    ///
+    /// ponytail: the SP uses `OFFSET` / `FETCH NEXT` (offset pagination)
+    /// because that's the legacy contract. Ceiling: project rule §11.4
+    /// prefers keyset / cursor at deep pages — when the user table
+    /// grows past ~10K rows, extend the SP with `@p_after_user_guid`
+    /// + `WHERE user_guid > @P...` and switch the wire contract to
+    /// cursor. For the current admin user volume (low-thousands) the
+    /// SP's `OFFSET` is fine.
+    ///
+    /// Default impl returns `Backend("not implemented")` so the
+    /// existing test mocks don't break — only the MSSQL adapter needs
+    /// to override it. When the next mock is added, copy the
+    /// default-impl line.
+    async fn list_users_paging(
+        &self,
+        input: &AdminUserListPagingInput,
+        actor: Uuid,
+    ) -> Result<AdminUserListPagingPage, RepoError> {
+        let _ = (input, actor);
+        Err(RepoError::Backend(
+            "list_users_paging: not implemented by this repository adapter".into(),
+        ))
+    }
 }

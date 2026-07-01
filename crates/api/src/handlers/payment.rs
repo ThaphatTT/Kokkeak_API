@@ -17,7 +17,7 @@ use kokkak_application::{ConfirmPaymentInput, CreatePaymentInput, PaymentService
 use kokkak_common::i18n::{current_locale, tr, tr_with_repo};
 use kokkak_common::response::{paginated, ApiResponse, PageMeta};
 use kokkak_domain::{
-    Commission, LocalizedError, Payment, PaymentError, Payout, PayoutStatus, Role,
+    Commission, LocalizedError, Payment, PaymentError, Payout, PayoutStatus, Permission, Role,
 };
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -219,7 +219,16 @@ pub async fn confirm_payment(
         let msg = tr("err_payment.not_found_msg", &locale, &[]);
         return Ok(not_found(msg));
     };
-    if p.customer_id != user.id() && !user.has_role(Role::Admin) {
+    // M15-prep: owner OR admin-override. The admin path is gated
+    //    by `FinanceEscrowRelease` — "admin can capture / confirm
+    //    any payment" (e.g. dispute resolution, orphaned
+    //    payments, customer-requested capture). Fail-secure via
+    //    `AuthnUser::has_permission`.
+    if p.customer_id != user.id()
+        && !user
+            .has_permission(Permission::FinanceEscrowRelease, &state.permission_checker)
+            .await
+    {
         let msg = tr("err_payment.not_yours", &locale, &[]);
         return Ok(forbidden(msg));
     }
@@ -315,7 +324,16 @@ pub async fn get_payment(
         let msg = tr("err_payment.not_found_msg", &locale, &[]);
         return Ok(not_found(msg));
     };
-    if p.customer_id != user.id() && !user.has_role(Role::Admin) {
+    // M15-prep: owner OR admin-override. The admin path is gated
+    //    by `FinanceExport` — the closest semantic match in the
+    //    permission catalog for "admin can read any payment".
+    //    ponytail: not adding a `PAYMENT_ADMIN_VIEW` code yet
+    //    because no consumer beyond this fallback uses it.
+    if p.customer_id != user.id()
+        && !user
+            .has_permission(Permission::FinanceExport, &state.permission_checker)
+            .await
+    {
         let msg = tr("err_payment.not_yours", &locale, &[]);
         return Ok(forbidden(msg));
     }
@@ -357,8 +375,14 @@ pub async fn list_payouts_admin(
     Query(q): Query<ListPayoutsQuery>,
 ) -> Result<Response, Response> {
     let locale = current_locale();
-    if !user.has_role(Role::Admin) && !user.has_role(Role::SuperAdmin) {
-        let msg = tr("err_auth.admin_required", &locale, &[]);
+    // 1. RBAC — M15-prep: listing payouts is a finance-export
+    //    action; gate on `FinanceExport`.
+    if !user
+        .has_permission(Permission::FinanceExport, &state.permission_checker)
+        .await
+    {
+        let code_str = Permission::FinanceExport.code();
+        let msg = tr("err_auth.permission_denied", &locale, &[code_str]);
         return Ok(forbidden(msg));
     }
     let limit = q.limit.unwrap_or(50);
@@ -413,8 +437,14 @@ pub async fn mark_payout_paid_admin(
     Path(id): Path<Uuid>,
 ) -> Result<Response, Response> {
     let locale = current_locale();
-    if !user.has_role(Role::Admin) && !user.has_role(Role::SuperAdmin) {
-        let msg = tr("err_auth.admin_required", &locale, &[]);
+    // 1. RBAC — M15-prep: marking a payout paid is the escrow
+    //    release action; gate on `FinanceEscrowRelease`.
+    if !user
+        .has_permission(Permission::FinanceEscrowRelease, &state.permission_checker)
+        .await
+    {
+        let code_str = Permission::FinanceEscrowRelease.code();
+        let msg = tr("err_auth.permission_denied", &locale, &[code_str]);
         return Ok(forbidden(msg));
     }
     let p = match state.payments.mark_payout_paid(id).await {

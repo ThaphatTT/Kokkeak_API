@@ -54,10 +54,13 @@ impl MasterDropdownService {
     /// for the filter semantics.
     pub async fn autocomplete_master_positions(
         &self,
+        user_department_team_guid: Option<&str>,
         keyword: Option<&str>,
         take: Option<i32>,
     ) -> Result<Vec<MasterPositionAutocompleteRow>, RepoError> {
-        self.repo.autocomplete_master_positions(keyword, take).await
+        self.repo
+            .autocomplete_master_positions(user_department_team_guid, keyword, take)
+            .await
     }
 
     /// Autocomplete lookup for the admin user-form's
@@ -121,8 +124,10 @@ mod tests {
         last_autocomplete_keyword: Mutex<Option<Option<String>>>,
         last_take: Mutex<Option<Option<i32>>>,
         // Master-position autocomplete uses its own row buffer + records
-        // `(keyword, take)` so the test can verify forwarding in isolation.
+        // `(user_department_team_guid, keyword, take)` so the test can
+        // verify forwarding in isolation.
         position_autocomplete_rows: Mutex<Vec<MasterPositionAutocompleteRow>>,
+        last_position_department_team_guid: Mutex<Option<Option<String>>>,
         last_position_keyword: Mutex<Option<Option<String>>>,
         last_position_take: Mutex<Option<Option<i32>>>,
         // User-department autocomplete dropdown uses the dropdown row buffer
@@ -156,6 +161,12 @@ mod tests {
             description: "Senior field technician".into(),
             level: 5,
             status: 1,
+            user_department_team_guid: "22222222-2222-2222-2222-222222222222".into(),
+            user_department_team_code: "BE".into(),
+            user_department_team_name: "Backend".into(),
+            user_department_guid: "33333333-3333-3333-3333-333333333333".into(),
+            user_department_code: "ENG".into(),
+            user_department_name: "Engineering".into(),
         }
     }
 
@@ -190,9 +201,12 @@ mod tests {
 
         async fn autocomplete_master_positions(
             &self,
+            user_department_team_guid: Option<&str>,
             keyword: Option<&str>,
             take: Option<i32>,
         ) -> Result<Vec<MasterPositionAutocompleteRow>, RepoError> {
+            *self.last_position_department_team_guid.lock().unwrap() =
+                Some(user_department_team_guid.map(str::to_string));
             *self.last_position_keyword.lock().unwrap() = Some(keyword.map(str::to_string));
             *self.last_position_take.lock().unwrap() = Some(take);
             Ok(self.position_autocomplete_rows.lock().unwrap().clone())
@@ -245,18 +259,26 @@ mod tests {
         let repo: Arc<dyn MasterDropdownRepository> = Arc::new(mock);
         let svc = MasterDropdownService::new(repo);
 
-        // Some keyword + Some take — both passed through unchanged.
+        // All three filters populated — every value passes through.
         let rows = svc
-            .autocomplete_master_positions(Some("tech"), Some(5))
+            .autocomplete_master_positions(
+                Some("22222222-2222-2222-2222-222222222222"),
+                Some("tech"),
+                Some(5),
+            )
             .await
             .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].label, "Senior Technician");
         assert_eq!(rows[0].code, "TECH_SR");
+        assert_eq!(rows[0].user_department_team_name, "Backend");
 
-        // None / None — defaults live in the SP / infra adapter, not
-        // the service.
-        let _ = svc.autocomplete_master_positions(None, None).await.unwrap();
+        // None / None / None — defaults live in the SP / infra
+        // adapter, not the service.
+        let _ = svc
+            .autocomplete_master_positions(None, None, None)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

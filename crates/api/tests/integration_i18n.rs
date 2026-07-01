@@ -320,7 +320,7 @@ async fn localizable_keys_match_catalog_for_all_locales() {
     // The `LocalizedError::l10n_key()` for every variant must
     // resolve to a non-bracketed string in every locale.
     let err = AuthError::InvalidCredentials;
-    for locale in ["en", "th", "lo"] {
+    for locale in ["en", "th", "lo", "zh"] {
         let resolved = tr(err.l10n_key(), locale, &[]);
         assert!(
             !resolved.starts_with('<'),
@@ -358,13 +358,14 @@ async fn e2e_register_login_runs_in_each_locale() {
         eprintln!("skipping (no MSSQL)");
         return;
     }
-    // Walk the full auth flow in three locales; each request
-    // must return the same envelope shape with a localized
-    // message.
+    // Walk the full auth flow in every supported locale; each
+    // request must return the same envelope shape with a
+    // localized message.
     for (accept, lang) in [
         (Some("en"), "en"),
         (Some("th,en;q=0.5"), "th"),
         (Some("lo,en;q=0.5"), "lo"),
+        (Some("zh,en;q=0.5"), "zh"),
     ] {
         let (app, _) = make_app().await;
         let email = format!("user-{}@example.com", Uuid::new_v4());

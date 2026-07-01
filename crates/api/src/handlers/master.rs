@@ -44,6 +44,7 @@ use kokkak_domain::{
 };
 use serde::Deserialize;
 
+use crate::error::{ApiError, IntoLocalizedResponse};
 use crate::state::AppState;
 
 /// Query string for `GET /api/v1/master/countries`.
@@ -96,21 +97,11 @@ pub async fn list_countries(
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(error = %e, "master.list_countries failed");
-            // RepoError today only has `Backend` (no NotFound in
-            // dropdown flow); map to 500 generic.
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::<()> {
-                    success: false,
-                    data: None,
-                    error: Some(kokkak_common::error::ApiErrorBody {
-                        code: "internal".into(),
-                        message: "internal".into(),
-                    }),
-                    meta: None,
-                }),
-            )
-                .into_response());
+            // Route through ApiError + IntoLocalizedResponse so the
+            // 500 envelope renders the per-request locale via the
+            // i18n catalog (`err.internal`) instead of a hardcoded
+            // English string. Matches every other handler's pattern.
+            return Err(ApiError::from(e).into_localized_response(&state).await);
         }
     };
 
@@ -185,19 +176,7 @@ pub async fn autocomplete_user_department_team(
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(error = %e, "master.autocomplete_user_department_team failed");
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::<()> {
-                    success: false,
-                    data: None,
-                    error: Some(kokkak_common::error::ApiErrorBody {
-                        code: "internal".into(),
-                        message: "internal".into(),
-                    }),
-                    meta: None,
-                }),
-            )
-                .into_response());
+            return Err(ApiError::from(e).into_localized_response(&state).await);
         }
     };
 
@@ -264,19 +243,7 @@ pub async fn autocomplete_user_department(
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(error = %e, "master.autocomplete_user_department failed");
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::<()> {
-                    success: false,
-                    data: None,
-                    error: Some(kokkak_common::error::ApiErrorBody {
-                        code: "internal".into(),
-                        message: "internal".into(),
-                    }),
-                    meta: None,
-                }),
-            )
-                .into_response());
+            return Err(ApiError::from(e).into_localized_response(&state).await);
         }
     };
 
@@ -294,13 +261,19 @@ pub async fn autocomplete_user_department(
 
 /// Query string for `GET /api/v1/master/positions/autocomplete`.
 ///
-/// Both fields are optional — the handler treats absence as "no
+/// All fields are optional — the handler treats absence as "no
 /// filter" and lets the SP apply its own defaults (`take = 20`,
 /// active-only `status = 1`). The infra adapter re-clamps `take`
 /// to `[1, 100]` so the trait contract is self-documenting (same
 /// pattern as the user-department autocomplete).
 #[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct PositionsAutocompleteQuery {
+    /// Narrow to positions belonging to this `user_department_team`
+    /// (GUID). Omit for every active position across every team.
+    /// Mirrors the `user_department_team` autocomplete's department
+    /// filter, so the admin UI can drill down from team → position
+    /// in one chain of typeaheads.
+    pub department_team_guid: Option<String>,
     /// Free-text filter against `master_position_name` /
     /// `master_position_code` (prefix-LIKE). Trim is handled by the SP.
     pub keyword: Option<String>,
@@ -316,9 +289,10 @@ pub struct PositionsAutocompleteQuery {
 /// `master_position_level DESC → master_position_name ASC →
 /// master_position_code ASC`. Wire shape is the richer
 /// [`MasterPositionAutocompleteRow`] (carries `code`, `description`,
-/// `level`, `status` alongside the `value` / `label` pair), so the
-/// admin UI can render rich autocomplete results instead of a plain
-/// label/value dropdown.
+/// `level`, `status`, and the joined `user_department_team_*` /
+/// `user_department_*` breadcrumb alongside the `value` / `label`
+/// pair), so the admin UI can render rich autocomplete results
+/// instead of a plain label/value dropdown.
 ///
 /// Authenticated only (same gate as the country dropdown — the admin
 /// web console enforces the admin role client-side; adding a
@@ -341,25 +315,17 @@ pub async fn autocomplete_master_positions(
 ) -> Result<Response, Response> {
     let rows = match state
         .master
-        .autocomplete_master_positions(q.keyword.as_deref(), q.take)
+        .autocomplete_master_positions(
+            q.department_team_guid.as_deref(),
+            q.keyword.as_deref(),
+            q.take,
+        )
         .await
     {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(error = %e, "master.autocomplete_master_positions failed");
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::<()> {
-                    success: false,
-                    data: None,
-                    error: Some(kokkak_common::error::ApiErrorBody {
-                        code: "internal".into(),
-                        message: "internal".into(),
-                    }),
-                    meta: None,
-                }),
-            )
-                .into_response());
+            return Err(ApiError::from(e).into_localized_response(&state).await);
         }
     };
 

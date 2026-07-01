@@ -125,6 +125,46 @@ pub fn build_app_state_with(
         webp_quality: settings.image.webp_quality,
     };
     let image: Arc<ImageProcessor> = Arc::new(ImageProcessor::new(storage.clone(), image_cfg));
+
+    // M15-prep: PermissionChecker. Uses the catch-all MSSQL pool
+    // (auth/RBAC lives on KOKKAK_MASTER, which is the catch-all slot).
+    // Falls back to disabled variants when the pool/redis are not
+    // configured — every check then returns Unavailable → handlers
+    // 403 the request (fail-secure).
+    let pool_for_perm = bundle.mssql_pool.clone();
+    let repo_for_perm = match pool_for_perm {
+        Some(p) => Arc::new(kokkak_infra::db::mssql_permission::MssqlPermissionRepository::new(p)),
+        None => Arc::new(kokkak_infra::db::mssql_permission::MssqlPermissionRepository::disabled()),
+    };
+    let cache_for_perm = if settings.redis.is_configured() {
+        match kokkak_infra::cache::redis::RedisCache::new(&settings.redis) {
+            Ok(rc) => Arc::new(
+                kokkak_infra::cache::permission_cache::RedisPermissionCache::new(
+                    rc.pool(),
+                    settings.permission_cache.ttl_secs,
+                ),
+            ),
+            Err(e) => {
+                tracing::warn!(error = %e, "redis configured but pool build failed — permission cache disabled");
+                Arc::new(
+                    kokkak_infra::cache::permission_cache::RedisPermissionCache::disabled(
+                        settings.permission_cache.ttl_secs,
+                    ),
+                )
+            }
+        }
+    } else {
+        Arc::new(
+            kokkak_infra::cache::permission_cache::RedisPermissionCache::disabled(
+                settings.permission_cache.ttl_secs,
+            ),
+        )
+    };
+    let permission_checker = Arc::new(kokkak_infra::permission_checker::PermissionChecker::new(
+        repo_for_perm,
+        cache_for_perm,
+    ));
+
     AppState::new(
         auth,
         user,
@@ -142,6 +182,7 @@ pub fn build_app_state_with(
         settings,
         storage,
         image,
+        permission_checker,
     )
 }
 

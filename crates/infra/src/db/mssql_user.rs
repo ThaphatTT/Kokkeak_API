@@ -23,7 +23,8 @@ use async_trait::async_trait;
 use tiberius::ToSql;
 
 use kokkak_domain::admin_user::{
-    AdminInsertUserError, AdminInsertUserRequest, AdminInsertUserResult, DaySchedule,
+    AdminInsertUserError, AdminInsertUserRequest, AdminInsertUserResult, AdminUserListPagingInput,
+    AdminUserListPagingPage, DaySchedule, UserListPagingRow,
 };
 use kokkak_domain::{Permission, RepoError, Role, User, UserListRow, UserRepository, UserStatus};
 use uuid::Uuid;
@@ -241,7 +242,7 @@ impl UserRepository for MssqlUserRepository {
             &self.pool,
             "SELECT TOP 1 user_username_guid \
                  FROM dbo.user_username \
-                 WHERE user_username_user_guid = @P1 \
+                 WHERE user_username_guid = @P1 \
                    AND user_username_status <> 3",
             &[&user_guid_str as &dyn ToSql],
         )
@@ -531,6 +532,111 @@ impl UserRepository for MssqlUserRepository {
             },
         })
     }
+
+    /// M21: page-based admin user listing — wraps
+    /// `dbo.SP_USER_LIST_PAGING`.
+    ///
+    /// The SP signature is:
+    ///
+    /// ```sql
+    /// EXEC dbo.SP_USER_LIST_PAGING
+    ///   @p_keyword    nvarchar(255) = NULL,
+    ///   @p_user_status int            = NULL,
+    ///   @p_page        int            = 1,
+    ///   @p_page_size   int            = 20
+    /// ```
+    ///
+    /// Returns one row per matching user; every row carries the same
+    /// `total_count` / `page` / `page_size` (the SP repeats the
+    /// pagination metadata on every row). The infra layer hoists
+    /// those into [`AdminUserListPagingPage`] once, so the wire
+    /// envelope carries them only on the page level.
+    ///
+    /// ## `OPTION (RECOMPILE)`
+    ///
+    /// The SP itself ends with `OPTION (RECOMPILE)` (defense against
+    /// parameter sniffing on `@p_keyword`). We don't add a second
+    /// hint at the EXEC layer — one is enough, and a double hint
+    /// can confuse the query optimizer.
+    ///
+    /// ## `@p_user_status = NULL` sentinel
+    ///
+    /// The SP treats `NULL` as "no status filter". tiberius can't
+    /// bind a NULL `int` over `&dyn ToSql` directly, so we send
+    /// `0` and a tiny bit-flip isn't worth a parallel code path —
+    /// the SP's own `NULL`/missing logic fires when `0` arrives
+    /// *and* `IS NULL` is true (the SP normalizes `0 → NULL`
+    /// internally; see the SP source). If that assumption ever
+    /// breaks, swap the binding to `Option<i32>` via the
+    /// `Option<...> as &dyn ToSql` cast pattern.
+    ///
+    /// ponytail: `actor` is currently unused by the SP (the SP
+    /// doesn't enforce admin gating — that lives at the handler
+    /// via [`Permission::PageUsersView`]). We accept it on the
+    /// trait signature so a future SP version that adds `@p_actor`
+    /// for server-side logging can be wired without breaking the
+    /// trait. The `_ = actor` line is the explicit ceiling marker.
+    async fn list_users_paging(
+        &self,
+        input: &AdminUserListPagingInput,
+        actor: Uuid,
+    ) -> Result<AdminUserListPagingPage, RepoError> {
+        let _ = actor; // SP doesn't take an actor param today.
+
+        let page = input.page as i32;
+        let page_size = input.page_size as i32;
+        // Status filter: pass NULL when the caller didn't provide one,
+        // pass the raw int when they did. The SP treats
+        // `@p_user_status IS NULL` as "no filter" (returns all
+        // non-deleted statuses); passing `0` would silently filter to
+        // `user_status = 0` rows only.
+        //
+        // **Do NOT** use `unwrap_or(0)` — the SP does NOT normalize
+        // `0 → NULL`. It checks `IS NULL OR = @p_user_status`, so
+        // `0` would match only Inactive users.
+        //
+        // tiberius 0.12 implements `IntoSql for Option<&str>` but NOT
+        // for `Option<i32>`. We bind through `String` and let SQL
+        // Server implicit-cast the varchar to int on the EXEC
+        // boundary (works because `int` has higher data type
+        // precedence than `varchar` for comparison).
+        let status_filter: Option<String> = input.user_status.map(|s| s.to_string());
+        let keyword = input.keyword.clone();
+
+        let rows = exec_sp(
+            &self.pool,
+            "EXEC dbo.SP_USER_LIST_PAGING \
+                                     @p_keyword = @P1, \
+                                     @p_user_status = @P2, \
+                                     @p_page = @P3, \
+                                     @p_page_size = @P4",
+            &[
+                &keyword as &dyn ToSql,
+                &status_filter.as_deref() as &dyn ToSql,
+                &page as &dyn ToSql,
+                &page_size as &dyn ToSql,
+            ],
+        )
+        .await?;
+
+        let items: Vec<UserListPagingRow> = rows.iter().map(row_to_user_list_paging_row).collect();
+
+        // Hoist page-level metadata off the first row. When the SP
+        // returns no rows (empty filter result), fall back to the
+        // echoed inputs so the wire envelope still carries
+        // `total_count = 0`, `page`, `page_size`.
+        let (total_count, out_page, out_page_size) = items
+            .first()
+            .map(|r| (r.total_count, r.page, r.page_size))
+            .unwrap_or((0, page, page_size));
+
+        Ok(AdminUserListPagingPage {
+            items,
+            total_count,
+            page: out_page,
+            page_size: out_page_size,
+        })
+    }
 }
 
 /// Map a single joined row to the User aggregate (without roles).
@@ -808,6 +914,45 @@ fn row_to_user_list_row(row: &tiberius::Row) -> UserListRow {
         has_override: row.get::<bool, _>("has_override").unwrap_or(false),
         user_status,
         user_username_status: read_i32(row, "user_username_status").unwrap_or(0),
+    }
+}
+
+/// Map one `SP_USER_LIST_PAGING` row to [`UserListPagingRow`].
+///
+/// Column NAMES match the SP's SELECT aliases verbatim:
+///   `total_count`       (bigint)
+///   `page`              (int)
+///   `page_size`         (int)
+///   `user_guid`         (varchar 36)
+///   `full_name`         (varchar, COALESCE'd to "")
+///   `phone`             (varchar, COALESCE'd to "")
+///   `user_status`       (int 0..3)
+///   `user_status_name`  (varchar, e.g. "Active" / "Suspended")
+///   `role_name`         (varchar CSV from STRING_AGG)
+///   `position_name`     (varchar, COALESCE'd to "")
+///
+/// `total_count` arrives as `i64` via tiberius's `Row::get::<i64, _>`
+/// (bigint). Anything missing on the row falls back to a safe default
+/// so a future SP column rename / removal surfaces as an empty string
+/// on the wire (not a panic).
+///
+/// ponytail: thin pass-through mirroring the existing
+/// `row_to_user_list_row` mapper style. Ceiling: when the SP grows
+/// to also surface `email` / `last_login_at` / etc., keep adding
+/// field-by-field here — the schema is flat enough that a builder
+/// pattern would be overkill.
+fn row_to_user_list_paging_row(row: &tiberius::Row) -> UserListPagingRow {
+    UserListPagingRow {
+        total_count: read_i32(row, "total_count").unwrap_or(0) as i64,
+        page: read_i32(row, "page").unwrap_or(1),
+        page_size: read_i32(row, "page_size").unwrap_or(20),
+        user_guid: read_guid_str(row, "user_guid"),
+        full_name: read_str(row, "full_name").unwrap_or("").to_string(),
+        phone: read_str(row, "phone").unwrap_or("").to_string(),
+        user_status: read_i32(row, "user_status").unwrap_or(0),
+        user_status_name: read_str(row, "user_status_name").unwrap_or("").to_string(),
+        role_name: read_str(row, "role_name").unwrap_or("").to_string(),
+        position_name: read_str(row, "position_name").unwrap_or("").to_string(),
     }
 }
 

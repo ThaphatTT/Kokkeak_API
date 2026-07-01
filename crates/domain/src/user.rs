@@ -83,12 +83,17 @@ impl Role {
 /// Wire format is the SCREAMING_SNAKE_CASE string (`Permission::code()`)
 /// so the frontend can match it directly without a Rust-side enum
 /// mirror. The MSSQL stored procedure returns a comma-separated list of
-/// these codes (e.g. `PAGE_DASHBOARD_VIEW,JOBS_CREATE`) which the repo
+/// these codes (e.g. `DASHBOARD_VIEW,JOBS_CREATE`) which the repo
 /// parses via `Permission::from_code`.
 ///
-/// **Naming convention** (consistent with AGENTS.md § 12.3):
-/// - `PAGE_*`     → page-level visibility (sidebar / route guard)
-/// - non-PAGE     → action-level (button / API capability)
+/// Naming convention:
+/// - variant prefix `Page*View` → page-level visibility (sidebar / route guard)
+/// - non-`Page*` variants       → action-level (button / API capability)
+///
+/// The Rust variant name uses `Page` to convey the page-level intent,
+/// but the **wire code** (DB column, JSON response, `code()`) drops the
+/// `PAGE_` prefix — see the per-variant `#[serde(rename = "...")]` below
+/// and the `code()` method. The two always agree.
 ///
 /// Adding a new permission = add a variant here + ask the DBA to add the
 /// code to `user_admin_panel_permission.user_admin_panel_permission_code`.
@@ -99,25 +104,35 @@ impl Role {
 pub enum Permission {
     // ── Page visibility ──────────────────────────────────────────────
     /// Dashboard page visible (KPIs, charts).
+    #[serde(rename = "DASHBOARD_VIEW")]
     PageDashboardView,
 
     /// Jobs (orders) list page visible.
+    #[serde(rename = "JOBS_VIEW")]
     PageJobsView,
     /// Finance page visible.
+    #[serde(rename = "FINANCE_VIEW")]
     PageFinanceView,
     /// Invoices page visible.
+    #[serde(rename = "INVOICES_VIEW")]
     PageInvoicesView,
     /// KYC page visible.
+    #[serde(rename = "KYC_VIEW")]
     PageKycView,
     /// Reports page visible.
+    #[serde(rename = "REPORTS_VIEW")]
     PageReportsView,
     /// Users management page visible.
+    #[serde(rename = "USERS_VIEW")]
     PageUsersView,
     /// Permission matrix page visible.
+    #[serde(rename = "PERMISSIONS_VIEW")]
     PagePermissionsView,
     /// Basic settings page visible.
+    #[serde(rename = "BASIC_SETTINGS_VIEW")]
     PageBasicSettingsView,
     /// Service catalog page visible.
+    #[serde(rename = "SERVICE_VIEW")]
     PageServiceView,
 
     // ── Jobs / orders actions ────────────────────────────────────────
@@ -177,6 +192,50 @@ pub enum Permission {
     ServiceUpdate,
     /// Delete a service category.
     ServiceDelete,
+
+    // ── Banner (homepage promo) actions ──────────────────────────────
+    /// Create a banner.
+    BannerCreate,
+    /// Edit a banner.
+    BannerUpdate,
+    /// Delete / unpublish a banner.
+    BannerDelete,
+
+    // ── Companies (provider companies) actions ───────────────────────
+    /// Create a company record.
+    CompaniesCreate,
+    /// Edit a company record.
+    CompaniesUpdate,
+    /// Delete / disable a company.
+    CompaniesDelete,
+    /// Export companies to CSV / Excel.
+    CompaniesExport,
+
+    // ── Marketing actions ───────────────────────────────────────────
+    /// Create a marketing campaign.
+    MarketingCreate,
+    /// Edit a marketing campaign.
+    MarketingUpdate,
+    /// Delete a marketing campaign.
+    MarketingDelete,
+    /// Publish / activate a marketing campaign.
+    MarketingPublish,
+    /// Export marketing data.
+    MarketingExport,
+
+    // ── Social actions ──────────────────────────────────────────────
+    /// Update social media / feed config.
+    SocialUpdate,
+
+    // ── Settings (newer UI surface — short-form SETTINGS_UPDATE / SETTING_VIEW) ──────
+    /// Update platform settings. The DB may store either this variant
+    /// or `BASIC_SETTINGS_UPDATE` depending on which UI surface registered
+    /// the permission first — see `from_code` for the wire-code mapping.
+    SettingsUpdate,
+    /// Read settings page. The DB may store either this variant
+    /// or `BASIC_SETTINGS_VIEW` depending on which UI surface registered
+    /// the permission first — see `from_code` for the wire-code mapping.
+    SettingView,
 }
 
 impl Permission {
@@ -184,45 +243,65 @@ impl Permission {
     /// This is what the DBA stores and what the frontend receives.
     pub fn code(&self) -> &'static str {
         match self {
-            Self::PageDashboardView => "PAGE_DASHBOARD_VIEW",
+            Self::PageDashboardView => "DASHBOARD_VIEW",
 
-            Self::PageJobsView => "PAGE_JOBS_VIEW",
+            Self::PageJobsView => "JOBS_VIEW",
             Self::JobsCreate => "JOBS_CREATE",
             Self::JobsUpdate => "JOBS_UPDATE",
             Self::JobsDelete => "JOBS_DELETE",
             Self::JobsExport => "JOBS_EXPORT",
 
-            Self::PageFinanceView => "PAGE_FINANCE_VIEW",
+            Self::PageFinanceView => "FINANCE_VIEW",
             Self::FinanceEscrowRelease => "FINANCE_ESCROW_RELEASE",
             Self::FinanceExport => "FINANCE_EXPORT",
 
-            Self::PageInvoicesView => "PAGE_INVOICES_VIEW",
+            Self::PageInvoicesView => "INVOICES_VIEW",
             Self::InvoicesCreate => "INVOICES_CREATE",
             Self::InvoicesUpdate => "INVOICES_UPDATE",
             Self::InvoicesExport => "INVOICES_EXPORT",
 
-            Self::PageKycView => "PAGE_KYC_VIEW",
+            Self::PageKycView => "KYC_VIEW",
             Self::KycApprove => "KYC_APPROVE",
             Self::KycReject => "KYC_REJECT",
 
-            Self::PageReportsView => "PAGE_REPORTS_VIEW",
+            Self::PageReportsView => "REPORTS_VIEW",
             Self::ReportsExport => "REPORTS_EXPORT",
 
-            Self::PageUsersView => "PAGE_USERS_VIEW",
+            Self::PageUsersView => "USERS_VIEW",
             Self::UsersCreate => "USERS_CREATE",
             Self::UsersUpdate => "USERS_UPDATE",
             Self::UsersDelete => "USERS_DELETE",
 
-            Self::PagePermissionsView => "PAGE_PERMISSIONS_VIEW",
+            Self::PagePermissionsView => "PERMISSIONS_VIEW",
             Self::PermissionsUpdate => "PERMISSIONS_UPDATE",
 
-            Self::PageBasicSettingsView => "PAGE_BASIC_SETTINGS_VIEW",
+            Self::PageBasicSettingsView => "BASIC_SETTINGS_VIEW",
             Self::BasicSettingsUpdate => "BASIC_SETTINGS_UPDATE",
 
-            Self::PageServiceView => "PAGE_SERVICE_VIEW",
+            Self::PageServiceView => "SERVICE_VIEW",
             Self::ServiceCreate => "SERVICE_CREATE",
             Self::ServiceUpdate => "SERVICE_UPDATE",
             Self::ServiceDelete => "SERVICE_DELETE",
+
+            Self::BannerCreate => "BANNER_CREATE",
+            Self::BannerUpdate => "BANNER_UPDATE",
+            Self::BannerDelete => "BANNER_DELETE",
+
+            Self::CompaniesCreate => "COMPANIES_CREATE",
+            Self::CompaniesUpdate => "COMPANIES_UPDATE",
+            Self::CompaniesDelete => "COMPANIES_DELETE",
+            Self::CompaniesExport => "COMPANIES_EXPORT",
+
+            Self::MarketingCreate => "MARKETING_CREATE",
+            Self::MarketingUpdate => "MARKETING_UPDATE",
+            Self::MarketingDelete => "MARKETING_DELETE",
+            Self::MarketingPublish => "MARKETING_PUBLISH",
+            Self::MarketingExport => "MARKETING_EXPORT",
+
+            Self::SocialUpdate => "SOCIAL_UPDATE",
+
+            Self::SettingsUpdate => "SETTINGS_UPDATE",
+            Self::SettingView => "SETTING_VIEW",
         }
     }
 
@@ -233,45 +312,72 @@ impl Permission {
     /// was updated) instead of panicking at startup.
     pub fn from_code(code: &str) -> Option<Self> {
         match code {
-            "PAGE_DASHBOARD_VIEW" => Some(Self::PageDashboardView),
+            "DASHBOARD_VIEW" => Some(Self::PageDashboardView),
 
-            "PAGE_JOBS_VIEW" => Some(Self::PageJobsView),
+            "JOBS_VIEW" => Some(Self::PageJobsView),
             "JOBS_CREATE" => Some(Self::JobsCreate),
             "JOBS_UPDATE" => Some(Self::JobsUpdate),
             "JOBS_DELETE" => Some(Self::JobsDelete),
             "JOBS_EXPORT" => Some(Self::JobsExport),
 
-            "PAGE_FINANCE_VIEW" => Some(Self::PageFinanceView),
+            "FINANCE_VIEW" => Some(Self::PageFinanceView),
             "FINANCE_ESCROW_RELEASE" => Some(Self::FinanceEscrowRelease),
             "FINANCE_EXPORT" => Some(Self::FinanceExport),
 
-            "PAGE_INVOICES_VIEW" => Some(Self::PageInvoicesView),
+            "INVOICES_VIEW" => Some(Self::PageInvoicesView),
             "INVOICES_CREATE" => Some(Self::InvoicesCreate),
             "INVOICES_UPDATE" => Some(Self::InvoicesUpdate),
             "INVOICES_EXPORT" => Some(Self::InvoicesExport),
 
-            "PAGE_KYC_VIEW" => Some(Self::PageKycView),
+            "KYC_VIEW" => Some(Self::PageKycView),
             "KYC_APPROVE" => Some(Self::KycApprove),
             "KYC_REJECT" => Some(Self::KycReject),
 
-            "PAGE_REPORTS_VIEW" => Some(Self::PageReportsView),
+            "REPORTS_VIEW" => Some(Self::PageReportsView),
             "REPORTS_EXPORT" => Some(Self::ReportsExport),
 
-            "PAGE_USERS_VIEW" => Some(Self::PageUsersView),
+            "USERS_VIEW" => Some(Self::PageUsersView),
             "USERS_CREATE" => Some(Self::UsersCreate),
             "USERS_UPDATE" => Some(Self::UsersUpdate),
             "USERS_DELETE" => Some(Self::UsersDelete),
 
-            "PAGE_PERMISSIONS_VIEW" => Some(Self::PagePermissionsView),
+            "PERMISSIONS_VIEW" => Some(Self::PagePermissionsView),
             "PERMISSIONS_UPDATE" => Some(Self::PermissionsUpdate),
 
-            "PAGE_BASIC_SETTINGS_VIEW" => Some(Self::PageBasicSettingsView),
+            "BASIC_SETTINGS_VIEW" => Some(Self::PageBasicSettingsView),
             "BASIC_SETTINGS_UPDATE" => Some(Self::BasicSettingsUpdate),
 
-            "PAGE_SERVICE_VIEW" => Some(Self::PageServiceView),
+            "SERVICE_VIEW" => Some(Self::PageServiceView),
             "SERVICE_CREATE" => Some(Self::ServiceCreate),
             "SERVICE_UPDATE" => Some(Self::ServiceUpdate),
             "SERVICE_DELETE" => Some(Self::ServiceDelete),
+
+            "BANNER_CREATE" => Some(Self::BannerCreate),
+            "BANNER_UPDATE" => Some(Self::BannerUpdate),
+            "BANNER_DELETE" => Some(Self::BannerDelete),
+
+            "COMPANIES_CREATE" => Some(Self::CompaniesCreate),
+            "COMPANIES_UPDATE" => Some(Self::CompaniesUpdate),
+            "COMPANIES_DELETE" => Some(Self::CompaniesDelete),
+            "COMPANIES_EXPORT" => Some(Self::CompaniesExport),
+
+            "MARKETING_CREATE" => Some(Self::MarketingCreate),
+            "MARKETING_UPDATE" => Some(Self::MarketingUpdate),
+            "MARKETING_DELETE" => Some(Self::MarketingDelete),
+            "MARKETING_PUBLISH" => Some(Self::MarketingPublish),
+            "MARKETING_EXPORT" => Some(Self::MarketingExport),
+
+            "SOCIAL_UPDATE" => Some(Self::SocialUpdate),
+
+            // Newer-UI surface: `SETTINGS_UPDATE` → `SettingsUpdate`,
+            // `SETTING_VIEW` → `SettingView`. These are **independent
+            // variants** from the older `BASIC_SETTINGS_UPDATE` /
+            // `BASIC_SETTINGS_VIEW` pair — NOT aliases. The DB may
+            // store either form depending on which UI surface
+            // registered the permission first; both round-trip
+            // independently through `code()` / `from_code()`.
+            "SETTINGS_UPDATE" => Some(Self::SettingsUpdate),
+            "SETTING_VIEW" => Some(Self::SettingView),
 
             _ => None,
         }
@@ -664,6 +770,21 @@ mod tests {
             Permission::ServiceCreate,
             Permission::ServiceUpdate,
             Permission::ServiceDelete,
+            Permission::BannerCreate,
+            Permission::BannerUpdate,
+            Permission::BannerDelete,
+            Permission::CompaniesCreate,
+            Permission::CompaniesUpdate,
+            Permission::CompaniesDelete,
+            Permission::CompaniesExport,
+            Permission::MarketingCreate,
+            Permission::MarketingUpdate,
+            Permission::MarketingDelete,
+            Permission::MarketingPublish,
+            Permission::MarketingExport,
+            Permission::SocialUpdate,
+            Permission::SettingsUpdate,
+            Permission::SettingView,
         ];
         for p in samples {
             assert_eq!(Permission::from_code(p.code()), Some(p));
@@ -675,16 +796,18 @@ mod tests {
     #[test]
     fn permission_serializes_as_screaming_snake_case_code() {
         // Wire format is the code string, not the Rust variant name —
-        // this is what the frontend matches on.
+        // this is what the frontend matches on. `Page*View` variants
+        // carry a per-variant `#[serde(rename)]` that drops the `PAGE_`
+        // prefix to match `code()` and the DB wire format.
         let json = serde_json::to_string(&Permission::JobsCreate).unwrap();
         assert_eq!(json, "\"JOBS_CREATE\"");
 
         let json = serde_json::to_string(&Permission::PageDashboardView).unwrap();
-        assert_eq!(json, "\"PAGE_DASHBOARD_VIEW\"");
+        assert_eq!(json, "\"DASHBOARD_VIEW\"");
 
         let list =
             serde_json::to_string(&vec![Permission::PageJobsView, Permission::JobsCreate]).unwrap();
-        assert_eq!(list, "[\"PAGE_JOBS_VIEW\",\"JOBS_CREATE\"]");
+        assert_eq!(list, "[\"JOBS_VIEW\",\"JOBS_CREATE\"]");
     }
 
     #[test]
@@ -696,6 +819,6 @@ mod tests {
         assert!(!u.has_permission(Permission::PageUsersView));
 
         let codes = u.permission_codes();
-        assert_eq!(codes, vec!["PAGE_JOBS_VIEW", "JOBS_CREATE"]);
+        assert_eq!(codes, vec!["JOBS_VIEW", "JOBS_CREATE"]);
     }
 }

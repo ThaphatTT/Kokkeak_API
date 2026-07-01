@@ -38,7 +38,7 @@ use axum::{
     Json,
 };
 use chrono::{DateTime, Utc};
-use kokkak_application::admin_user::AdminInsertUserFullInput;
+use kokkak_application::admin_user::{AdminInsertUserFullInput, AdminUserListPagingInput};
 use kokkak_application::auth::{PasswordHasherPort, RegisterInput};
 use kokkak_application::user_role::{PermissionUpdateInput, UpdatePermissionsInput};
 use kokkak_common::error::AppError;
@@ -46,8 +46,8 @@ use kokkak_common::error_codes::ErrorCode;
 use kokkak_common::i18n::{current_locale, tr};
 use kokkak_common::response::{created, paginated, ApiResponse, PageMeta};
 use kokkak_domain::{
-    AdminInsertUserError, AdminInsertUserResult, PermissionUpdateRow, PermissionUserGroup,
-    RepoError, Role, UserListRow, UserRoleWithPermissions,
+    AdminInsertUserError, AdminInsertUserResult, Permission, PermissionUpdateRow,
+    PermissionUserGroup, RepoError, Role, UserRoleWithPermissions,
 };
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -105,17 +105,23 @@ pub async fn create_user_admin(
     user: AuthnUser,
     ValidatedJson(req): ValidatedJson<CreateUserRequest>,
 ) -> Result<Response, Response> {
-    // 1. RBAC: only admins / super_admins may create accounts here.
-    if !user.has_role(Role::Admin) && !user.has_role(Role::SuperAdmin) {
-        // AdminRequired carries the admin_required key — the admin
-        // page surfaces this directly to the operator. The message
-        // is pre-localized via the file-based catalog (no repo
-        // override for this message yet), then handed to AppError's
-        // Localized carrier so IntoResponse surfaces it verbatim.
-        let localized = tr("err_auth.admin_required", &current_locale(), &[]);
-        return Err(
-            ApiError::from(AppError::AdminRequired.with_message(localized)).into_response(),
-        );
+    // 1. RBAC — M15-prep: permission-based gate (was
+    //    `has_role(Admin || SuperAdmin)`). Fail-secure via
+    //    `AuthnUser::has_permission` (logs WARN + returns false on
+    //    cache/DB error).
+    if !user
+        .has_permission(Permission::UsersCreate, &state.permission_checker)
+        .await
+    {
+        let locale = current_locale();
+        let code_str = Permission::UsersCreate.code();
+        let localized = tr("err_auth.permission_denied", &locale, &[code_str]);
+        return Err(ApiError::from(AppError::Localized {
+            status: StatusCode::FORBIDDEN,
+            code: ErrorCode::PERMISSION_DENIED,
+            message: localized,
+        })
+        .into_response());
     }
 
     // 2. Parse the role. Unlike the public register endpoint, all
@@ -149,63 +155,112 @@ pub async fn create_user_admin(
 }
 
 // ============================================================================
-// M16: GET /api/v1/admin/users  (LIST — backed by SP_PERMISSION_USER_LIST)
+// M21: GET /api/v1/admin/users  (LIST — backed by SP_USER_LIST_PAGING)
 // ============================================================================
 //
 // Admin-only user listing. Backed by
-// `dbo.SP_PERMISSION_USER_LIST` (one row per user with permission
-// summary CSVs). Cursor pagination is applied in the application
-// service (`UserService::list_users`) on top of the SP result.
+// `dbo.SP_USER_LIST_PAGING` (page-based pagination + keyword /
+// status filters, joined against `[user_user_role]` / `[user_role]` /
+// `[user_position]` / `[master_position]`).
 //
-// **Scope**: this handler is a thin wrapper over
-// [`kokkak_application::user::UserService::list_users`]. The
-// permission module (`MssqlUserRoleRepository` /
-// `UserRoleRepository` / `UserRoleService`) is **not** touched
-// here — the per-user permissions endpoint below also reuses
-// the existing `UserRepository::find_by_id` path instead.
+// **Wire contract**:
+//   `GET /api/v1/admin/users?page=&page_size=&keyword=&user_status=`
+//   200 OK with envelope:
+//   ```json
+//   {
+//     "success": true,
+//     "data": {
+//       "items": [
+//         {
+//           "total_count": 123,
+//           "page": 1,
+//           "page_size": 20,
+//           "user_guid": "...",
+//           "full_name": "...",
+//           "phone": "...",
+//           "user_status": 1,
+//           "user_status_name": "Active",
+//           "role_name": "Admin, Finance Manager",
+//           "position_name": "Senior Technician"
+//         },
+//         ...
+//       ],
+//       "total_count": 123,
+//       "page": 1,
+//       "page_size": 20
+//     },
+//     "meta": {
+//       "limit": 20,
+//       "has_next": true,
+//       "next_cursor": "5"
+//     }
+//   }
+//   ```
+//
+// `meta` carries the conventional cursor/limit shape (uniform with
+// every other paginated endpoint); `next_cursor` is the **stringified
+// `page + 1`** so a keyset-style frontend can still walk pages by
+// passing it back as `page`. This is a deliberate bridge: the SP is
+// offset-based (legacy contract) but the wire envelope stays
+// cursor-shaped so a future keyset upgrade is a no-op for clients.
+//
+// ponytail: page-based SP + cursor-shaped envelope. Ceiling: when
+// the SP grows `@p_after_user_guid` for true keyset pagination
+// (project rule §11.4), swap `next_cursor` to encode that GUID
+// directly — no client change needed.
 
 /// Query parameters for the admin user listing.
 ///
-/// Mirrors `handlers::order::ListQuery` so the cursor-pagination
-/// contract is uniform across admin list endpoints (`limit` +
-/// opaque `after` cursor; `next_cursor` + `has_next` in the
-/// response meta).
-#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
+/// All fields are optional. `page` defaults to 1; `page_size` defaults
+/// to 20 and is hard-capped at 100 in the application layer. The
+/// `keyword` filter is free-form (LIKE '%keyword%' across name /
+/// phone / email + concatenated first+last). `user_status` is the raw
+/// `int` from `[user].user_status`; omit it to disable the filter.
+#[derive(Debug, Default, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListUsersQuery {
-    /// Opaque cursor returned by the previous page
-    /// (callers MUST treat as a black box).
-    pub after: Option<String>,
-    /// Max users per page. Defaults to 20, hard cap 100 so a
-    /// runaway client can't dump the whole table in one shot.
-    pub limit: Option<u32>,
+    /// 1-based page number. Defaults to 1; values < 1 are
+    /// clamped to 1.
+    pub page: Option<u32>,
+    /// Rows per page. Defaults to 20, hard cap 100 so a runaway
+    /// client can't dump the whole table in one shot.
+    pub page_size: Option<u32>,
+    /// Free-form search keyword. Empty / whitespace means
+    /// "no filter" (the SP receives `LIKE N'%%'`).
+    #[serde(default)]
+    pub keyword: Option<String>,
+    /// `[user].user_status` filter (raw int). `None` means
+    /// "all statuses" (the SP receives `NULL`).
+    ///
+    /// Note: the legacy SP uses `0 = Inactive`; the NEW_DB Rust
+    /// enum uses `0 = Pending`. The wire payload carries BOTH the
+    /// raw int AND the human-readable name (`user_status_name`) so
+    /// the frontend can display the legacy label without a remap.
+    pub user_status: Option<i32>,
 }
 
-/// One row in the admin user listing — 1:1 with
-/// `dbo.SP_PERMISSION_USER_LIST`'s SELECT list. CSVs in the SP
-/// (`role_codes`, `role_names`) are split into `Vec<String>` at
-/// the infra layer so the wire shape never carries CSV strings.
-///
-/// M16 round 2: the LIST SP (`SP_PERMISSION_USER_LIST`) no
-/// longer ships `permission_codes` (only the cheap
-/// `has_permission` boolean) — the full code list lives behind
-/// the detail endpoint
-/// (`GET /api/v1/admin/users/:guid/permissions`).
-pub type UserListItem = UserListRow;
+/// Response shape for the admin user listing — wraps the
+/// [`AdminUserListPagingPage`] from the application layer plus
+/// pagination metadata in the standard envelope.
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+pub struct ListUsersResponse {
+    /// Items on this page (rows from `SP_USER_LIST_PAGING`).
+    #[serde(flatten)]
+    pub page: kokkak_domain::admin_user::AdminUserListPagingPage,
+}
 
-/// `GET /api/v1/admin/users?after=&limit=`
+/// `GET /api/v1/admin/users?page=&page_size=&keyword=&user_status=`
 ///
 /// Admin-only listing of users. Backed by
-/// `dbo.SP_PERMISSION_USER_LIST` (one row per user). The wire
-/// payload (`Vec<UserListRow>`) and the pagination contract
-/// (`?after=&limit=`) are pinned; adding more columns to the
-/// SP only widens the row struct, never breaks the contract.
+/// `dbo.SP_USER_LIST_PAGING`. The wire payload (a single
+/// [`ListUsersResponse`] object) and the pagination contract
+/// (`?page=&page_size=`) are pinned.
 #[utoipa::path(
         get,
         path = "/api/v1/admin/users",
         tag = "admin",
         params(ListUsersQuery),
         responses(
-            (status = 200, description = "Page of users (placeholder until SP_USER_LIST lands)", body = Vec<UserListItem>),
+            (status = 200, description = "Page of users", body = ListUsersResponse),
             (status = 401, description = "Not authenticated", body = crate::openapi::ApiError),
             (status = 403, description = "Not an admin", body = crate::openapi::ApiError),
         ),
@@ -216,36 +271,62 @@ pub async fn list_users_admin(
     user: AuthnUser,
     Query(q): Query<ListUsersQuery>,
 ) -> Result<Response, Response> {
-    // 1. RBAC: only admins / super_admins may list users.
-    if !user.has_role(Role::Admin) && !user.has_role(Role::SuperAdmin) {
-        let localized = tr("err_auth.admin_required", &current_locale(), &[]);
-        return Err(
-            ApiError::from(AppError::AdminRequired.with_message(localized)).into_response(),
-        );
+    // 1. RBAC — same `PAGE_USERS_VIEW` gate as before.
+    if !user
+        .has_permission(Permission::PageUsersView, &state.permission_checker)
+        .await
+    {
+        let locale = current_locale();
+        let code_str = Permission::PageUsersView.code();
+        let localized = tr("err_auth.permission_denied", &locale, &[code_str]);
+        return Err(ApiError::from(AppError::Localized {
+            status: StatusCode::FORBIDDEN,
+            code: ErrorCode::PERMISSION_DENIED,
+            message: localized,
+        })
+        .into_response());
     }
 
-    // 2. Cap the limit so a runaway client can't dump the whole
-    //    table in one shot. 100 covers the admin UI's "show 50 / 100"
-    //    paginators with headroom.
-    let limit = q.limit.unwrap_or(20).clamp(1, 100);
+    // 2. Build the application input. Defaults: page=1,
+    //    page_size=20 (matches the SP's own defaults).
+    let input = AdminUserListPagingInput {
+        keyword: q.keyword.unwrap_or_default(),
+        user_status: q.user_status,
+        page: q.page.unwrap_or(1),
+        page_size: q.page_size.unwrap_or(20),
+    };
 
-    // 3. Delegate to the application service. The placeholder
-    //    returns an empty page + `next_cursor = None` until the SP
-    //    arrives — the wire shape is stable so swapping in the
-    //    real implementation doesn't require any client-side
-    //    change.
-    //    M19: forward `user.id()` as caller for the SP admin gate.
-    let page = match state.user.list_users(q.after, limit, user.id()).await {
+    // 3. Delegate to AdminUserService (M21). The service applies
+    //    page >= 1, page_size in 1..=100, and trims `keyword`.
+    let page = match state.admin_users.list_users_paging(user.id(), input).await {
         Ok(p) => p,
         Err(e) => return Err(ApiError::from(e).into_localized_response(&state).await),
     };
 
-    let meta = PageMeta {
-        limit: limit as usize,
-        has_next: page.next_cursor.is_some(),
-        next_cursor: page.next_cursor,
+    // 4. Bridge to the cursor-shaped envelope.
+    //
+    //    `next_cursor` is the next page number as a string so the
+    //    frontend can keep using the conventional
+    //    `?after=<cursor>` shape; `has_next` is true when more
+    //    pages remain (computed from `total_count` / `page_size`).
+    let total_pages = if page.page_size > 0 {
+        (page.total_count + page.page_size as i64 - 1) / page.page_size as i64
+    } else {
+        0
     };
-    Ok((StatusCode::OK, paginated(page.items, meta)).into_response())
+    let has_next = (page.page as i64) < total_pages;
+    let next_cursor = if has_next {
+        Some((page.page + 1).to_string())
+    } else {
+        None
+    };
+
+    let meta = PageMeta {
+        limit: page.page_size as usize,
+        has_next,
+        next_cursor,
+    };
+    Ok((StatusCode::OK, paginated(ListUsersResponse { page }, meta)).into_response())
 }
 
 // ============================================================================
@@ -309,12 +390,21 @@ pub async fn list_user_permissions_admin(
     user: AuthnUser,
     Path(guid): Path<Uuid>,
 ) -> Result<Response, Response> {
-    // 1. RBAC: only admins / super_admins may inspect per-user perms.
-    if !user.has_role(Role::Admin) && !user.has_role(Role::SuperAdmin) {
-        let localized = tr("err_auth.admin_required", &current_locale(), &[]);
-        return Err(
-            ApiError::from(AppError::AdminRequired.with_message(localized)).into_response(),
-        );
+    // 1. RBAC — M15-prep: viewing the per-user permission matrix
+    //    needs `PERMISSIONS_VIEW` (admin / override).
+    if !user
+        .has_permission(Permission::PagePermissionsView, &state.permission_checker)
+        .await
+    {
+        let locale = current_locale();
+        let code_str = Permission::PagePermissionsView.code();
+        let localized = tr("err_auth.permission_denied", &locale, &[code_str]);
+        return Err(ApiError::from(AppError::Localized {
+            status: StatusCode::FORBIDDEN,
+            code: ErrorCode::PERMISSION_DENIED,
+            message: localized,
+        })
+        .into_response());
     }
 
     // 2. axum's `Path<Uuid>` extractor already rejected any
@@ -418,13 +508,22 @@ pub async fn list_permissions(
     user: AuthnUser,
     Query(q): Query<PermissionsQuery>,
 ) -> Result<Response, Response> {
-    // 1. RBAC: only admins / super_admins may inspect the matrix.
-    if !user.has_role(Role::Admin) && !user.has_role(Role::SuperAdmin) {
+    // 1. RBAC — M15-prep: reading the role × permission matrix is
+    //    guarded by the same page-visibility code as the per-user
+    //    view.
+    if !user
+        .has_permission(Permission::PagePermissionsView, &state.permission_checker)
+        .await
+    {
         let locale = current_locale();
-        let localized = tr("err_auth.admin_required", &locale, &[]);
-        return Err(
-            ApiError::from(AppError::AdminRequired.with_message(localized)).into_response(),
-        );
+        let code_str = Permission::PagePermissionsView.code();
+        let localized = tr("err_auth.permission_denied", &locale, &[code_str]);
+        return Err(ApiError::from(AppError::Localized {
+            status: StatusCode::FORBIDDEN,
+            code: ErrorCode::PERMISSION_DENIED,
+            message: localized,
+        })
+        .into_response());
     }
 
     // 2. Validate the mode literal. We only require it to be
@@ -672,13 +771,22 @@ pub async fn update_permissions_admin(
     user: AuthnUser,
     ValidatedJson(req): ValidatedJson<UpdatePermissionsRequest>,
 ) -> Result<Response, Response> {
-    // 1. RBAC — Admin or SuperAdmin only.
-    if !user.has_role(Role::Admin) && !user.has_role(Role::SuperAdmin) {
+    // 1. RBAC — M15-prep: writing to the matrix needs the explicit
+    //    `PERMISSIONS_UPDATE` action code (a viewer of the matrix
+    //    page is NOT automatically allowed to mutate it).
+    if !user
+        .has_permission(Permission::PermissionsUpdate, &state.permission_checker)
+        .await
+    {
         let locale = current_locale();
-        let localized = tr("err_auth.admin_required", &locale, &[]);
-        return Err(
-            ApiError::from(AppError::AdminRequired.with_message(localized)).into_response(),
-        );
+        let code_str = Permission::PermissionsUpdate.code();
+        let localized = tr("err_auth.permission_denied", &locale, &[code_str]);
+        return Err(ApiError::from(AppError::Localized {
+            status: StatusCode::FORBIDDEN,
+            code: ErrorCode::PERMISSION_DENIED,
+            message: localized,
+        })
+        .into_response());
     }
 
     // 2. Per-item GUID shape — `validator`'s length check
@@ -1138,16 +1246,35 @@ pub async fn admin_insert_user_full(
     user: AuthnUser,
     ValidatedJson(req): ValidatedJson<AdminInsertUserRequest>,
 ) -> Result<Response, Response> {
-    // 1. RBAC — Admin or SuperAdmin only. The middleware also
-    //    gates this, but we re-check here so the localized
-    //    `admin_required` message surfaces even if the
-    //    middleware config changes.
-    if !user.has_role(Role::Admin) && !user.has_role(Role::SuperAdmin) {
+    // 1. RBAC — M15-prep complete: all 6 admin handlers in this
+    //    file now use `has_permission(Permission::Xxx)` instead of
+    //    `has_role(Admin || SuperAdmin)`. Non-admin users with an
+    //    override (or a custom role mapping the permission) can
+    //    therefore reach this endpoint. The underlying TVF still
+    //    does the final role+override check per
+    //    `user_permission_override` row — we just stopped
+    //    short-circuiting it at the handler.
+    if !user
+        .has_permission(Permission::UsersCreate, &state.permission_checker)
+        .await
+    {
         let locale = current_locale();
-        let localized = tr("err_auth.admin_required", &locale, &[]);
-        return Err(
-            ApiError::from(AppError::AdminRequired.with_message(localized)).into_response(),
-        );
+        // tr's args parameter is `&[&str]` — `Permission::code()`
+        // already returns `&'static str`, so wrap a bare reference
+        // (NOT a double-ref like `&&str` which won't coerce).
+        let code_str = Permission::UsersCreate.code();
+        let localized = tr("err_auth.permission_denied", &locale, &[code_str]);
+        // Use `AppError::Localized` so the response carries the
+        // stable `permission_denied` code (in
+        // `ErrorCode::PERMISSION_DENIED`) rather than the generic
+        // `forbidden`. Mobile / BFF clients can then branch on the
+        // exact code without parsing the message.
+        return Err(ApiError::from(AppError::Localized {
+            status: StatusCode::FORBIDDEN,
+            code: ErrorCode::PERMISSION_DENIED,
+            message: localized,
+        })
+        .into_response());
     }
 
     // 2. DTO → application input. The `schedule` is the only

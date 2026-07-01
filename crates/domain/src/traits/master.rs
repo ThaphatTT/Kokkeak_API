@@ -106,17 +106,29 @@ pub trait MasterDropdownRepository: Send + Sync {
     /// Backed by `dbo.SP_AUTOCOMPLETE_MASTER_POSITION_GET`. Returns
     /// at most `take` rows (SP clamps `1..=100`, default `20`,
     /// `None` → `20`). The result carries the extra columns
-    /// (`code`, `description`, `level`, `status`) so the admin UI
-    /// can render rich autocomplete results, not just a label/value
-    /// pair — hence the sibling DTO [`MasterPositionAutocompleteRow`]
-    /// instead of the generic [`MasterDropdownRow`].
+    /// (`code`, `description`, `level`, `status`, joined team +
+    /// department) so the admin UI can render rich autocomplete
+    /// results, not just a label/value pair — hence the sibling
+    /// DTO [`MasterPositionAutocompleteRow`] instead of the generic
+    /// [`MasterDropdownRow`].
     ///
-    /// `keyword: None` or blank → top `take` active rows (SP
-    /// no-filter branch). `keyword: Some(text)` → prefix-LIKE on
-    /// `master_position_name` + `master_position_code`. The SP
-    /// already filters to `status = 1`; no status param.
+    /// - `user_department_team_guid`: `None` / blank → no team filter
+    ///   (every active position across every team); `Some(guid)`
+    ///   narrows to positions belonging to that team. Mirrors the
+    ///   `autocomplete_user_department_team` filter pattern.
+    /// - `keyword`: `None` / blank → top `take` active rows (SP
+    ///   no-filter branch). `Some(text)` → prefix-LIKE on
+    ///   `master_position_name` + `master_position_code`.
+    /// - `take`: `None` → SP default (20); `Some(n)` with `n ≤ 0`
+    ///   → SP default (20); `Some(n > 100)` → SP clamps to 100.
+    ///   The infra adapter re-clamps `take` to `[1, 100]` so the
+    ///   trait contract is self-documenting (same pattern as every
+    ///   other autocomplete method on this trait).
+    ///
+    /// The SP already filters to `status = 1`; no status param.
     async fn autocomplete_master_positions(
         &self,
+        user_department_team_guid: Option<&str>,
         keyword: Option<&str>,
         take: Option<i32>,
     ) -> Result<Vec<MasterPositionAutocompleteRow>, RepoError>;

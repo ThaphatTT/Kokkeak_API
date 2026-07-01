@@ -41,11 +41,12 @@ use axum::{
     Json,
 };
 use kokkak_common::error::AppError;
+use kokkak_common::error_codes::ErrorCode;
 use kokkak_common::i18n::{current_locale, tr};
 use kokkak_common::response::{paginated, ApiResponse, PageMeta};
 use kokkak_domain::permission::PermissionOverrideUpdateItem;
 use kokkak_domain::traits::user::RepoError;
-use kokkak_domain::{PermissionUserGroup, PermissionUserListRow, Role};
+use kokkak_domain::{Permission, PermissionUserGroup, PermissionUserListRow};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -95,12 +96,20 @@ pub async fn list_users_permission(
     user: AuthnUser,
     Query(q): Query<ListUsersQuery>,
 ) -> Result<Response, Response> {
-    // 1. RBAC: only admins / super_admins may list users here.
-    if !user.has_role(Role::Admin) && !user.has_role(Role::SuperAdmin) {
-        let localized = tr("err_auth.admin_required", &current_locale(), &[]);
-        return Err(
-            ApiError::from(AppError::AdminRequired.with_message(localized)).into_response(),
-        );
+    // 1. RBAC — M15-prep: page-visibility code `PERMISSIONS_VIEW`.
+    if !user
+        .has_permission(Permission::PagePermissionsView, &state.permission_checker)
+        .await
+    {
+        let locale = current_locale();
+        let code_str = Permission::PagePermissionsView.code();
+        let localized = tr("err_auth.permission_denied", &locale, &[code_str]);
+        return Err(ApiError::from(AppError::Localized {
+            status: StatusCode::FORBIDDEN,
+            code: ErrorCode::PERMISSION_DENIED,
+            message: localized,
+        })
+        .into_response());
     }
 
     // 2. Cap the limit so a runaway client can't dump the whole
@@ -167,12 +176,21 @@ pub async fn list_user_permissions_permission(
     user: AuthnUser,
     Path(guid): Path<Uuid>,
 ) -> Result<Response, Response> {
-    // 1. RBAC: only admins / super_admins may inspect per-user perms.
-    if !user.has_role(Role::Admin) && !user.has_role(Role::SuperAdmin) {
-        let localized = tr("err_auth.admin_required", &current_locale(), &[]);
-        return Err(
-            ApiError::from(AppError::AdminRequired.with_message(localized)).into_response(),
-        );
+    // 1. RBAC — M15-prep: same `PERMISSIONS_VIEW` gate as
+    //    `list_users_permission`.
+    if !user
+        .has_permission(Permission::PagePermissionsView, &state.permission_checker)
+        .await
+    {
+        let locale = current_locale();
+        let code_str = Permission::PagePermissionsView.code();
+        let localized = tr("err_auth.permission_denied", &locale, &[code_str]);
+        return Err(ApiError::from(AppError::Localized {
+            status: StatusCode::FORBIDDEN,
+            code: ErrorCode::PERMISSION_DENIED,
+            message: localized,
+        })
+        .into_response());
     }
 
     // 2. axum's `Path<Uuid>` extractor already rejected any
@@ -327,12 +345,21 @@ pub async fn update_permission_overrides(
     user: AuthnUser,
     Json(req): Json<UpdatePermissionOverridesRequest>,
 ) -> Result<Response, Response> {
-    // 1. RBAC — Admin or SuperAdmin only.
-    if !user.has_role(Role::Admin) && !user.has_role(Role::SuperAdmin) {
-        let localized = tr("err_auth.admin_required", &current_locale(), &[]);
-        return Err(
-            ApiError::from(AppError::AdminRequired.with_message(localized)).into_response(),
-        );
+    // 1. RBAC — M15-prep: writing override rows needs the action
+    //    code `PERMISSIONS_UPDATE`, not just the page-visibility.
+    if !user
+        .has_permission(Permission::PermissionsUpdate, &state.permission_checker)
+        .await
+    {
+        let locale = current_locale();
+        let code_str = Permission::PermissionsUpdate.code();
+        let localized = tr("err_auth.permission_denied", &locale, &[code_str]);
+        return Err(ApiError::from(AppError::Localized {
+            status: StatusCode::FORBIDDEN,
+            code: ErrorCode::PERMISSION_DENIED,
+            message: localized,
+        })
+        .into_response());
     }
 
     // 2. List-level validation — 1..=MAX items. Fail fast

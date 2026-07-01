@@ -137,11 +137,13 @@ mod tests {
     }
 
     #[test]
-    fn supported_locales_are_th_en_lo() {
-        let supported: HashMap<&str, ()> = ["th", "en", "lo"].iter().map(|s| (*s, ())).collect();
+    fn supported_locales_are_th_en_lo_zh() {
+        let supported: HashMap<&str, ()> =
+            ["th", "en", "lo", "zh"].iter().map(|s| (*s, ())).collect();
         assert!(supported.contains_key("th"));
         assert!(supported.contains_key("en"));
         assert!(supported.contains_key("lo"));
+        assert!(supported.contains_key("zh"));
         assert!(!supported.contains_key("zz"));
     }
 }

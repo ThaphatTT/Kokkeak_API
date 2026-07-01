@@ -18,6 +18,7 @@ use kokkak_domain::{
 };
 use kokkak_infra::auth::jwt::JwtService;
 use kokkak_infra::image_processor::ImageProcessor;
+use kokkak_infra::permission_checker::PermissionChecker;
 
 /// Internal bridge: takes a `&dyn ChatRepository` and exposes
 /// `is_participant` via the blanket `ChatMembership for T: ChatRepository`
@@ -106,6 +107,12 @@ pub struct AppState {
     /// `state.image.process_and_store(...)` for each
     /// `*_img_b64` field the caller sent.
     pub image: Arc<ImageProcessor>,
+
+    /// M15-prep: per-permission gating checker. Composes
+    /// `MssqlPermissionRepository` + `RedisPermissionCache`.
+    /// Replaces the coarse `has_role(Admin || SuperAdmin)` checks
+    /// at admin endpoints with `has_permission(Permission::Xxx)`.
+    pub permission_checker: Arc<PermissionChecker>,
 }
 
 /// Chat state bundle — the service + the local broadcast
@@ -219,6 +226,7 @@ impl AppState {
         settings: Arc<Settings>,
         storage: Arc<dyn Storage>,
         image: Arc<ImageProcessor>,
+        permission_checker: Arc<PermissionChecker>,
     ) -> Self {
         Self {
             auth,
@@ -238,6 +246,7 @@ impl AppState {
             settings,
             storage,
             image,
+            permission_checker,
         }
     }
 
@@ -262,6 +271,7 @@ impl AppState {
         settings: Arc<Settings>,
         storage: Arc<dyn Storage>,
         image: Arc<ImageProcessor>,
+        permission_checker: Arc<PermissionChecker>,
     ) -> Self {
         let chat_handle = ChatHandle {
             service: chat,
@@ -285,6 +295,7 @@ impl AppState {
             settings,
             storage,
             image,
+            permission_checker,
         }
     }
 }
