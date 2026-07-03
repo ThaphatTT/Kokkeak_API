@@ -31,7 +31,13 @@ axum = { version = "0.7", features = ["macros", "ws"] }
 # tower feature needed for that; `LoadShedLayer` was rejected
 # because its `BoxError` doesn't compose with axum's router.)
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.6", features = ["trace", "cors", "compression-br", "compression-deflate", "compression-gzip", "timeout", "set-header", "limit"] }
+# T-23: `fs` feature unlocks `tower_http::services::ServeDir` for
+# the `/files/*` static route when LocalStorage is wired.
+# T-16: `limit` feature enables `tower_http::RequestBodyLimitLayer`.
+# (Concurrency cap uses `tokio::sync::Semaphore` directly — no
+# tower feature needed for that; `LoadShedLayer` was rejected
+# because its `BoxError` doesn't compose with axum's router.)
+tower-http = { version = "0.6", features = ["trace", "cors", "compression-br", "compression-deflate", "compression-gzip", "timeout", "set-header", "limit", "fs"] }
 hyper = "1"
 
 # Serialization
@@ -85,6 +91,15 @@ webp   = "0.3"
 # alongside the JSON DTO (the alternative — multipart — is
 # explicitly NOT used per project rules).
 base64 = "0.22"
+
+# T-23-b: HMAC-SHA256 signing for `/files/*` URLs (KYC
+# documents, see AGENTS.md §21.7 — NIST 800-175B acceptable
+# primitives). The RustCrypto crate family is already in the
+# dep graph via `sha2` (LocalStorage digest) + `subtle`
+# (argon2id constant-time compare); adding `hmac` keeps us in
+# the same tree so no new crypto vendors land.
+hmac = "0.12"
+sha2 = "0.10"
 
 # ---- M2: Auth (argon2 + JWT) ----
 argon2 = { version = "0.5", default-features = false, features = ["std"] }

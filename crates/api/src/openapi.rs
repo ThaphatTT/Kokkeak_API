@@ -75,10 +75,11 @@ use crate::handlers;
                         handlers::payment::list_payouts_admin,
                         handlers::payment::mark_payout_paid_admin,
                         handlers::admin::create_user_admin,
-                        handlers::admin::admin_insert_user_full,
-                        handlers::admin::list_users_admin,
-                        handlers::admin::list_user_permissions_admin,
-                        handlers::admin::get_user_detail_full_admin,
+                                                handlers::admin::admin_insert_user_full,
+                                                handlers::admin::admin_update_user_full,
+                                                handlers::admin::list_users_admin,
+                                                handlers::admin::list_user_permissions_admin,
+                                                handlers::admin::get_user_detail_full_admin,
                                 handlers::admin::list_permissions,
                                 handlers::admin::update_permissions_admin,
                 // ---- Permission (M18: batch override upsert) ----
@@ -103,10 +104,13 @@ use crate::handlers;
                                                 kokkak_domain::MasterPositionAutocompleteRow,
                         handlers::admin::CreateUserRequest,
                         // M20-b: rich admin user creation (SP_USER_INSERT_FULL)
-                        handlers::admin::AdminInsertUserRequest,
-                        handlers::admin::AdminInsertUserResponse,
-                        handlers::admin::WeeklyScheduleDto,
-                        handlers::admin::DayScheduleDto,
+                                                handlers::admin::AdminInsertUserRequest,
+                                                handlers::admin::AdminInsertUserResponse,
+                                                // M22-b: rich admin user update (SP_USER_UPDATE_FULL)
+                                                handlers::admin::AdminUpdateUserRequest,
+                                                handlers::admin::AdminUpdateUserResponse,
+                                                handlers::admin::WeeklyScheduleDto,
+                                                handlers::admin::DayScheduleDto,
                         // M22: rich admin user detail (SP_USER_DETAIL_FULL_GET)
                         kokkak_domain::AdminUserDetail,
                         kokkak_domain::AdminUserDetailUsername,

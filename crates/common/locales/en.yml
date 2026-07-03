@@ -120,4 +120,5 @@ err_admin_user:
   work_time_required: "working day must have start_time and end_time"
   admin_role_not_found: "role ADMIN not found or inactive"
   employee_role_not_found: "role EMPLOYEE not found or inactive"
+  user_not_found: "user not found or deleted"
   image_invalid: 'image upload failed for field "{field}"'

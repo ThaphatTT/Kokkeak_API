@@ -137,6 +137,9 @@ async fn make_app() -> (axum::Router, Arc<MssqlTranslationRepository>) {
         kokkak_domain::HealthRegistry::new(),
         Arc::new(Settings::default()),
         Arc::new(MemoryStorage::new()),
+        Arc::from(""),
+        Arc::from(""),
+        600,
     );
     let app = build_router(state);
     (app, repo)

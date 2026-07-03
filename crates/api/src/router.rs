@@ -5,7 +5,7 @@ use std::sync::Arc;
 use axum::{
     middleware::from_fn,
     response::IntoResponse,
-    routing::{get, post},
+    routing::{get, post, put},
     Json, Router,
 };
 use utoipa::OpenApi;
@@ -177,14 +177,21 @@ pub fn build(state: AppState) -> Router {
     // the lighter flow when only the basic fields are needed.
     //
     // M22: Read-side counterpart to M20-b —
-    // (`GET /api/v1/admin/users/:guid/detail`, backed by
-    // `dbo.SP_USER_DETAIL_FULL_GET`). Returns the same admin
-    // form data the create flow accepts, with every related
-    // sub-block (login / company / roles / position / salary /
-    // schedule / bank account / four attachments) as nested
-    // objects. Same `PageUsersView` RBAC as the user list —
-    // viewing the page list implies viewing any individual
-    // user's detail.
+    //    (`GET /api/v1/admin/users/:guid/detail`, backed by
+    //    `dbo.SP_USER_DETAIL_FULL_GET`). Returns the same admin
+    //    form data the create flow accepts, with every related
+    //    sub-block (login / company / roles / position / salary /
+    //    schedule / bank account / four attachments) as nested
+    //    objects. Same `PageUsersView` RBAC as the user list —
+    //    viewing the page list implies viewing any individual
+    //    user's detail.
+    //
+    // M22-b: Write-side counterpart to M22 —
+    //    (`PUT /api/v1/admin/users/:guid/full`, backed by
+    //    `dbo.SP_USER_UPDATE_FULL`). Same wire shape as the
+    //    create endpoint (minus the password), with the target
+    //    GUID on the URL path. RBAC: `Permission::UsersUpdate`
+    //    (matches the SP's server-side check).
     let admin_users_routes = Router::new()
         .route(
             "/api/v1/admin/users",
@@ -201,6 +208,10 @@ pub fn build(state: AppState) -> Router {
         .route(
             "/api/v1/admin/users/:guid/detail",
             get(handlers::admin::get_user_detail_full_admin),
+        )
+        .route(
+            "/api/v1/admin/users/:guid/full",
+            put(handlers::admin::admin_update_user_full),
         )
         .layer(from_fn(admin_flag(Arc::new(state.clone()))));
 

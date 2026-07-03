@@ -115,6 +115,7 @@ err_admin_user:
   position_not_found: "ไม่พบ position_guid หรือไม่ได้ใช้งาน"
   invalid_salary: "จำนวนเงินเดือนต้องไม่ติดลบ"
   work_time_required: "วันทำงานต้องระบุ start_time และ end_time"
-  admin_role_not_found: "ไม่พบ role ADMIN หรือไม่ได้ใช้งาน"
-  employee_role_not_found: "ไม่พบ role EMPLOYEE หรือไม่ได้ใช้งาน"
-  image_invalid: 'อัปโหลดรูปไม่สำเร็จสำหรับฟิลด์ "{field}"'
+  admin_role_not_found: "ไม่พบ role ADMIN หรือ role ไม่ได้ใช้งาน"
+  employee_role_not_found: "ไม่พบ role EMPLOYEE หรือ role ไม่ได้ใช้งาน"
+  user_not_found: "ไม่พบผู้ใช้หรือผู้ใช้ถูกลบไปแล้ว"
+  image_invalid: 'อัปโหลดรูปภาพไม่สำเร็จสำหรับฟิลด์ "{field}"'

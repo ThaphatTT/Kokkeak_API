@@ -30,16 +30,25 @@
 //!    plaintext never reaches the DB driver.
 //! 4. **Build** [`AdminInsertUserRequest`] and delegate to
 //!    [`UserRepository::admin_insert_full`].
+//!
+//! ## M22-b: `admin_update_full`
+//!
+//! Write-side counterpart to M20-b. Same actor resolution +
+//! schedule validation, but **no password hashing** — the
+//! update SP never touches the password column. The handler
+//! gates on [`Permission::UsersUpdate`]; the SP re-checks
+//! `USERS_UPDATE` server-side as defense-in-depth.
 
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 pub use kokkak_domain::admin_user::{
-    AdminInsertUserError, AdminInsertUserRequest, AdminInsertUserResult, AdminUserDetail,
-    AdminUserDetailAttachment, AdminUserDetailBankAccount, AdminUserDetailCompany,
-    AdminUserDetailCountry, AdminUserDetailPosition, AdminUserDetailProfileImage,
-    AdminUserDetailRoles, AdminUserDetailSalary, AdminUserDetailScope, AdminUserDetailUsername,
-    AdminUserListPagingInput, AdminUserListPagingPage, DaySchedule, WeeklySchedule,
+    AdminInsertUserError, AdminInsertUserRequest, AdminInsertUserResult, AdminUpdateUserError,
+    AdminUpdateUserRequest, AdminUpdateUserResult, AdminUserDetail, AdminUserDetailAttachment,
+    AdminUserDetailBankAccount, AdminUserDetailCompany, AdminUserDetailCountry,
+    AdminUserDetailPosition, AdminUserDetailProfileImage, AdminUserDetailRoles,
+    AdminUserDetailSalary, AdminUserDetailScope, AdminUserDetailUsername, AdminUserListPagingInput,
+    AdminUserListPagingPage, DaySchedule, WeeklySchedule,
 };
 use kokkak_domain::traits::user::RepoError;
 use kokkak_domain::UserRepository;
@@ -92,6 +101,78 @@ pub struct AdminInsertUserFullInput {
     /// **Plaintext** password — the service hashes it before
     /// hitting the SP. The handler never stores the plaintext.
     pub password: String,
+
+    pub profile_img_path: Option<String>,
+
+    pub company_guid: Option<String>,
+    pub company_name: Option<String>,
+    pub company_tel: Option<String>,
+    pub company_type: Option<i32>,
+    pub company_status: i32,
+
+    pub department_guid: Option<String>,
+    pub department_team_guid: Option<String>,
+
+    pub position_guid: Option<String>,
+    pub position_start_at: Option<DateTime<Utc>>,
+
+    pub salary_amount: Option<Decimal>,
+    pub salary_currency: Option<String>,
+
+    pub schedule: WeeklySchedule,
+
+    pub bank_name: Option<String>,
+    pub bank_code: Option<String>,
+    pub bank_account_no: Option<String>,
+    pub bank_account_name: Option<String>,
+    pub bank_book_img_path: Option<String>,
+
+    pub id_card_front_path: Option<String>,
+    pub id_card_back_path: Option<String>,
+    pub proof_of_address_path: Option<String>,
+    pub source_of_funds_statement_path: Option<String>,
+}
+
+/// Input for `AdminUserService::admin_update_full` (M22-b).
+///
+/// Mirrors [`AdminInsertUserFullInput`] 1:1 except:
+/// - `user_guid` is **required** (the URL path carries it; the
+///   service signature keeps it on the input struct so the
+///   handler's DTO → input mapping stays flat).
+/// - **No password field** — password reset is a separate flow.
+///
+/// Field names match the SP parameter names verbatim so the
+/// repo layer can pass them through without rename.
+#[derive(Debug, Clone)]
+#[allow(missing_docs)]
+pub struct AdminUpdateUserFullInput {
+    /// The `[user].user_guid` to update.
+    pub user_guid: String,
+    pub first_name: String,
+    pub last_name: String,
+    pub id_card: Option<String>,
+    pub tel: Option<String>,
+    pub email: String,
+    pub gender: Option<String>,
+
+    pub country_guid: Option<String>,
+    pub province: Option<String>,
+    pub district: Option<String>,
+    pub sub_district: Option<String>,
+    pub village: Option<String>,
+    pub post: Option<String>,
+
+    pub description: Option<String>,
+
+    pub is_foreign: bool,
+    pub is_customer_company: bool,
+    pub is_customer: bool,
+    pub is_admin: bool,
+    pub is_employee: bool,
+    pub is_freelance: bool,
+    pub status: i32,
+
+    pub username: String,
 
     pub profile_img_path: Option<String>,
 
@@ -339,6 +420,113 @@ impl AdminUserService {
         self.users
             .get_user_detail_full(user_guid, actor_user_guid)
             .await
+    }
+
+    /// M22-b: admin user update via `SP_USER_UPDATE_FULL`.
+    ///
+    /// Write-side counterpart to [`Self::admin_insert_full`].
+    /// Updates the matching `[user]` row + linked
+    /// `[user_username]` row in one transaction.
+    ///
+    /// ## Flow
+    ///
+    /// 1. **Resolve actor**: `find_username_guid_by_user_guid(jwt.id)`
+    ///    maps the JWT's `user_guid` → the SP's required
+    ///    `user_username_guid`. Returns [`AdminUpdateUserError`]
+    ///    with `actor_not_found` if the admin is missing / suspended.
+    /// 2. **Validate working schedule**: same
+    ///    `WORK_TIME_REQUIRED` short-circuit as the insert flow.
+    /// 3. **Build** [`AdminUpdateUserRequest`] and delegate to
+    ///    [`UserRepository::admin_update_full`]. No password hashing
+    ///    — the SP never sees the password column on update.
+    ///
+    /// `actor_user_guid` is the JWT's `user_guid`. On failure,
+    /// returns the structured [`AdminUpdateUserError`] with the
+    /// SP's `code` + `message`. The handler maps `code` → HTTP
+    /// status + `ErrorCode` string.
+    pub async fn admin_update_full(
+        &self,
+        actor_user_guid: Uuid,
+        input: AdminUpdateUserFullInput,
+    ) -> Result<AdminUpdateUserResult, AdminUpdateUserError> {
+        // 1. Resolve actor: JWT user_guid → user_username_guid.
+        //
+        // Mirrors the insert flow. We short-circuit with the same
+        // codes the SP would emit (ACTOR_NOT_FOUND) so the handler
+        // can use a single mapping table.
+        let actor_user_username_guid = self
+            .users
+            .find_username_guid_by_user_guid(actor_user_guid)
+            .await
+            .map_err(|e| AdminUpdateUserError::new("internal", format!("actor lookup: {e}")))?
+            .ok_or_else(|| {
+                AdminUpdateUserError::new(
+                    "actor_not_found",
+                    "actor user_username_guid not found or inactive",
+                )
+            })?;
+
+        // 2. Validate working schedule. Same check as insert —
+        //    short-circuits the SP round-trip on a common
+        //    operator typo.
+        if let Err(day) = schedule_missing_times(&input.schedule) {
+            return Err(AdminUpdateUserError::new(
+                "work_time_required",
+                format!("working day must have start_time and end_time ({day})"),
+            ));
+        }
+
+        // 3. Build the SP input + delegate to the repo. No password
+        //    hashing — the update SP doesn't touch the column.
+        let req = AdminUpdateUserRequest {
+            actor_user_username_guid,
+            user_guid: input.user_guid,
+            first_name: input.first_name,
+            last_name: input.last_name,
+            id_card: input.id_card,
+            tel: input.tel,
+            email: input.email,
+            gender: input.gender,
+            country_guid: input.country_guid,
+            province: input.province,
+            district: input.district,
+            sub_district: input.sub_district,
+            village: input.village,
+            post: input.post,
+            description: input.description,
+            is_foreign: input.is_foreign,
+            is_customer_company: input.is_customer_company,
+            is_customer: input.is_customer,
+            is_admin: input.is_admin,
+            is_employee: input.is_employee,
+            is_freelance: input.is_freelance,
+            status: if input.status == 0 { 0 } else { 1 },
+            username: input.username,
+            profile_img_path: input.profile_img_path,
+            company_guid: input.company_guid,
+            company_name: input.company_name,
+            company_tel: input.company_tel,
+            company_type: input.company_type,
+            company_status: if input.company_status == 0 { 0 } else { 1 },
+            department_guid: input.department_guid,
+            department_team_guid: input.department_team_guid,
+            position_guid: input.position_guid,
+            position_start_at: input.position_start_at,
+            salary_amount: input.salary_amount,
+            salary_currency: input.salary_currency,
+            schedule: input.schedule,
+            bank_name: input.bank_name,
+            bank_code: input.bank_code,
+            bank_account_no: input.bank_account_no,
+            bank_account_name: input.bank_account_name,
+            bank_book_img_path: input.bank_book_img_path,
+            id_card_front_path: input.id_card_front_path,
+            id_card_back_path: input.id_card_back_path,
+            proof_of_address_path: input.proof_of_address_path,
+            source_of_funds_statement_path: input.source_of_funds_statement_path,
+        };
+
+        self.users.admin_update_full(&req).await
     }
 }
 
@@ -897,5 +1085,332 @@ mod tests {
 
         assert_eq!(*repo.last_actor.lock().unwrap(), Some(actor));
         assert_eq!(*repo.last_user_guid.lock().unwrap(), Some(target));
+    }
+
+    // ----- M22-b: admin_update_full service tests -----
+
+    /// Mock that records the last `admin_update_full` call and
+    /// returns a scripted outcome (success / not-found /
+    /// backend-error). Mirrors `DetailMock` but for the update
+    /// trait method.
+    #[derive(Default)]
+    struct UpdateMock {
+        last_input: std::sync::Mutex<Option<AdminUpdateUserRequest>>,
+        scripted_outcome: std::sync::atomic::AtomicU8,
+    }
+
+    #[async_trait::async_trait]
+    impl UserRepository for UpdateMock {
+        async fn find_by_id(&self, _id: Uuid) -> Result<Option<kokkak_domain::User>, RepoError> {
+            Err(RepoError::Backend("update mock: find_by_id".into()))
+        }
+        async fn find_by_username(
+            &self,
+            _u: &str,
+        ) -> Result<Option<kokkak_domain::User>, RepoError> {
+            Err(RepoError::Backend("update mock: find_by_username".into()))
+        }
+        async fn insert(&self, _u: &kokkak_domain::User) -> Result<(), RepoError> {
+            Err(RepoError::Backend("update mock: insert".into()))
+        }
+        async fn update(&self, _u: &kokkak_domain::User) -> Result<(), RepoError> {
+            Err(RepoError::Backend("update mock: update".into()))
+        }
+        async fn list_with_permissions(
+            &self,
+            _caller: Uuid,
+        ) -> Result<Vec<kokkak_domain::UserListRow>, RepoError> {
+            Err(RepoError::Backend(
+                "update mock: list_with_permissions".into(),
+            ))
+        }
+        async fn find_username_guid_by_user_guid(
+            &self,
+            _id: Uuid,
+        ) -> Result<Option<String>, RepoError> {
+            // The actor's `user_username_guid` — the update flow
+            // needs this to pass to the SP. Return a stable sentinel.
+            Ok(Some(Uuid::nil().to_string()))
+        }
+        async fn admin_insert_full(
+            &self,
+            _req: &kokkak_domain::AdminInsertUserRequest,
+        ) -> Result<kokkak_domain::AdminInsertUserResult, kokkak_domain::AdminInsertUserError>
+        {
+            Err(kokkak_domain::AdminInsertUserError::new(
+                "internal",
+                "update mock: admin_insert_full",
+            ))
+        }
+        async fn list_users_paging(
+            &self,
+            _input: &AdminUserListPagingInput,
+            _actor: Uuid,
+        ) -> Result<AdminUserListPagingPage, RepoError> {
+            Err(RepoError::Backend("update mock: list_users_paging".into()))
+        }
+        async fn get_user_detail_full(
+            &self,
+            _user_guid: Uuid,
+            _actor: Uuid,
+        ) -> Result<Option<AdminUserDetail>, RepoError> {
+            Err(RepoError::Backend(
+                "update mock: get_user_detail_full".into(),
+            ))
+        }
+        async fn admin_update_full(
+            &self,
+            req: &kokkak_domain::AdminUpdateUserRequest,
+        ) -> Result<kokkak_domain::AdminUpdateUserResult, kokkak_domain::AdminUpdateUserError>
+        {
+            use std::sync::atomic::Ordering;
+            *self.last_input.lock().unwrap() = Some(req.clone());
+            match self.scripted_outcome.load(Ordering::SeqCst) {
+                0 => Ok(kokkak_domain::AdminUpdateUserResult {
+                    user_guid: req.user_guid.clone(),
+                }),
+                1 => Err(kokkak_domain::AdminUpdateUserError::new(
+                    "user_not_found",
+                    "user not found",
+                )),
+                _ => Err(kokkak_domain::AdminUpdateUserError::new(
+                    "internal",
+                    "update mock: simulated backend failure",
+                )),
+            }
+        }
+    }
+
+    fn update_input(target_guid: &str) -> AdminUpdateUserFullInput {
+        AdminUpdateUserFullInput {
+            user_guid: target_guid.to_string(),
+            first_name: "Anousith".into(),
+            last_name: "Updated".into(),
+            id_card: Some("12345".into()),
+            tel: Some("+85620".into()),
+            email: "anousith@kokkak.com".into(),
+            gender: Some("male".into()),
+            country_guid: None,
+            province: None,
+            district: None,
+            sub_district: None,
+            village: None,
+            post: None,
+            description: Some("unit test update".into()),
+            is_foreign: false,
+            is_customer_company: false,
+            is_customer: false,
+            is_admin: false,
+            is_employee: true,
+            is_freelance: false,
+            status: 1,
+            username: "anousith".into(),
+            profile_img_path: None,
+            company_guid: None,
+            company_name: None,
+            company_tel: None,
+            company_type: None,
+            company_status: 1,
+            department_guid: None,
+            department_team_guid: None,
+            position_guid: None,
+            position_start_at: None,
+            salary_amount: None,
+            salary_currency: Some("THB".into()),
+            schedule: WeeklySchedule::default(),
+            bank_name: None,
+            bank_code: None,
+            bank_account_no: None,
+            bank_account_name: None,
+            bank_book_img_path: None,
+            id_card_front_path: None,
+            id_card_back_path: None,
+            proof_of_address_path: None,
+            source_of_funds_statement_path: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn admin_update_full_returns_repo_result_when_actor_resolves() {
+        let repo = Arc::new(UpdateMock::default());
+        let svc = svc_with(repo.clone());
+        let actor = Uuid::new_v4();
+        let target_guid = Uuid::new_v4().to_string();
+
+        let result = svc
+            .admin_update_full(actor, update_input(&target_guid))
+            .await
+            .expect("update should succeed when repo is scripted ok");
+
+        assert_eq!(result.user_guid, target_guid);
+
+        // Service must have forwarded the input verbatim to the repo.
+        let recorded = repo
+            .last_input
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("repo called");
+        assert_eq!(recorded.user_guid, target_guid);
+        assert_eq!(recorded.first_name, "Anousith");
+        assert_eq!(recorded.last_name, "Updated");
+        // No password_hash field on the update request — the
+        // update SP doesn't touch the column.
+        assert_eq!(recorded.username, "anousith");
+    }
+
+    #[tokio::test]
+    async fn admin_update_full_returns_actor_not_found_when_admin_lookup_fails() {
+        // A repo that returns `None` from
+        // `find_username_guid_by_user_guid` simulates a missing /
+        // suspended admin. The service must short-circuit with
+        // `actor_not_found` before the SP call — mirrors the
+        // insert flow's behavior.
+        struct MissingActorRepo;
+        #[async_trait::async_trait]
+        impl UserRepository for MissingActorRepo {
+            async fn find_username_guid_by_user_guid(
+                &self,
+                _id: Uuid,
+            ) -> Result<Option<String>, RepoError> {
+                Ok(None)
+            }
+            async fn admin_update_full(
+                &self,
+                _req: &kokkak_domain::AdminUpdateUserRequest,
+            ) -> Result<kokkak_domain::AdminUpdateUserResult, kokkak_domain::AdminUpdateUserError>
+            {
+                panic!("repo should not be reached when actor is missing")
+            }
+            // Other methods unused by this test path.
+            async fn find_by_id(&self, _: Uuid) -> Result<Option<kokkak_domain::User>, RepoError> {
+                Err(RepoError::Backend("unused".into()))
+            }
+            async fn find_by_username(
+                &self,
+                _: &str,
+            ) -> Result<Option<kokkak_domain::User>, RepoError> {
+                Err(RepoError::Backend("unused".into()))
+            }
+            async fn insert(&self, _: &kokkak_domain::User) -> Result<(), RepoError> {
+                Err(RepoError::Backend("unused".into()))
+            }
+            async fn update(&self, _: &kokkak_domain::User) -> Result<(), RepoError> {
+                Err(RepoError::Backend("unused".into()))
+            }
+            async fn list_with_permissions(
+                &self,
+                _: Uuid,
+            ) -> Result<Vec<kokkak_domain::UserListRow>, RepoError> {
+                Err(RepoError::Backend("unused".into()))
+            }
+            async fn admin_insert_full(
+                &self,
+                _: &kokkak_domain::AdminInsertUserRequest,
+            ) -> Result<kokkak_domain::AdminInsertUserResult, kokkak_domain::AdminInsertUserError>
+            {
+                Err(kokkak_domain::AdminInsertUserError::new(
+                    "internal", "unused",
+                ))
+            }
+            async fn list_users_paging(
+                &self,
+                _: &AdminUserListPagingInput,
+                _: Uuid,
+            ) -> Result<AdminUserListPagingPage, RepoError> {
+                Err(RepoError::Backend("unused".into()))
+            }
+            async fn get_user_detail_full(
+                &self,
+                _: Uuid,
+                _: Uuid,
+            ) -> Result<Option<AdminUserDetail>, RepoError> {
+                Err(RepoError::Backend("unused".into()))
+            }
+        }
+        let svc = AdminUserService::new(
+            Arc::new(MissingActorRepo),
+            // PasswordHasherPort is required by `new` but unused here.
+            Arc::new(NoopHasher),
+        );
+
+        let err = svc
+            .admin_update_full(Uuid::new_v4(), update_input(&Uuid::new_v4().to_string()))
+            .await
+            .expect_err("actor lookup failure must short-circuit");
+        assert_eq!(err.code, "actor_not_found");
+    }
+
+    #[tokio::test]
+    async fn admin_update_full_short_circuits_on_invalid_schedule() {
+        // A working day with `is_working = true` but missing
+        // times must short-circuit with `work_time_required`
+        // before the SP call — same contract as the insert
+        // flow.
+        let repo = Arc::new(UpdateMock::default());
+        let svc = svc_with(repo.clone());
+
+        let bad_day = DaySchedule {
+            is_working: true,
+            start_time: None,
+            end_time: Some("17:00:00".parse::<chrono::NaiveTime>().unwrap()),
+        };
+        let days = [bad_day.clone(), off(), off(), off(), off(), off(), off()];
+        let schedule = WeeklySchedule {
+            monday: days[0].clone(),
+            tuesday: days[1].clone(),
+            wednesday: days[2].clone(),
+            thursday: days[3].clone(),
+            friday: days[4].clone(),
+            saturday: days[5].clone(),
+            sunday: days[6].clone(),
+        };
+
+        let mut input = update_input(&Uuid::new_v4().to_string());
+        input.schedule = schedule;
+
+        let err = svc
+            .admin_update_full(Uuid::new_v4(), input)
+            .await
+            .expect_err("missing work times must fail");
+        assert_eq!(err.code, "work_time_required");
+
+        // Repo must NOT have been called — the validation
+        // short-circuit fires before the SP call.
+        assert!(
+            repo.last_input.lock().unwrap().is_none(),
+            "repo must not be reached when schedule is invalid"
+        );
+    }
+
+    #[tokio::test]
+    async fn admin_update_full_propagates_user_not_found_from_repo() {
+        let repo = Arc::new(UpdateMock::default());
+        repo.scripted_outcome
+            .store(1, std::sync::atomic::Ordering::SeqCst);
+        let svc = svc_with(repo);
+
+        let err = svc
+            .admin_update_full(Uuid::new_v4(), update_input(&Uuid::new_v4().to_string()))
+            .await
+            .expect_err("scripted user_not_found must surface");
+        assert_eq!(err.code, "user_not_found");
+    }
+
+    /// Noop hasher used by the update tests — same as
+    /// `svc_with` defines locally. Re-declared here so the
+    /// test closure above can construct a service directly
+    /// with a non-default repo.
+    struct NoopHasher;
+    impl crate::auth::PasswordHasherPort for NoopHasher {
+        fn hash(&self, _plain: &str) -> Result<String, kokkak_domain::AuthError> {
+            Err(kokkak_domain::AuthError::Backend("noop".into()))
+        }
+        fn verify(&self, _plain: &str, _hash: &str) -> Result<(), kokkak_domain::AuthError> {
+            Err(kokkak_domain::AuthError::Backend("noop".into()))
+        }
+        fn dummy_hash(&self) -> &str {
+            "$argon2id$v=19$m=19456,t=2,p=1$YWFhYWFhYWFhYWFh$YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE"
+        }
     }
 }

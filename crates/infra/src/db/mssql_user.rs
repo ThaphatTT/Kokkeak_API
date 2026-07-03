@@ -23,12 +23,12 @@ use async_trait::async_trait;
 use tiberius::ToSql;
 
 use kokkak_domain::admin_user::{
-    AdminInsertUserError, AdminInsertUserRequest, AdminInsertUserResult, AdminUserDetail,
-    AdminUserDetailAttachment, AdminUserDetailBankAccount, AdminUserDetailCompany,
-    AdminUserDetailCountry, AdminUserDetailPosition, AdminUserDetailProfileImage,
-    AdminUserDetailRoles, AdminUserDetailSalary, AdminUserDetailScope, AdminUserDetailUsername,
-    AdminUserListPagingInput, AdminUserListPagingPage, DaySchedule, UserListPagingRow,
-    WeeklySchedule,
+    AdminInsertUserError, AdminInsertUserRequest, AdminInsertUserResult, AdminUpdateUserError,
+    AdminUpdateUserRequest, AdminUpdateUserResult, AdminUserDetail, AdminUserDetailAttachment,
+    AdminUserDetailBankAccount, AdminUserDetailCompany, AdminUserDetailCountry,
+    AdminUserDetailPosition, AdminUserDetailProfileImage, AdminUserDetailRoles,
+    AdminUserDetailSalary, AdminUserDetailScope, AdminUserDetailUsername, AdminUserListPagingInput,
+    AdminUserListPagingPage, DaySchedule, UserListPagingRow, WeeklySchedule,
 };
 use kokkak_domain::{Permission, RepoError, Role, User, UserListRow, UserRepository, UserStatus};
 use uuid::Uuid;
@@ -536,6 +536,267 @@ impl UserRepository for MssqlUserRepository {
             } else {
                 Some(assigned_role_guid_raw)
             },
+        })
+    }
+
+    /// M22-b: rich admin user update — wraps
+    /// `dbo.SP_USER_UPDATE_FULL`.
+    ///
+    /// Write-side counterpart to [`Self::admin_insert_full`].
+    /// The SP signature is the same shape as INSERT minus the
+    /// password_hash column (which the update SP does NOT
+    /// touch — password reset lives on a separate flow).
+    ///
+    /// The SP body actually persists only `dbo.[user]` basic +
+    /// `dbo.user_username`. The remaining parameters (address,
+    /// schedule, bank, position, salary, attachments) are
+    /// accepted for validation but not persisted in this
+    /// flow — the legacy ASP.NET page updates those through
+    /// dedicated SPs. The wire contract carries them so the
+    /// admin UI can hand the same form to both create and
+    /// update endpoints without a re-shape.
+    async fn admin_update_full(
+        &self,
+        req: &AdminUpdateUserRequest,
+    ) -> Result<AdminUpdateUserResult, AdminUpdateUserError> {
+        // Build the EXEC string with 65 positional @P1..@P65
+        // params. Drop `@p_password_hash` (@P24 in INSERT) vs.
+        // INSERT's 66; the order shifts left by one from
+        // `@p_username` onward (no password_hash in the
+        // middle). Keep the EXEC and the `params` slice in
+        // lockstep — reviewers should verify both side-by-side
+        // on every change.
+        const EXEC_SQL: &str = "EXEC dbo.SP_USER_UPDATE_FULL \
+                        @p_actor_user_username_guid = @P1, \
+                        @p_user_guid = @P2, \
+                        @p_user_first_name = @P3, \
+                        @p_user_last_name = @P4, \
+                        @p_user_id_card = @P5, \
+                        @p_user_tel = @P6, \
+                        @p_user_email = @P7, \
+                        @p_user_gender = @P8, \
+                        @p_user_country_guid = @P9, \
+                        @p_user_province = @P10, \
+                        @p_user_district = @P11, \
+                        @p_user_sub_district = @P12, \
+                        @p_user_village = @P13, \
+                        @p_user_post = @P14, \
+                        @p_user_description = @P15, \
+                        @p_user_is_foreign = @P16, \
+                        @p_user_is_customer_company = @P17, \
+                        @p_user_is_customer = @P18, \
+                        @p_user_is_admin = @P19, \
+                        @p_user_is_employee = @P20, \
+                        @p_user_is_freelance = @P21, \
+                        @p_user_status = @P22, \
+                        @p_username = @P23, \
+                        @p_profile_img_path = @P24, \
+                        @p_company_guid = @P25, \
+                        @p_user_company_name = @P26, \
+                        @p_user_company_tel = @P27, \
+                        @p_user_company_type = @P28, \
+                        @p_user_company_status = @P29, \
+                        @p_department_guid = @P30, \
+                        @p_department_team_guid = @P31, \
+                        @p_position_guid = @P32, \
+                        @p_position_start_at = @P33, \
+                        @p_salary_amount = @P34, \
+                        @p_salary_currency = @P35, \
+                        @p_monday_is_working = @P36, \
+                        @p_monday_start_time = @P37, \
+                        @p_monday_end_time = @P38, \
+                        @p_tuesday_is_working = @P39, \
+                        @p_tuesday_start_time = @P40, \
+                        @p_tuesday_end_time = @P41, \
+                        @p_wednesday_is_working = @P42, \
+                        @p_wednesday_start_time = @P43, \
+                        @p_wednesday_end_time = @P44, \
+                        @p_thursday_is_working = @P45, \
+                        @p_thursday_start_time = @P46, \
+                        @p_thursday_end_time = @P47, \
+                        @p_friday_is_working = @P48, \
+                        @p_friday_start_time = @P49, \
+                        @p_friday_end_time = @P50, \
+                        @p_saturday_is_working = @P51, \
+                        @p_saturday_start_time = @P52, \
+                        @p_saturday_end_time = @P53, \
+                        @p_sunday_is_working = @P54, \
+                        @p_sunday_start_time = @P55, \
+                        @p_sunday_end_time = @P56, \
+                        @p_bank_name = @P57, \
+                        @p_bank_code = @P58, \
+                        @p_bank_account_no = @P59, \
+                        @p_bank_account_name = @P60, \
+                        @p_bank_book_img_path = @P61, \
+                        @p_id_card_front_path = @P62, \
+                        @p_id_card_back_path = @P63, \
+                        @p_proof_of_address_path = @P64, \
+                        @p_source_of_funds_statement_path = @P65";
+
+        // ---- Bind every parameter ----
+        //
+        // ponytail: same trade-off as INSERT — we bind as
+        // `Option<&str>` / `Option<&Decimal>` so an absent
+        // field arrives at SQL Server as a real NULL.
+        let actor = req.actor_user_username_guid.as_str();
+        let user_guid = req.user_guid.as_str();
+        let first_name = req.first_name.as_str();
+        let last_name = req.last_name.as_str();
+        let id_card: Option<&str> = req.id_card.as_deref();
+        let tel: Option<&str> = req.tel.as_deref();
+        let email = req.email.as_str();
+        let gender: Option<&str> = req.gender.as_deref();
+        let country_guid: Option<&str> = req.country_guid.as_deref();
+        let province: Option<&str> = req.province.as_deref();
+        let district: Option<&str> = req.district.as_deref();
+        let sub_district: Option<&str> = req.sub_district.as_deref();
+        let village: Option<&str> = req.village.as_deref();
+        let post: Option<&str> = req.post.as_deref();
+        let description: Option<&str> = req.description.as_deref();
+        let is_foreign = req.is_foreign;
+        let is_customer_company = req.is_customer_company;
+        let is_customer = req.is_customer;
+        let is_admin = req.is_admin;
+        let is_employee = req.is_employee;
+        let is_freelance = req.is_freelance;
+        let status = req.status;
+        let username = req.username.as_str();
+        let profile_img_path: Option<&str> = req.profile_img_path.as_deref();
+        let company_guid: Option<&str> = req.company_guid.as_deref();
+        let company_name: Option<&str> = req.company_name.as_deref();
+        let company_tel: Option<&str> = req.company_tel.as_deref();
+        let company_type: Option<i32> = req.company_type;
+        let company_status = req.company_status;
+        let department_guid: Option<&str> = req.department_guid.as_deref();
+        let department_team_guid: Option<&str> = req.department_team_guid.as_deref();
+        let position_guid: Option<&str> = req.position_guid.as_deref();
+        let position_start_at: Option<chrono::DateTime<chrono::Utc>> = req.position_start_at;
+        let salary_amount: Option<rust_decimal::Decimal> = req.salary_amount;
+        let salary_currency: Option<&str> = req.salary_currency.as_deref();
+
+        // Day schedules — same helper as INSERT. The SP
+        // requires: when `is_working = 1`, both `start_time`
+        // and `end_time` must be non-NULL (service-side
+        // validation catches the violation early).
+        let s = &req.schedule;
+        let (m_iw, m_st, m_et) = day_to_parts(&s.monday);
+        let (t_iw, t_st, t_et) = day_to_parts(&s.tuesday);
+        let (w_iw, w_st, w_et) = day_to_parts(&s.wednesday);
+        let (th_iw, th_st, th_et) = day_to_parts(&s.thursday);
+        let (f_iw, f_st, f_et) = day_to_parts(&s.friday);
+        let (sa_iw, sa_st, sa_et) = day_to_parts(&s.saturday);
+        let (su_iw, su_st, su_et) = day_to_parts(&s.sunday);
+
+        let bank_name: Option<&str> = req.bank_name.as_deref();
+        let bank_code: Option<&str> = req.bank_code.as_deref();
+        let bank_account_no: Option<&str> = req.bank_account_no.as_deref();
+        let bank_account_name: Option<&str> = req.bank_account_name.as_deref();
+        let bank_book_img_path: Option<&str> = req.bank_book_img_path.as_deref();
+        let id_card_front: Option<&str> = req.id_card_front_path.as_deref();
+        let id_card_back: Option<&str> = req.id_card_back_path.as_deref();
+        let proof_of_address: Option<&str> = req.proof_of_address_path.as_deref();
+        let source_of_funds: Option<&str> = req.source_of_funds_statement_path.as_deref();
+
+        let params: &[&dyn ToSql] = &[
+            &actor,
+            &user_guid,
+            &first_name,
+            &last_name,
+            &id_card,
+            &tel,
+            &email,
+            &gender,
+            &country_guid,
+            &province,
+            &district,
+            &sub_district,
+            &village,
+            &post,
+            &description,
+            &is_foreign,
+            &is_customer_company,
+            &is_customer,
+            &is_admin,
+            &is_employee,
+            &is_freelance,
+            &status,
+            &username,
+            &profile_img_path,
+            &company_guid,
+            &company_name,
+            &company_tel,
+            &company_type,
+            &company_status,
+            &department_guid,
+            &department_team_guid,
+            &position_guid,
+            &position_start_at,
+            &salary_amount,
+            &salary_currency,
+            &m_iw,
+            &m_st,
+            &m_et,
+            &t_iw,
+            &t_st,
+            &t_et,
+            &w_iw,
+            &w_st,
+            &w_et,
+            &th_iw,
+            &th_st,
+            &th_et,
+            &f_iw,
+            &f_st,
+            &f_et,
+            &sa_iw,
+            &sa_st,
+            &sa_et,
+            &su_iw,
+            &su_st,
+            &su_et,
+            &bank_name,
+            &bank_code,
+            &bank_account_no,
+            &bank_account_name,
+            &bank_book_img_path,
+            &id_card_front,
+            &id_card_back,
+            &proof_of_address,
+            &source_of_funds,
+        ];
+
+        let rows = exec_sp(&self.pool, EXEC_SQL, params)
+            .await
+            // Translate the connection / TDS error into the
+            // structured SP-error shape so the handler still
+            // produces a proper envelope (mapping "backend" to
+            // the INTERNAL error code).
+            .map_err(|e| {
+                AdminUpdateUserError::new("internal", format!("SP_USER_UPDATE_FULL: {e}"))
+            })?;
+
+        // The SP returns exactly one row regardless of success
+        // or failure (mirrors the INSERT contract). The success
+        // path emits `success = 1` + `code = 'UPDATED'`; every
+        // failure branch emits `success = 0` + a distinct string
+        // `code` + an English `message`.
+        let row = rows.first().ok_or_else(|| {
+            AdminUpdateUserError::new(
+                "internal",
+                "SP_USER_UPDATE_FULL returned no row (driver/protocol mismatch)",
+            )
+        })?;
+
+        let success: bool = row.get::<bool, _>("success").unwrap_or(false);
+        let code = read_str(row, "code").unwrap_or("").to_string();
+        let message = read_str(row, "message").unwrap_or("").to_string();
+
+        if !success {
+            return Err(AdminUpdateUserError::new(code, message));
+        }
+
+        Ok(AdminUpdateUserResult {
+            user_guid: read_guid_str(row, "user_guid"),
         })
     }
 
@@ -1105,6 +1366,9 @@ fn row_to_profile_image(row: &tiberius::Row) -> Option<AdminUserDetailProfileIma
     Some(AdminUserDetailProfileImage {
         user_img_profile_guid: guid,
         profile_img_path: read_str(row, "profile_img_path").unwrap_or("").to_string(),
+        // T-23: the URL is composed at the API edge; the infra
+        // layer only knows about relative storage keys.
+        profile_img_url: None,
     })
 }
 
@@ -1284,6 +1548,9 @@ fn row_to_bank_account(row: &tiberius::Row) -> Option<AdminUserDetailBankAccount
         bank_book_img_path: read_str(row, "bank_book_img_path")
             .unwrap_or("")
             .to_string(),
+        // T-23: composed at the API edge. See
+        // `row_to_profile_image` for the same reasoning.
+        bank_book_img_url: None,
     })
 }
 
@@ -1299,6 +1566,10 @@ fn row_to_attachment(
     Some(AdminUserDetailAttachment {
         user_details_attachment_guid: guid,
         attachment_path: read_str(row, path_col).unwrap_or("").to_string(),
+        // T-23: URL is composed at the API edge (see
+        // `row_to_profile_image` rationale). `None` here means
+        // "ask the handler to fill it from `public_base_url`".
+        attachment_url: None,
     })
 }
 

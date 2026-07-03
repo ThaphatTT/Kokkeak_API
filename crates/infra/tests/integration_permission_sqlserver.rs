@@ -111,14 +111,24 @@ async fn role_allow_grants_permission_to_admin() {
 /// directly to keep this test file self-contained.
 async fn lookup_user_guid_by_username(pool: &MssqlPool, username: &str) -> Option<Uuid> {
     use tiberius::ToSql;
-    let row = kokkak_infra::db::mssql::exec_sp(
+    // ponytail: the inline `&[&username as &dyn ToSql]` slice is a
+    // temporary that ends at the next `;`, but `exec_sp`'s future
+    // (and every chained `.await` / `.ok()?` / `.first()?` along
+    // the way) borrows from it. Bind the slice to a `let` so the
+    // borrow checker sees a name whose lifetime extends through
+    // `.await`. Same pattern is used in every mssql_* repository
+    // where `let rows = exec_sp(...).await?;` keeps the params
+    // ref in a single statement — this helper just spans more
+    // `?` operators, so it needs the explicit `let`.
+    let params: &[&dyn ToSql] = &[&username as &dyn ToSql];
+    let rows = kokkak_infra::db::mssql::exec_sp(
         pool,
         "SELECT user_guid FROM dbo.[user] WHERE user_username = @P1",
-        &[&username as &dyn ToSql],
+        params,
     )
     .await
-    .ok()?
-    .first()?;
+    .ok()?;
+    let row = rows.first()?;
     // Row::get returns `Option<&str>` (None when column missing / NULL).
     // `?` unwraps; `to_string()` owns the value so `parse_str` can borrow it.
     let guid_str: String = row.get::<&str, _>("user_guid")?.to_string();

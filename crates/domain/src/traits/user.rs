@@ -19,8 +19,9 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::admin_user::{
-    AdminInsertUserError, AdminInsertUserRequest, AdminInsertUserResult, AdminUserDetail,
-    AdminUserListPagingInput, AdminUserListPagingPage,
+    AdminInsertUserError, AdminInsertUserRequest, AdminInsertUserResult, AdminUpdateUserError,
+    AdminUpdateUserRequest, AdminUpdateUserResult, AdminUserDetail, AdminUserListPagingInput,
+    AdminUserListPagingPage,
 };
 use crate::user::{User, UserListRow};
 
@@ -179,8 +180,8 @@ pub trait UserRepository: Send + Sync {
     /// handler layer via [`Permission::PageUsersView`].
     ///
     /// Default impl returns `Backend("not implemented")` so the
-    /// existing test mocks don't break — only the MSSQL adapter
-    /// needs to override it.
+    /// existing test mocks don't break — only the MSSQL adapter needs
+    /// to override it.
     async fn get_user_detail_full(
         &self,
         user_guid: Uuid,
@@ -189,6 +190,40 @@ pub trait UserRepository: Send + Sync {
         let _ = (user_guid, actor);
         Err(RepoError::Backend(
             "get_user_detail_full: not implemented by this repository adapter".into(),
+        ))
+    }
+
+    /// M22-b: rich admin user update — wraps `dbo.SP_USER_UPDATE_FULL`.
+    ///
+    /// Write-side counterpart to
+    /// [`UserRepository::admin_insert_full`]. Updates the
+    /// matching `[user]` row + the linked `[user_username]` row
+    /// in one transaction. The actor is identified by
+    /// `user_username_guid` (resolved upstream via
+    /// [`UserRepository::find_username_guid_by_user_guid`]) and
+    /// the SP re-checks `USERS_UPDATE` server-side as
+    /// defense-in-depth — the Rust handler gates on
+    /// [`Permission::UsersUpdate`].
+    ///
+    /// The SP does NOT touch the password column — password
+    /// reset lives on a separate flow.
+    ///
+    /// On SP failure, returns the structured
+    /// [`AdminUpdateUserError`] (the SP's `code` + `message`
+    /// verbatim) so the handler can map to the right HTTP
+    /// status + `error.code` for the admin UI.
+    ///
+    /// Default impl returns `Backend("not implemented")` so the
+    /// existing test mocks don't break — only the MSSQL adapter
+    /// needs to override it.
+    async fn admin_update_full(
+        &self,
+        req: &AdminUpdateUserRequest,
+    ) -> Result<AdminUpdateUserResult, AdminUpdateUserError> {
+        let _ = req;
+        Err(AdminUpdateUserError::new(
+            "internal",
+            "admin_update_full: not implemented by this repository adapter",
         ))
     }
 }

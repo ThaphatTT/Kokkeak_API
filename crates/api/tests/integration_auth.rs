@@ -115,6 +115,9 @@ async fn make_app() -> (axum::Router, Vec<PathBuf>) {
         HealthRegistry::new(),
         Arc::new(kokkak_common::config::Settings::default()),
         Arc::new(MemoryStorage::new()),
+        Arc::from(""),
+        Arc::from(""),
+        600,
     );
     (build_router(state), vec![])
 }

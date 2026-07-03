@@ -30,10 +30,11 @@ pub mod traits;
 pub mod user;
 
 pub use admin_user::{
-    AdminInsertUserError, AdminInsertUserRequest, AdminInsertUserResult, AdminUserDetail,
-    AdminUserDetailAttachment, AdminUserDetailBankAccount, AdminUserDetailCompany,
-    AdminUserDetailCountry, AdminUserDetailPosition, AdminUserDetailProfileImage,
-    AdminUserDetailRoles, AdminUserDetailSalary, AdminUserDetailScope, AdminUserDetailUsername,
+    AdminInsertUserError, AdminInsertUserRequest, AdminInsertUserResult, AdminUpdateUserError,
+    AdminUpdateUserRequest, AdminUpdateUserResult, AdminUserDetail, AdminUserDetailAttachment,
+    AdminUserDetailBankAccount, AdminUserDetailCompany, AdminUserDetailCountry,
+    AdminUserDetailPosition, AdminUserDetailProfileImage, AdminUserDetailRoles,
+    AdminUserDetailSalary, AdminUserDetailScope, AdminUserDetailUsername,
 };
 pub use auth::{AuthError, AuthSession, Claims, PublicUser, TokenKind, TokenPair};
 pub use cache::{Cache, CacheError, CacheExt, CacheGroup, CacheKey, InvalidationStream};

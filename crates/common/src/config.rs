@@ -210,6 +210,25 @@ pub struct StorageSettings {
     /// The `LocalStorage` adapter creates the directory on demand.
     #[serde(default)]
     pub local_path: String,
+
+    /// T-23-b: HMAC-SHA256 secret for signing `/files/*` URLs.
+    /// Min 32 bytes (same threshold as JWT per AGENTS.md §21.11).
+    /// Rotating invalidates every URL the API has ever handed
+    /// out (clients re-fetch on next page load).
+    #[serde(default)]
+    pub signed_url_secret: String,
+
+    /// T-23-b: TTL (seconds) for signed `/files/*` URLs.
+    /// Default 600 = 10 min — long enough to scroll through one
+    /// user's six KYC attachments, short enough to limit the
+    /// blast radius of a leaked URL in browser history /
+    /// access logs. Range enforced in `StorageSettings::validate`.
+    #[serde(default = "default_signed_url_ttl_secs")]
+    pub signed_url_ttl_secs: u32,
+}
+
+fn default_signed_url_ttl_secs() -> u32 {
+    600
 }
 
 impl Default for StorageSettings {
@@ -222,7 +241,43 @@ impl Default for StorageSettings {
             s3_secret_key: String::new(),
             s3_path_style: false,
             local_path: String::new(),
+            signed_url_secret: String::new(),
+            signed_url_ttl_secs: default_signed_url_ttl_secs(),
         }
+    }
+}
+
+impl StorageSettings {
+    /// Validate sign + TTL knobs. Production requires a non-empty
+    /// secret (in any storage mode — even S3 benefits from the
+    /// API proxying through `/files/*` so the same signed URL
+    /// contract covers both adapters).
+    pub fn signed_url_knobs_valid(&self) -> Result<(), ConfigError> {
+        if self.signed_url_secret.trim().is_empty() {
+            return Err(ConfigError::Invalid {
+                key: "KOKKAK_STORAGE__SIGNED_URL_SECRET".into(),
+                message: "must not be empty (min 32 bytes)".into(),
+            });
+        }
+        if self.signed_url_secret.len() < 32 {
+            return Err(ConfigError::Invalid {
+                key: "KOKKAK_STORAGE__SIGNED_URL_SECRET".into(),
+                message: format!(
+                    "must be at least 32 bytes for HMAC-SHA256 (got {} bytes)",
+                    self.signed_url_secret.len()
+                ),
+            });
+        }
+        if self.signed_url_ttl_secs < 60 || self.signed_url_ttl_secs > 3600 {
+            return Err(ConfigError::Invalid {
+                key: "KOKKAK_STORAGE__SIGNED_URL_TTL_SECS".into(),
+                message: format!(
+                    "must be between 60 and 3600 seconds (got {})",
+                    self.signed_url_ttl_secs
+                ),
+            });
+        }
+        Ok(())
     }
 }
 
@@ -364,6 +419,24 @@ pub struct ServerSettings {
     /// because every Kokkeak deployment ships behind IIS.
     #[serde(default = "default_trust_forwarded_for")]
     pub trust_forwarded_for: bool,
+
+    /// T-23 / image-serving: public-facing base URL that the API
+    /// uses to build download links for stored blobs
+    /// (`<base>/files/<storage_key>` on local FS, or as a prefix
+    /// for S3 presigned URLs). This MUST be the URL the **client**
+    /// sees, not the bind address — production runs the API on a
+    /// loopback behind IIS / nginx / ALB which terminates TLS and
+    /// rewrites the path. Reusing `addr` here would emit
+    /// `http://127.0.0.1:18080/...` URLs the mobile app can't
+    /// resolve.
+    ///
+    /// Empty string = "URL unknown" — response handlers emit
+    /// `Option::None` for every `*_img_url` field so clients can
+    /// distinguish "no URL wired yet" from "image missing".
+    /// Validation below rejects empty in production when a
+    /// storage adapter is wired.
+    #[serde(default)]
+    pub public_base_url: String,
 }
 
 impl Default for ServerSettings {
@@ -372,6 +445,7 @@ impl Default for ServerSettings {
             addr: default_addr(),
             workers: default_workers(),
             trust_forwarded_for: default_trust_forwarded_for(),
+            public_base_url: String::new(),
         }
     }
 }
@@ -1546,6 +1620,32 @@ impl Settings {
                 message: "must be >= 1 (use usize::MAX to effectively disable)".into(),
             });
         }
+        // T-23: in production, when the storage adapter wired
+        // anything beyond the memory fallback (i.e. the API will
+        // serve or proxy actual blobs), the public base URL MUST
+        // be set — otherwise the wire response emits `null` URLs
+        // that the mobile / web clients cannot resolve. We allow
+        // an empty `public_base_url` in dev so `cargo test`
+        // (MemoryStorage, no real URLs) does not need a dummy
+        // value.
+        if self.environment.is_production()
+            && self.server.public_base_url.trim().is_empty()
+            && self.storage.adapter_kind() != StorageAdapterKind::Memory
+        {
+            return Err(ConfigError::Invalid {
+                key: "KOKKAK_SERVER__PUBLIC_BASE_URL".into(),
+                message: "must be set when KOKKAK_ENVIRONMENT=production and a persistent \
+                          storage adapter is wired (S3 or Local FS)"
+                    .into(),
+            });
+        }
+        // T-23-b: in production, the HMAC sign secret + TTL must
+        // be wired. Empty secret lets an attacker forge any URL
+        // — fail loud at deploy time, not after the first leaked
+        // KYC document.
+        if self.environment.is_production() {
+            self.storage.signed_url_knobs_valid()?;
+        }
         Ok(())
     }
 }
@@ -1604,6 +1704,9 @@ mod tests {
             "KOKKAK_MIDDLEWARE__IDEMPOTENCY__ENABLED",
             "KOKKAK_MIDDLEWARE__IDEMPOTENCY__TTL_SECS",
             "KOKKAK_MIDDLEWARE__IDEMPOTENCY__MAX_ENTRIES",
+            "KOKKAK_SERVER__PUBLIC_BASE_URL",
+            "KOKKAK_STORAGE__SIGNED_URL_SECRET",
+            "KOKKAK_STORAGE__SIGNED_URL_TTL_SECS",
         ] {
             std::env::remove_var(key);
         }
@@ -1698,6 +1801,7 @@ mod tests {
                 addr: "".into(),
                 workers: 4,
                 trust_forwarded_for: true,
+                public_base_url: String::new(),
             },
             ..Settings::default()
         };
@@ -1711,6 +1815,7 @@ mod tests {
                 addr: "   ".into(),
                 workers: 4,
                 trust_forwarded_for: true,
+                public_base_url: String::new(),
             },
             ..Settings::default()
         };
@@ -1724,6 +1829,7 @@ mod tests {
                 addr: "0.0.0.0:3000".into(),
                 workers: 0,
                 trust_forwarded_for: true,
+                public_base_url: String::new(),
             },
             ..Settings::default()
         };
@@ -1976,6 +2082,11 @@ mod tests {
             "KOKKAK_MIDDLEWARE__CORS_ALLOW_ORIGINS",
             "https://app.example.com",
         );
+        // T-23-b: production requires a non-empty signed-URL secret.
+        std::env::set_var(
+            "KOKKAK_STORAGE__SIGNED_URL_SECRET",
+            "test-secret-with-at-least-32-bytes-yes",
+        );
 
         let s = Settings::load().expect("load should succeed");
         assert!(s.tls.enabled);
@@ -2021,12 +2132,17 @@ mod tests {
     fn production_with_loopback_bind_and_tls_off_validates() {
         // New normal: production binds 127.0.0.1 and TLS is off
         // because IIS terminates it upstream. cert / key paths
-        // stay empty.
+        // stay empty. T-23-b: signed-URL secret must be wired in
+        // production so we set a 32-byte placeholder here.
         let s = Settings {
             environment: Environment::Production,
             server: ServerSettings {
                 addr: "127.0.0.1:18080".into(),
                 ..ServerSettings::default()
+            },
+            storage: StorageSettings {
+                signed_url_secret: "test-secret-with-at-least-32-bytes-yes".into(),
+                ..StorageSettings::default()
             },
             middleware: MiddlewareSettings {
                 cors_allow_origins: vec!["https://app.example.com".into()],
@@ -2046,6 +2162,10 @@ mod tests {
             server: ServerSettings {
                 addr: "[::1]:18080".into(),
                 ..ServerSettings::default()
+            },
+            storage: StorageSettings {
+                signed_url_secret: "test-secret-with-at-least-32-bytes-yes".into(),
+                ..StorageSettings::default()
             },
             middleware: MiddlewareSettings {
                 cors_allow_origins: vec!["https://app.example.com".into()],
@@ -2132,6 +2252,148 @@ mod tests {
     }
 
     // ---- T-06: middleware settings ----
+
+    // ---- T-23: public_base_url validation ----
+
+    #[test]
+    fn t23_public_base_url_empty_defaults_ok() {
+        let s = Settings::default();
+        // Dev / unit-test defaults: empty public_base_url is fine
+        // (every *_img_url field returns null on the wire, the
+        // mobile app falls back to a placeholder image).
+        assert_eq!(s.server.public_base_url, "");
+        assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn t23_public_base_url_set_in_production_with_local_storage_validates() {
+        // Production + LocalStorage + a real base URL → all green.
+        let s = Settings {
+            environment: Environment::Production,
+            server: ServerSettings {
+                addr: "127.0.0.1:18080".into(),
+                public_base_url: "https://api.sdplao.com".into(),
+                ..ServerSettings::default()
+            },
+            storage: StorageSettings {
+                // LocalStorage is NOT the production default (S3 is),
+                // but it's allowed during the Strangler transition.
+                local_path: "/var/kokkak/uploads".into(),
+                signed_url_secret: "test-secret-with-at-least-32-bytes-yes".into(),
+                ..StorageSettings::default()
+            },
+            middleware: MiddlewareSettings {
+                cors_allow_origins: vec!["https://www.sdplao.com".into()],
+                ..MiddlewareSettings::default()
+            },
+            ..Settings::default()
+        };
+        assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn t23b_signed_url_secret_too_short_fails() {
+        let mut s = StorageSettings {
+            local_path: "/var/kokkak/uploads".into(),
+            ..StorageSettings::default()
+        };
+        s.signed_url_secret = "too-short".into();
+        let err = s.signed_url_knobs_valid().expect_err("short secret fails");
+        assert!(
+            err.to_string().contains("32 bytes"),
+            "error should mention 32-byte minimum, got: {err}"
+        );
+    }
+
+    #[test]
+    fn t23b_signed_url_ttl_zero_fails() {
+        let mut s = StorageSettings::default();
+        s.signed_url_secret = "this-is-a-thirty-two-byte-test-secret-x".into();
+        s.signed_url_ttl_secs = 0;
+        let err = s.signed_url_knobs_valid().expect_err("ttl=0 fails");
+        assert!(
+            err.to_string().contains("SIGNED_URL_TTL_SECS"),
+            "error should name the knob, got: {err}"
+        );
+    }
+
+    #[test]
+    fn t23b_signed_url_ttl_too_long_fails() {
+        let mut s = StorageSettings::default();
+        s.signed_url_secret = "this-is-a-thirty-two-byte-test-secret-x".into();
+        s.signed_url_ttl_secs = 86400; // 24h
+        let err = s.signed_url_knobs_valid().expect_err("ttl>1h fails");
+        assert!(
+            err.to_string().contains("between 60 and 3600"),
+            "error should bound ttl, got: {err}"
+        );
+    }
+
+    #[test]
+    fn t23b_signed_url_knobs_happy() {
+        let mut s = StorageSettings::default();
+        s.signed_url_secret = "this-is-a-thirty-two-byte-test-secret-x".into();
+        s.signed_url_ttl_secs = 600;
+        s.signed_url_knobs_valid()
+            .expect("32-byte secret + 600s ttl must validate");
+    }
+
+    #[test]
+    fn t23_public_base_url_empty_in_production_with_local_storage_fails() {
+        let s = Settings {
+            environment: Environment::Production,
+            server: ServerSettings {
+                addr: "127.0.0.1:18080".into(),
+                // public_base_url left blank on purpose
+                ..ServerSettings::default()
+            },
+            storage: StorageSettings {
+                local_path: "/var/kokkak/uploads".into(),
+                ..StorageSettings::default()
+            },
+            middleware: MiddlewareSettings {
+                cors_allow_origins: vec!["https://www.sdplao.com".into()],
+                ..MiddlewareSettings::default()
+            },
+            ..Settings::default()
+        };
+        let err = s
+            .validate()
+            .expect_err("production+Local+empty base URL must fail");
+        assert!(
+            err.to_string().contains("PUBLIC_BASE_URL"),
+            "error should name the knob, got: {err}"
+        );
+    }
+
+    #[test]
+    fn t23_public_base_url_empty_with_memory_storage_is_allowed() {
+        // MemoryStorage is unit-test only — no real URLs flow
+        // through, so the empty base URL is harmless.
+        let s = Settings {
+            environment: Environment::Production,
+            server: ServerSettings {
+                addr: "127.0.0.1:18080".into(),
+                ..ServerSettings::default()
+            },
+            storage: StorageSettings {
+                // Even with Memory adapter, T-23-b still requires
+                // a sign secret at the wire level (the API only
+                // mounts the route when the secret is non-empty).
+                signed_url_secret: "test-secret-with-at-least-32-bytes-yes".into(),
+                ..StorageSettings::default()
+            },
+            middleware: MiddlewareSettings {
+                cors_allow_origins: vec!["https://www.sdplao.com".into()],
+                ..MiddlewareSettings::default()
+            },
+            ..Settings::default()
+        };
+        // Also note the bind+TLS prod rules still apply — we
+        // can't reach the public_base_url check without first
+        // satisfying those, so we keep addr loopback.
+        assert!(s.validate().is_ok());
+    }
 
     #[test]
     fn middleware_default_is_production_safe() {
@@ -2281,6 +2543,10 @@ mod tests {
                 redirect_from_port: 80,
                 hsts_max_age_secs: 31_536_000,
                 auto_reload: false,
+            },
+            storage: StorageSettings {
+                signed_url_secret: "test-secret-with-at-least-32-bytes-yes".into(),
+                ..StorageSettings::default()
             },
             middleware: MiddlewareSettings {
                 cors_allow_origins: vec!["https://app.example.com".into()],

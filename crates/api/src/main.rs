@@ -227,12 +227,62 @@ async fn run(settings: Settings) {
         "object-storage adapter ready"
     );
 
+    // ---- T-23: resolve the public base URL. Both are derived from
+    //   env so the same code path runs in dev (LocalStorage +
+    //   public_base_url from `.env.dev`) and prod (S3/Local +
+    //   public_base_url from `.env.production`). Empty
+    //   `public_base_url` is allowed in dev (every `*_img_url`
+    //   becomes `null`); the validator rejects empty + persistent
+    //   storage in production.
+    let public_base_url: Arc<str> = Arc::from(settings.server.public_base_url.as_str());
+    // T-23-b: HMAC sign material. Empty in dev (URLs carry no
+    // `?exp=&sig=` query, the `/files/*` handler rejects all
+    // requests). Production requires 32-byte secret + ttl in
+    // 60..=3600 range (validator enforces).
+    let signed_url_secret: Arc<str> = Arc::from(settings.storage.signed_url_secret.as_str());
+    let signed_url_ttl_secs: u32 = settings.storage.signed_url_ttl_secs;
+    tracing::info!(
+        signed_url_ttl_secs = signed_url_ttl_secs,
+        signed_url_secret_len = signed_url_secret.len(),
+        "signed-url knobs loaded"
+    );
+
     // ---- Build app state ----
     let settings_arc = Arc::new(settings.clone());
-    let state = build_app_state_with(bundle, jwt, registry, settings_arc.clone(), storage);
+    let state = build_app_state_with(
+        bundle,
+        jwt,
+        registry,
+        settings_arc.clone(),
+        storage,
+        public_base_url.clone(),
+        signed_url_secret.clone(),
+        signed_url_ttl_secs,
+    );
 
     // ---- Routes ----
-    let app = build_router(state).route("/metrics", get(metrics_handler));
+    let mut app = build_router(state.clone()).route("/metrics", get(metrics_handler));
+    // T-23-b: `/files/*` is now HMAC-signed — the API proxies
+    // every image fetches regardless of the storage adapter
+    // (Local OR S3) so the URL contract is uniform. Replacing the
+    // earlier open ServeDir mount (which let anyone who knew a
+    // path read a KYC document). The unsigned/anonymous request
+    // path returns 403 — Info logging on reject, no PII leaked.
+    let files_route = axum::Router::new()
+        .route("/files/*path", get(kokkak_api::files::files_handler))
+        .with_state(state.clone());
+    app = app.merge(files_route);
+    tracing::info!(
+        mount = "/files/*",
+        "signed-URL route mounted (HMAC-SHA256, time-limited)"
+    );
+    #[allow(unused_imports)]
+    {
+        // The previous `ServeDir` mount (`tower-http::services`)
+        // is intentionally removed — T-23-b routes every
+        // /files/* request through the signer instead. The
+        // `tower-http` `"fs"` feature stays on (used elsewhere).
+    }
 
     // ---- T-06: wire the middleware stack.
     //   Layer order (outermost first) is the REVERSE of the

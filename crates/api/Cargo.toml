@@ -53,6 +53,15 @@ validator = { workspace = true }
 # data-URL prefix and decoding the body).
 base64 = { workspace = true }
 
+# T-23-b: `Storage::get` returns `Bytes`; reused by the
+# `/files/*` handler to stream the response body to the
+# browser.
+bytes = "1"
+
+# T-23-b: HMAC-SHA256 signer/verifier for `/files/*` URLs.
+hmac = { workspace = true }
+sha2  = { workspace = true }
+
 # M10 repo_factory
 thiserror = { workspace = true }
 

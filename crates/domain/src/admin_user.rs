@@ -22,6 +22,20 @@
 //! - 4 attachment paths (id_card_front, id_card_back,
 //!   proof_of_address, source_of_funds_statement)
 //!
+//! ## `SP_USER_UPDATE_FULL` (admin user update)
+//!
+//! SP_USER_UPDATE_FULL is the write-side counterpart to the
+//! detail-read SP — it accepts the same per-field admin-form
+//! payload and updates the matching `[user]` row + the linked
+//! `[user_username]` row. Differences from INSERT:
+//!
+//! - `@p_user_guid` is **required** (no NEWID fallback).
+//! - No password field — password reset lives on a separate
+//!   flow (out of scope here).
+//! - The SP emits `USER_NOT_FOUND` when the GUID doesn't
+//!   resolve to a non-deleted row (insert doesn't have this
+//!   case).
+//!
 //! ## `SP_USER_DETAIL_FULL_GET` (admin user detail lookup)
 //!
 //! SP_USER_DETAIL_FULL_GET is the read-side counterpart: one row per
@@ -67,6 +81,13 @@
 //! [`AdminInsertUserError`] — the `code` is forwarded to the wire
 //! as the `error.code` (via the `ErrorCode` catalog) so mobile
 //! clients can pattern-match on it.
+//!
+//! Update failures use the parallel [`AdminUpdateUserError`]
+//! shape (same `code` + `message` fields) and are mapped in
+//! `handlers::admin::sp_update_full_status`. The two error
+//! structs are distinct so future drift between the insert
+//! and update SPs (e.g. update adds a new code) doesn't
+//! pollute the insert contract.
 
 use rust_decimal::Decimal;
 
@@ -103,6 +124,45 @@ pub struct AdminInsertUserError {
 }
 
 impl AdminInsertUserError {
+    /// Construct from the SP's `code` + `message` columns.
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+}
+
+/// Successful output of `SP_USER_UPDATE_FULL`.
+///
+/// `SP_USER_UPDATE_FULL` echoes only the resolved `user_guid`
+/// (the caller already supplied it). The admin UI already knows
+/// the username + the full record (it called GET first to
+/// pre-fill the form) so no extra fields are echoed on the
+/// success path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminUpdateUserResult {
+    /// The `[user].user_guid` that was updated (echoed by the SP).
+    pub user_guid: String,
+}
+
+/// Structured failure returned by `SP_USER_UPDATE_FULL`.
+///
+/// `code` is one of the SP's stable snake_case strings. The handler
+/// maps `code` → HTTP status + `error.code` via
+/// `sp_update_full_status` (mirrors the insert mapping table but
+/// drops `password_hash_required` and `user_guid_exists`, adds
+/// `user_not_found`).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("SP_USER_UPDATE_FULL failed: {code} — {message}")]
+pub struct AdminUpdateUserError {
+    /// Stable SP error code (e.g. `USER_NOT_FOUND`, `USERNAME_EXISTS`).
+    pub code: String,
+    /// Human-readable English description from the SP.
+    pub message: String,
+}
+
+impl AdminUpdateUserError {
     /// Construct from the SP's `code` + `message` columns.
     pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
@@ -243,6 +303,157 @@ pub struct AdminInsertUserRequest {
     /// the request DTO's `password` BEFORE building this struct —
     /// the SP never sees plaintext.
     pub password_hash: String,
+
+    // ---- Profile image ----
+    /// `user_img_profile_img_path` — primary profile image path.
+    pub profile_img_path: Option<String>,
+
+    // ---- Company ----
+    /// `user_company_company_guid` — required when
+    /// `is_customer_company = 1`.
+    pub company_guid: Option<String>,
+    /// `user_company_name`.
+    pub company_name: Option<String>,
+    /// `user_company_tel`.
+    pub company_tel: Option<String>,
+    /// `user_company_type` — free-form int (legacy code uses
+    /// `int`, not enum). Default 1.
+    pub company_type: Option<i32>,
+    /// `user_company_status` — default 1 (active).
+    pub company_status: i32,
+
+    // ---- Department / team scope ----
+    /// `user_department_guid`.
+    pub department_guid: Option<String>,
+    /// `user_department_team_guid` — must belong to `department_guid`.
+    pub department_team_guid: Option<String>,
+
+    // ---- Position ----
+    /// `master_position_guid`.
+    pub position_guid: Option<String>,
+    /// `user_position_start_at` — defaults to `SYSUTCDATETIME()`.
+    pub position_start_at: Option<chrono::DateTime<chrono::Utc>>,
+
+    // ---- Salary ----
+    /// `user_salary_amount` — `decimal(18,2)` (use
+    /// `rust_decimal::Decimal`, never `f64`).
+    pub salary_amount: Option<Decimal>,
+    /// `user_salary_currency` — defaults to `"THB"` server-side;
+    /// pass `None` to accept.
+    pub salary_currency: Option<String>,
+
+    // ---- Working schedule ----
+    /// Weekly schedule (monday..sunday).
+    pub schedule: WeeklySchedule,
+
+    // ---- Bank ----
+    /// `user_bank_account_bank_name`.
+    pub bank_name: Option<String>,
+    /// `user_bank_account_bank_code`.
+    pub bank_code: Option<String>,
+    /// `user_bank_account_no`.
+    pub bank_account_no: Option<String>,
+    /// `user_bank_account_name` (account-holder name).
+    pub bank_account_name: Option<String>,
+    /// `user_bank_account_book_img_path` — book-cover image.
+    pub bank_book_img_path: Option<String>,
+
+    // ---- Attachments (types 1..4) ----
+    /// Type 1 — ID Card Front.
+    pub id_card_front_path: Option<String>,
+    /// Type 2 — ID Card Back.
+    pub id_card_back_path: Option<String>,
+    /// Type 3 — Proof of Address.
+    pub proof_of_address_path: Option<String>,
+    /// Type 4 — Source of Funds Statement.
+    pub source_of_funds_statement_path: Option<String>,
+}
+
+/// Full input to `SP_USER_UPDATE_FULL`.
+///
+/// Mirrors [`AdminInsertUserRequest`] 1:1 with two differences:
+///
+/// 1. `user_guid` is **required** — the SP needs to know which
+///    row to update. The Rust URL contract puts it in the path
+///    (`PUT /api/v1/admin/users/:guid/full`) so the field is a
+///    `String`, not `Option<String>`.
+/// 2. **No password field** — updating the password is a separate
+///    concern (`SP_USER_PASSWORD_RESET` lives outside this
+///    endpoint). The actor admin can issue a reset from the user
+///    detail screen.
+///
+/// Field order matches the SP parameter order so the infra
+/// layer can pass them through positionally without renaming.
+///
+/// ponytail: the duplicate shape between insert / update is
+/// intentional. Two parallel structs (vs. one shared `User` +
+/// flags) keeps each SP's parameter contract obvious — when the
+/// insert and update SPs drift in the future (e.g. update gains a
+/// `last_login_at` write), only the affected struct needs to
+/// change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(missing_docs)]
+pub struct AdminUpdateUserRequest {
+    /// The admin's `user_username_guid` (NOT `user_guid`).
+    /// Looked up via `find_username_guid_by_user_guid` before the
+    /// SP call so the handler never has to expose the column.
+    pub actor_user_username_guid: String,
+
+    // ---- Target user ----
+    /// The `[user].user_guid` to update — required by the SP.
+    pub user_guid: String,
+
+    // ---- User Basic ----
+    /// `user_first_name` — required by the SP.
+    pub first_name: String,
+    /// `user_last_name` — required by the SP.
+    pub last_name: String,
+    /// `user_id_card` — optional.
+    pub id_card: Option<String>,
+    /// `user_tel` — optional.
+    pub tel: Option<String>,
+    /// `user_email` — required by the SP.
+    pub email: String,
+    /// `user_gender` — optional free-form string.
+    pub gender: Option<String>,
+
+    // ---- Address ----
+    /// `user_country_guid` — required when `is_foreign = 1`.
+    pub country_guid: Option<String>,
+    /// `user_province`.
+    pub province: Option<String>,
+    /// `user_district`.
+    pub district: Option<String>,
+    /// `user_sub_district`.
+    pub sub_district: Option<String>,
+    /// `user_village`.
+    pub village: Option<String>,
+    /// `user_post` (postal code).
+    pub post: Option<String>,
+
+    /// `user_description` — free-form bio.
+    pub description: Option<String>,
+
+    // ---- Flags ----
+    /// `user_is_foreign` — switches on country / postal validation.
+    pub is_foreign: bool,
+    /// `user_is_customer_company` — switches on company validation.
+    pub is_customer_company: bool,
+    /// `user_is_customer` — tag, not used by the SP for validation.
+    pub is_customer: bool,
+    /// `user_is_admin` — picks the ADMIN role (wins over EMPLOYEE).
+    pub is_admin: bool,
+    /// `user_is_employee` — picks the EMPLOYEE role (only when
+    /// `is_admin = 0`).
+    pub is_employee: bool,
+    /// `user_is_freelance` — tag.
+    pub is_freelance: bool,
+    /// `user_status`: 1 = active, 0 = inactive. Default 1.
+    pub status: i32,
+
+    // ---- Login ----
+    /// `user_username_username` — required by the SP.
+    pub username: String,
 
     // ---- Profile image ----
     /// `user_img_profile_img_path` — primary profile image path.
@@ -528,6 +739,14 @@ pub struct AdminUserDetailProfileImage {
     /// Storage path under `users/{guid}/profile/{uuid}.webp`.
     /// `""` when no image is set yet.
     pub profile_img_path: String,
+    /// T-23: client-facing URL for the image above (e.g.
+    /// `https://api.sdplao.com/files/users/{guid}/profile/{uuid}.webp`).
+    /// `None` when no base URL is configured or the path is empty
+    /// — the API edge composes this from `Settings::server::public_base_url`
+    /// plus the path. The infra row mapper sets it to `None`; the
+    /// handler fills it before serialising.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_img_url: Option<String>,
 }
 
 /// Company binding row from `[user_company]` (most recent active) +
@@ -670,6 +889,11 @@ pub struct AdminUserDetailBankAccount {
     pub bank_account_verified_status: i32,
     /// `[user_bank_account].user_bank_account_book_img_path`.
     pub bank_book_img_path: String,
+    /// T-23: client-facing URL for the bank-book image above.
+    /// `None` until the API edge composes it from `public_base_url`
+    /// + the storage path; see `AdminUserDetailProfileImage::profile_img_url`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bank_book_img_url: Option<String>,
 }
 
 /// One attachment row from `[user_details_attachment]` — most recent
@@ -687,6 +911,13 @@ pub struct AdminUserDetailAttachment {
     pub user_details_attachment_guid: String,
     /// Storage path. `""` when no row of this type exists.
     pub attachment_path: String,
+    /// T-23: client-facing URL for the attachment above
+    /// (id-card front / back / proof-of-address / source-of-funds).
+    /// Composed by the handler from `public_base_url + path`.
+    /// `None` when no row exists yet (empty path) or the env
+    /// knob is unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attachment_url: Option<String>,
 }
 
 /// Username row from `[user_username]` — most-recent active login.

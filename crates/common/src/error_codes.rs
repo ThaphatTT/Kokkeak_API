@@ -172,6 +172,13 @@ impl ErrorCode {
     pub const ADMIN_ROLE_NOT_FOUND: &'static str = "admin_role_not_found";
     /// 500 — role `EMPLOYEE` not seeded in master table.
     pub const EMPLOYEE_ROLE_NOT_FOUND: &'static str = "employee_role_not_found";
+
+    /// 404 — M22-b: `SP_USER_UPDATE_FULL` rejected the update
+    /// because the supplied `user_guid` doesn't resolve to a
+    /// non-deleted `[user]` row. Symmetric to the `not_found`
+    /// generic code but carries the admin-namespace semantics
+    /// so the admin UI can branch on it specifically.
+    pub const USER_NOT_FOUND: &'static str = "user_not_found";
 }
 
 #[cfg(test)]
@@ -227,6 +234,7 @@ mod tests {
         ErrorCode::WORK_TIME_REQUIRED,
         ErrorCode::ADMIN_ROLE_NOT_FOUND,
         ErrorCode::EMPLOYEE_ROLE_NOT_FOUND,
+        ErrorCode::USER_NOT_FOUND,
     ];
 
     #[test]

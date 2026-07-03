@@ -59,3 +59,10 @@ the same commit. Failures open an issue tagged `regression`.
 2. Reuse `http` + `check` + `sleep` from the existing scripts.
 3. Set thresholds that match the endpoint's SLO budget.
 4. Document the script here with steady/burst RPS targets.
+
+
+HOW TO DEPLOY
+  WINDOWS
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "scripts/publish-prod.ps1" -OutputZip
+
+    .\scripts\publish-prod.ps1

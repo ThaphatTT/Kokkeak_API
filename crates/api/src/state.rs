@@ -1,5 +1,4 @@
 //! API state (AppState) — DI container for handlers.
-
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -113,6 +112,26 @@ pub struct AppState {
     /// Replaces the coarse `has_role(Admin || SuperAdmin)` checks
     /// at admin endpoints with `has_permission(Permission::Xxx)`.
     pub permission_checker: Arc<PermissionChecker>,
+
+    /// T-23: public-facing base URL (`https://api.sdplao.com`
+    /// in production, `http://localhost:18080` in dev). Handlers
+    /// compose per-image URLs by concatenating
+    /// `{base}/files/{storage_key}`. Empty string = URLs are
+    /// suppressed from responses (clients see `null`).
+    pub public_base_url: Arc<str>,
+
+    /// T-23-b: HMAC-SHA256 secret for signing `/files/*`
+    /// URLs. Read by [`crate::signed_url::signed_image_url`]
+    /// when emitting image URLs in API responses, and by
+    /// [`crate::files::files_handler`] when verifying each
+    /// `/files/*` request. Empty in dev (URLs render with no
+    /// `?exp=&sig=` query — see T-23-b validation rule).
+    pub signed_url_secret: Arc<str>,
+
+    /// T-23-b: TTL (seconds) embedded in every signed URL the
+    /// API hands out. Defaulted from
+    /// `Settings::storage.signed_url_ttl_secs`.
+    pub signed_url_ttl_secs: u32,
 }
 
 /// Chat state bundle — the service + the local broadcast
@@ -227,6 +246,9 @@ impl AppState {
         storage: Arc<dyn Storage>,
         image: Arc<ImageProcessor>,
         permission_checker: Arc<PermissionChecker>,
+        public_base_url: Arc<str>,
+        signed_url_secret: Arc<str>,
+        signed_url_ttl_secs: u32,
     ) -> Self {
         Self {
             auth,
@@ -247,6 +269,9 @@ impl AppState {
             storage,
             image,
             permission_checker,
+            public_base_url,
+            signed_url_secret,
+            signed_url_ttl_secs,
         }
     }
 
@@ -296,6 +321,13 @@ impl AppState {
             storage,
             image,
             permission_checker,
+            // T-23: legacy callers (pre-T-23 integration tests)
+            // get empty values; no `/files/*` route + no image
+            // URLs in responses. Tests that need the T-23 wiring
+            // construct state via `build_app_state_with` directly.
+            public_base_url: Arc::from(""),
+            signed_url_secret: Arc::from(""),
+            signed_url_ttl_secs: 600,
         }
     }
 }

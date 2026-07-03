@@ -7,12 +7,14 @@ pub mod adapters;
 pub mod cert_watcher;
 pub mod error;
 pub mod extractors;
+pub mod files;
 pub mod handlers;
 pub mod middleware;
 pub mod openapi;
 pub mod redirect;
 pub mod repo_factory;
 pub mod router;
+pub mod signed_url;
 pub mod state;
 pub mod tls;
 
@@ -68,6 +70,9 @@ pub fn build_app_state_with(
     registry: HealthRegistry,
     settings: Arc<kokkak_common::config::Settings>,
     storage: Arc<dyn kokkak_domain::Storage>,
+    public_base_url: Arc<str>,
+    signed_url_secret: Arc<str>,
+    signed_url_ttl_secs: u32,
 ) -> AppState {
     // Audit sink: try FileAuditLogger, fall back to no-op so a
     // permission error on the log dir doesn't break the API.
@@ -183,6 +188,9 @@ pub fn build_app_state_with(
         storage,
         image,
         permission_checker,
+        public_base_url,
+        signed_url_secret,
+        signed_url_ttl_secs,
     )
 }
 
@@ -241,7 +249,16 @@ pub fn build_app_state(
         mssql_pool: backend_marker,
         topology: None,
     };
-    build_app_state_with(bundle, jwt, registry, settings, storage)
+    build_app_state_with(
+        bundle,
+        jwt,
+        registry,
+        settings,
+        storage,
+        Arc::from(""),
+        Arc::from(""),
+        600,
+    )
 }
 
 /// Convenience builder for tests/dev: pass chat + payments already
@@ -281,5 +298,14 @@ pub fn build_app_state_json(
     // image processor is built inside `build_app_state_with`
     // from `Settings::image`, so this entry point stays simple.
     let storage: Arc<dyn kokkak_domain::Storage> = Arc::new(MemoryStorage::new());
-    build_app_state_with(bundle, jwt, registry, settings, storage)
+    build_app_state_with(
+        bundle,
+        jwt,
+        registry,
+        settings,
+        storage,
+        Arc::from(""),
+        Arc::from(""),
+        600,
+    )
 }

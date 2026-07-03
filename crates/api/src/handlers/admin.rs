@@ -8,6 +8,10 @@
 //!   accepts the full admin form (address, bank, position,
 //!   salary, schedule, attachments). See the
 //!   `admin_insert_user_full` handler below.
+//! - `PUT /api/v1/admin/users/:guid/full` — admin-only **rich** user
+//!   update (M22-b). Wraps `dbo.SP_USER_UPDATE_FULL` — same
+//!   wire shape as the create endpoint, with the target GUID
+//!   on the URL path. See `admin_update_user_full` below.
 //! - `GET /api/v1/admin/users` — admin-only user listing (M16,
 //!   backed by `dbo.SP_PERMISSION_USER_LIST`).
 //! - `GET /api/v1/admin/users/:guid/permissions` — per-user detailed
@@ -44,7 +48,9 @@ use axum::{
     Json,
 };
 use chrono::{DateTime, Utc};
-use kokkak_application::admin_user::{AdminInsertUserFullInput, AdminUserListPagingInput};
+use kokkak_application::admin_user::{
+    AdminInsertUserFullInput, AdminUpdateUserFullInput, AdminUserListPagingInput,
+};
 use kokkak_application::auth::{PasswordHasherPort, RegisterInput};
 use kokkak_application::user_role::{PermissionUpdateInput, UpdatePermissionsInput};
 use kokkak_common::error::AppError;
@@ -54,8 +60,9 @@ use kokkak_common::response::{created, ok, paginated, ApiResponse, PageMeta};
 #[allow(unused_imports)]
 // `AdminUserDetail` is consumed by the utoipa::path body attribute on `get_user_detail_full_admin`.
 use kokkak_domain::{
-    AdminInsertUserError, AdminInsertUserResult, AdminUserDetail, Permission, PermissionUpdateRow,
-    PermissionUserGroup, RepoError, Role, UserRoleWithPermissions,
+    AdminInsertUserError, AdminInsertUserResult, AdminUpdateUserError, AdminUpdateUserResult,
+    AdminUserDetail, Permission, PermissionUpdateRow, PermissionUserGroup, RepoError, Role,
+    UserRoleWithPermissions,
 };
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -589,7 +596,7 @@ pub async fn get_user_detail_full_admin(
     //    no GUID→username translation needed (M22). The wire
     //    payload is the full [`AdminUserDetail`] (user basic +
     //    every related sub-block).
-    let detail = match state
+    let mut detail = match state
         .admin_users
         .get_user_detail_full(user.id(), guid)
         .await
@@ -609,7 +616,20 @@ pub async fn get_user_detail_full_admin(
         Err(e) => return Err(ApiError::from(e).into_localized_response(&state).await),
     };
 
-    // 4. Standard 200 envelope via the `ok()` helper (no `meta`
+    // 4. T-23-b: fill the `*_img_url` fields with HMAC-signed
+    //    URLs. The frontend gets a URL it can paste into `<img
+    //    src=...>` for up to `signed_url_ttl_secs` (default 10
+    //    min). After expiry the same URL returns 403 and the
+    //    client re-fetches the JSON (which is just one round trip
+    //    in practice — the same JWT works for both endpoints).
+    populate_image_urls(
+        &mut detail,
+        &state.public_base_url,
+        &state.signed_url_secret,
+        state.signed_url_ttl_secs,
+    );
+
+    // 5. Standard 200 envelope via the `ok()` helper (no `meta`
     //    — a single-user lookup isn't paginated).
     Ok((StatusCode::OK, ok(detail)).into_response())
 }
@@ -624,6 +644,58 @@ pub async fn get_user_detail_full_admin(
 // in this commit so `cargo check` / `cargo test` can run again. The
 // live handlers + struct live in the M16 sections above.
 // ============================================================================
+
+/// T-23: compose `*_img_url` from `*_img_path` + the API's public
+/// base URL, in-place on the [`AdminUserDetail`]. Called by
+/// [`get_user_detail_full_admin`] (and any future read endpoint
+/// that returns the same shape) before serialising.
+///
+/// The six image fields live on three different sub-structs
+/// (`profile_image`, `bank_account`, plus four `*_attachment`
+/// fields — see the `AdminUserDetail` definition). Each block
+/// gets the same treatment: skip when the path is empty (the
+/// user has no image of this kind yet) or when the base URL
+/// is empty (the operator hasn't wired one — operators can
+/// suppress URL emission without recompiling).
+fn populate_image_urls(
+    detail: &mut kokkak_domain::admin_user::AdminUserDetail,
+    public_base_url: &str,
+    signed_url_secret: &str,
+    signed_url_ttl_secs: u32,
+) {
+    let compose = |path: &str| {
+        crate::signed_url::signed_image_url(
+            public_base_url,
+            path,
+            signed_url_secret,
+            signed_url_ttl_secs,
+        )
+    };
+
+    if let Some(img) = detail.profile_image.as_mut() {
+        img.profile_img_url = compose(&img.profile_img_path);
+    }
+    if let Some(bank) = detail.bank_account.as_mut() {
+        bank.bank_book_img_url = compose(&bank.bank_book_img_path);
+    }
+    // Four attachment kinds share `AdminUserDetailAttachment`.
+    // Loop keeps the four call sites in sync when a new kind
+    // lands (e.g. a future `passport_photo`). Touching
+    // `AdminUserDetail`'s `attachment` field count is a
+    // deliberate edit — the compiler will catch it via the
+    // struct's literal below if a fifth slot is added.
+    let slots: [&mut Option<kokkak_domain::admin_user::AdminUserDetailAttachment>; 4] = [
+        &mut detail.id_card_front,
+        &mut detail.id_card_back,
+        &mut detail.proof_of_address,
+        &mut detail.source_of_funds_statement,
+    ];
+    for slot in slots {
+        if let Some(att) = slot.as_mut() {
+            att.attachment_url = compose(&att.attachment_path);
+        }
+    }
+}
 
 // ============================================================================
 // M15-prep: GET /api/v1/admin/permissions
@@ -1327,6 +1399,196 @@ pub struct AdminInsertUserRequest {
     pub source_of_funds_statement_b64: Option<String>,
 }
 
+/// Request body for `PUT /api/v1/admin/users/:guid/full`.
+///
+/// Mirrors [`AdminInsertUserRequest`] 1:1 with two differences:
+///
+/// 1. **No `user_guid` field** — the target GUID lives on the
+///    URL path (`PUT /api/v1/admin/users/{guid}/full`). axum's
+///    `Path<Uuid>` extractor already validates the format
+///    before the handler runs.
+/// 2. **No `password` field** — password reset is a separate
+///    flow (`POST /api/v1/admin/users/:guid/reset-password`,
+///    not in this PR). The actor admin can issue a reset from
+///    the user detail screen.
+///
+/// Same image-upload contract: each `*_img_b64` field is
+/// decoded + transcoded to WebP + stored under
+/// `users/{guid}/<kind>/{uuid}.webp` before the SP call.
+#[derive(Debug, Deserialize, Validate, utoipa::ToSchema)]
+pub struct AdminUpdateUserRequest {
+    #[validate(length(min = 1, max = 100, message = "first_name must be 1-100 characters"))]
+    pub first_name: String,
+
+    #[validate(length(min = 1, max = 100, message = "last_name must be 1-100 characters"))]
+    pub last_name: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 100, message = "id_card must be at most 100 characters"))]
+    pub id_card: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 50, message = "tel must be at most 50 characters"))]
+    pub tel: Option<String>,
+
+    #[validate(length(min = 1, max = 255, message = "email must be 1-255 characters"))]
+    pub email: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 50, message = "gender must be at most 50 characters"))]
+    pub gender: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 36, message = "country_guid must be a 36-char UUID"))]
+    pub country_guid: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 255, message = "province must be at most 255 characters"))]
+    pub province: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 255, message = "district must be at most 255 characters"))]
+    pub district: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 255, message = "sub_district must be at most 255 characters"))]
+    pub sub_district: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 255, message = "village must be at most 255 characters"))]
+    pub village: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 50, message = "post must be at most 50 characters"))]
+    pub post: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 4000, message = "description must be at most 4000 characters"))]
+    pub description: Option<String>,
+
+    pub is_foreign: bool,
+    pub is_customer_company: bool,
+    pub is_customer: bool,
+    pub is_admin: bool,
+    pub is_employee: bool,
+    pub is_freelance: bool,
+
+    /// 1 = active, 0 = inactive. SP rejects anything else.
+    #[validate(custom(function = "validate_user_status", message = "status must be 0 or 1"))]
+    pub status: i32,
+
+    #[validate(length(min = 3, max = 255, message = "username must be 3-255 characters"))]
+    pub username: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 500, message = "profile_img_path must be at most 500 characters"))]
+    pub profile_img_path: Option<String>,
+
+    /// Optional. Base64-encoded raw image. When present, the
+    /// handler decodes + transcodes + stores under
+    /// `users/{guid}/profile/{uuid}.webp` and writes the
+    /// resulting key into `profile_img_path`. See
+    /// [`AdminInsertUserRequest::profile_img_b64`] for the
+    /// full contract.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_img_b64: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 36, message = "company_guid must be a 36-char UUID"))]
+    pub company_guid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 255, message = "company_name must be at most 255 characters"))]
+    pub company_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 50, message = "company_tel must be at most 50 characters"))]
+    pub company_tel: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub company_type: Option<i32>,
+    pub company_status: i32,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 36, message = "department_guid must be a 36-char UUID"))]
+    pub department_guid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 36, message = "department_team_guid must be a 36-char UUID"))]
+    pub department_team_guid: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 36, message = "position_guid must be a 36-char UUID"))]
+    pub position_guid: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position_start_at: Option<DateTime<Utc>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub salary_amount: Option<Decimal>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 10, message = "salary_currency must be at most 10 characters"))]
+    pub salary_currency: Option<String>,
+
+    #[validate(nested)]
+    pub schedule: WeeklyScheduleDto,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 255, message = "bank_name must be at most 255 characters"))]
+    pub bank_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 50, message = "bank_code must be at most 50 characters"))]
+    pub bank_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 100, message = "bank_account_no must be at most 100 characters"))]
+    pub bank_account_no: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(
+        max = 255,
+        message = "bank_account_name must be at most 255 characters"
+    ))]
+    pub bank_account_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(
+        max = 500,
+        message = "bank_book_img_path must be at most 500 characters"
+    ))]
+    pub bank_book_img_path: Option<String>,
+
+    /// Optional base64-encoded bank-book cover image.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bank_book_img_b64: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(
+        max = 500,
+        message = "id_card_front_path must be at most 500 characters"
+    ))]
+    pub id_card_front_path: Option<String>,
+    /// Optional base64 ID-card front image.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id_card_front_b64: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(
+        max = 500,
+        message = "id_card_back_path must be at most 500 characters"
+    ))]
+    pub id_card_back_path: Option<String>,
+    /// Optional base64 ID-card back image.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id_card_back_b64: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(
+        max = 500,
+        message = "proof_of_address_path must be at most 500 characters"
+    ))]
+    pub proof_of_address_path: Option<String>,
+    /// Optional base64 proof-of-address image.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proof_of_address_b64: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(
+        max = 500,
+        message = "source_of_funds_statement_path must be at most 500 characters"
+    ))]
+    pub source_of_funds_statement_path: Option<String>,
+    /// Optional base64 source-of-funds-statement image.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_of_funds_statement_b64: Option<String>,
+}
+
 /// `validator` fn: `status` must be 0 or 1.
 fn validate_user_status(s: i32) -> Result<(), ValidationError> {
     if s == 0 || s == 1 {
@@ -1362,6 +1624,26 @@ impl From<AdminInsertUserResult> for AdminInsertUserResponse {
             user_username_guid: r.user_username_guid,
             username: r.username,
             assigned_role_guid: r.assigned_role_guid,
+        }
+    }
+}
+
+/// Response body for `PUT /api/v1/admin/users/:guid/full`.
+///
+/// The SP only echoes the resolved `user_guid` — the admin UI
+/// already knows the rest of the record (it called
+/// `GET /api/v1/admin/users/:guid/detail` to pre-fill the
+/// form) so the response stays minimal.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct AdminUpdateUserResponse {
+    /// Updated `[user].user_guid`.
+    pub user_guid: String,
+}
+
+impl From<AdminUpdateUserResult> for AdminUpdateUserResponse {
+    fn from(r: AdminUpdateUserResult) -> Self {
+        Self {
+            user_guid: r.user_guid,
         }
     }
 }
@@ -1620,6 +1902,241 @@ pub async fn admin_insert_user_full(
         created(AdminInsertUserResponse::from(result)),
     )
         .into_response())
+}
+
+// ============================================================================
+// M22-b: PUT /api/v1/admin/users/:guid/full
+// ============================================================================
+//
+// Write-side counterpart to `POST /api/v1/admin/users/full`.
+// Wraps `dbo.SP_USER_UPDATE_FULL` — same wire shape as the
+// create endpoint (minus the password), with the target GUID
+// carried on the URL path instead of the body.
+//
+// The handler is **thin**: it validates the wire DTO,
+// normalises the schedule / image inputs, and delegates to
+// [`AdminUserService::admin_update_full`]. SP error codes are
+// mapped to HTTP status + i18n message via
+// [`sp_update_full_status`] below.
+//
+// Difference vs INSERT:
+// - No `password` field — password reset is a separate flow.
+// - No `password_hash` arrives at the SP — the update SP does
+//   not touch the password column.
+// - The user GUID comes from the URL path (validated by
+//   `axum::extract::Path<Uuid>`) instead of the body.
+// - The wire response is `200 OK + { user_guid }` (not 201)
+//   because no new resource was created.
+
+/// `PUT /api/v1/admin/users/:guid/full` — rich admin user update.
+///
+/// Wraps `dbo.SP_USER_UPDATE_FULL`. The handler does NOT
+/// pre-validate uniqueness or duplicate checks — those live
+/// inside the SP (the DB is the source of truth). The
+/// handler's job is:
+///
+/// 1. RBAC gate (`Permission::UsersUpdate`).
+/// 2. Validate the wire DTO (`validator` crate).
+/// 3. Normalise schedule + decode base64 images (same flow
+///    as insert).
+/// 4. Delegate to [`AdminUserService::admin_update_full`].
+/// 5. Map SP failure codes → HTTP status + `error.code` via
+///    [`sp_update_full_status`].
+///
+/// ponytail: schedule validation, image decoding, and the
+/// base64 → WebP pipeline are all reused from the insert
+/// handler (`dto_to_day_schedule` + `resolve_b64_image`) — the
+/// wire DTO shape is identical for these fields, so the
+/// helpers apply verbatim.
+#[utoipa::path(
+        put,
+        path = "/api/v1/admin/users/{guid}/full",
+        tag = "admin",
+        params(
+            ("guid" = Uuid, Path, description = "User GUID (36-char UUID)"),
+        ),
+        request_body = AdminUpdateUserRequest,
+        responses(
+            (status = 200, description = "User updated", body = AdminUpdateUserResponse),
+            (status = 400, description = "Malformed JSON body or ACTOR_REQUIRED", body = crate::openapi::ApiError),
+            (status = 401, description = "Not authenticated or ACTOR_NOT_FOUND", body = crate::openapi::ApiError),
+            (status = 403, description = "Not an admin (PERMISSION_DENIED)", body = crate::openapi::ApiError),
+            (status = 404, description = "User not found (USER_NOT_FOUND)", body = crate::openapi::ApiError),
+            (status = 409, description = "Username / email / id_card collision", body = crate::openapi::ApiError),
+            (status = 422, description = "Validation error (required field, role/position/company not found)", body = crate::openapi::ApiError),
+            (status = 500, description = "Internal server error (ADMIN/EMPLOYEE role missing)", body = crate::openapi::ApiError),
+        ),
+        security(("bearer_auth" = []))
+    )]
+pub async fn admin_update_user_full(
+    State(state): State<AppState>,
+    user: AuthnUser,
+    Path(guid): Path<Uuid>,
+    ValidatedJson(req): ValidatedJson<AdminUpdateUserRequest>,
+) -> Result<Response, Response> {
+    // 1. RBAC — M22-b: gate on `Permission::UsersUpdate` (matches
+    //    the SP's server-side `USERS_UPDATE` check). Mirrors the
+    //    insert flow's permission gate pattern.
+    if !user
+        .has_permission(Permission::UsersUpdate, &state.permission_checker)
+        .await
+    {
+        let locale = current_locale();
+        let code_str = Permission::UsersUpdate.code();
+        let localized = tr("err_auth.permission_denied", &locale, &[code_str]);
+        return Err(ApiError::from(AppError::Localized {
+            status: StatusCode::FORBIDDEN,
+            code: ErrorCode::PERMISSION_DENIED,
+            message: localized,
+        })
+        .into_response());
+    }
+
+    // 2. DTO → domain schedule. Same helper as insert.
+    let schedule = kokkak_domain::admin_user::WeeklySchedule {
+        monday: dto_to_day_schedule(&req.schedule.monday),
+        tuesday: dto_to_day_schedule(&req.schedule.tuesday),
+        wednesday: dto_to_day_schedule(&req.schedule.wednesday),
+        thursday: dto_to_day_schedule(&req.schedule.thursday),
+        friday: dto_to_day_schedule(&req.schedule.friday),
+        saturday: dto_to_day_schedule(&req.schedule.saturday),
+        sunday: dto_to_day_schedule(&req.schedule.sunday),
+    };
+
+    // 3. Image pipeline — same as insert. The URL `guid`
+    //    supplies the user-guid folder; we never need to
+    //    mint a fresh UUID (the user already exists).
+    let user_guid_str = guid.to_string();
+
+    let profile_img_path = match resolve_b64_image(
+        state.image.clone(),
+        &user_guid_str,
+        req.profile_img_b64.as_deref(),
+        UserImageKind::Profile,
+    )
+    .await
+    {
+        Ok(v) => v.or(req.profile_img_path),
+        Err(e) => return Err(image_error_envelope(&state, "profile_img_b64", e)),
+    };
+    let bank_book_img_path = match resolve_b64_image(
+        state.image.clone(),
+        &user_guid_str,
+        req.bank_book_img_b64.as_deref(),
+        UserImageKind::BankBook,
+    )
+    .await
+    {
+        Ok(v) => v.or(req.bank_book_img_path),
+        Err(e) => return Err(image_error_envelope(&state, "bank_book_img_b64", e)),
+    };
+    let id_card_front_path = match resolve_b64_image(
+        state.image.clone(),
+        &user_guid_str,
+        req.id_card_front_b64.as_deref(),
+        UserImageKind::Attachment(kokkak_infra::storage::UserAttachment::IdCardFront),
+    )
+    .await
+    {
+        Ok(v) => v.or(req.id_card_front_path),
+        Err(e) => return Err(image_error_envelope(&state, "id_card_front_b64", e)),
+    };
+    let id_card_back_path = match resolve_b64_image(
+        state.image.clone(),
+        &user_guid_str,
+        req.id_card_back_b64.as_deref(),
+        UserImageKind::Attachment(kokkak_infra::storage::UserAttachment::IdCardBack),
+    )
+    .await
+    {
+        Ok(v) => v.or(req.id_card_back_path),
+        Err(e) => return Err(image_error_envelope(&state, "id_card_back_b64", e)),
+    };
+    let proof_of_address_path = match resolve_b64_image(
+        state.image.clone(),
+        &user_guid_str,
+        req.proof_of_address_b64.as_deref(),
+        UserImageKind::Attachment(kokkak_infra::storage::UserAttachment::ProofOfAddress),
+    )
+    .await
+    {
+        Ok(v) => v.or(req.proof_of_address_path),
+        Err(e) => return Err(image_error_envelope(&state, "proof_of_address_b64", e)),
+    };
+    let source_of_funds_statement_path = match resolve_b64_image(
+        state.image.clone(),
+        &user_guid_str,
+        req.source_of_funds_statement_b64.as_deref(),
+        UserImageKind::Attachment(kokkak_infra::storage::UserAttachment::SourceOfFunds),
+    )
+    .await
+    {
+        Ok(v) => v.or(req.source_of_funds_statement_path),
+        Err(e) => {
+            return Err(image_error_envelope(
+                &state,
+                "source_of_funds_statement_b64",
+                e,
+            ));
+        }
+    };
+
+    // 4. Build the application input + delegate.
+    let input = AdminUpdateUserFullInput {
+        user_guid: user_guid_str,
+        first_name: req.first_name,
+        last_name: req.last_name,
+        id_card: req.id_card,
+        tel: req.tel,
+        email: req.email,
+        gender: req.gender,
+        country_guid: req.country_guid,
+        province: req.province,
+        district: req.district,
+        sub_district: req.sub_district,
+        village: req.village,
+        post: req.post,
+        description: req.description,
+        is_foreign: req.is_foreign,
+        is_customer_company: req.is_customer_company,
+        is_customer: req.is_customer,
+        is_admin: req.is_admin,
+        is_employee: req.is_employee,
+        is_freelance: req.is_freelance,
+        status: req.status,
+        username: req.username,
+        profile_img_path,
+        company_guid: req.company_guid,
+        company_name: req.company_name,
+        company_tel: req.company_tel,
+        company_type: req.company_type,
+        company_status: req.company_status,
+        department_guid: req.department_guid,
+        department_team_guid: req.department_team_guid,
+        position_guid: req.position_guid,
+        position_start_at: req.position_start_at,
+        salary_amount: req.salary_amount,
+        salary_currency: req.salary_currency,
+        schedule,
+        bank_name: req.bank_name,
+        bank_code: req.bank_code,
+        bank_account_no: req.bank_account_no,
+        bank_account_name: req.bank_account_name,
+        bank_book_img_path,
+        id_card_front_path,
+        id_card_back_path,
+        proof_of_address_path,
+        source_of_funds_statement_path,
+    };
+
+    let result = match state.admin_users.admin_update_full(user.id(), input).await {
+        Ok(r) => r,
+        Err(e) => return Err(sp_update_error_envelope(&state, e)),
+    };
+
+    // 5. 200 + response DTO. `PUT` returns 200, not 201 (no new
+    //    resource was created — the user already existed).
+    Ok((StatusCode::OK, ok(AdminUpdateUserResponse::from(result))).into_response())
 }
 
 /// Convert a wire DTO day into the domain `DaySchedule`.
@@ -1920,6 +2437,195 @@ fn sp_insert_full_status(sp_code: &str) -> (StatusCode, &'static str, &'static s
     }
 }
 
+/// Map a [`AdminUpdateUserError`] into an axum [`Response`].
+///
+/// Mirrors [`sp_error_envelope`] 1:1 but consumes the
+/// `AdminUpdateUserError` shape. The two SPs share ~22 stable
+/// string codes; `sp_update_full_status` reuses them verbatim
+/// where the semantics match and adds `USER_NOT_FOUND`
+/// (which only the update SP can emit because the target row
+/// already needs to exist).
+///
+/// Unknown codes fall back to **500 / internal** with the
+/// SP's raw message — surfaces a regression in the SP-side
+/// catalog before it ships to admins.
+fn sp_update_error_envelope(state: &AppState, err: AdminUpdateUserError) -> Response {
+    let (status, code, i18n_key) = sp_update_full_status(&err.code);
+    let locale = current_locale();
+    let localized = tr(i18n_key, &locale, &[]);
+    tracing::warn!(
+        sp_code = %err.code,
+        sp_message = %err.message,
+        localized_code = code,
+        "SP_USER_UPDATE_FULL rejected request"
+    );
+    let envelope: ApiResponse<()> = ApiResponse {
+        success: false,
+        data: None,
+        error: Some(kokkak_common::error::ApiErrorBody {
+            code: code.into(),
+            message: localized,
+        }),
+        meta: None,
+    };
+    let _ = state;
+    (status, Json(envelope)).into_response()
+}
+
+/// `(HTTP status, ErrorCode, i18n key)` for every SP code we
+/// surface from `SP_USER_UPDATE_FULL`.
+///
+/// ponytail: matches the insert mapping table pattern (3-column
+/// match, compile-time exhaustiveness check). Drops insert-only
+/// codes (`password_hash_required`, `user_guid_exists`) and
+/// adds `user_not_found`. Future insert↔update divergence
+/// (e.g. update gains a new code) keeps each table local.
+fn sp_update_full_status(sp_code: &str) -> (StatusCode, &'static str, &'static str) {
+    match sp_code {
+        // ---- Actor / RBAC ----
+        "actor_required" => (
+            StatusCode::BAD_REQUEST,
+            ErrorCode::ACTOR_REQUIRED,
+            "err_admin_user.actor_required",
+        ),
+        "actor_not_found" => (
+            StatusCode::UNAUTHORIZED,
+            ErrorCode::ACTOR_NOT_FOUND,
+            "err_admin_user.actor_not_found",
+        ),
+        "permission_denied" => (
+            StatusCode::FORBIDDEN,
+            ErrorCode::PERMISSION_DENIED,
+            "err_admin_user.permission_denied",
+        ),
+
+        // ---- Target user ----
+        "user_not_found" => (
+            StatusCode::NOT_FOUND,
+            ErrorCode::USER_NOT_FOUND,
+            "err_admin_user.user_not_found",
+        ),
+
+        // ---- Required field validation ----
+        "first_name_required" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::FIRST_NAME_REQUIRED,
+            "err_admin_user.first_name_required",
+        ),
+        "last_name_required" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::LAST_NAME_REQUIRED,
+            "err_admin_user.last_name_required",
+        ),
+        "email_required" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::EMAIL_REQUIRED,
+            "err_admin_user.email_required",
+        ),
+        "username_required" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::USERNAME_REQUIRED,
+            "err_admin_user.username_required",
+        ),
+        "invalid_user_status" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::INVALID_USER_STATUS,
+            "err_admin_user.invalid_user_status",
+        ),
+
+        // ---- Uniqueness conflicts ----
+        // Note: `user_guid_exists` is NOT possible on update
+        // because the SP targets an existing row by GUID —
+        // the row that owns that GUID is, by definition, the
+        // one being updated.
+        "username_exists" => (
+            StatusCode::CONFLICT,
+            ErrorCode::USERNAME_TAKEN,
+            "err_admin_user.username_exists",
+        ),
+        "email_exists" => (
+            StatusCode::CONFLICT,
+            ErrorCode::EMAIL_TAKEN,
+            "err_admin_user.email_exists",
+        ),
+        "id_card_exists" => (
+            StatusCode::CONFLICT,
+            ErrorCode::ID_CARD_TAKEN,
+            "err_admin_user.id_card_exists",
+        ),
+
+        // ---- Reference-data validation ----
+        "country_required" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::COUNTRY_REQUIRED,
+            "err_admin_user.country_required",
+        ),
+        "country_not_found" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::COUNTRY_NOT_FOUND,
+            "err_admin_user.country_not_found",
+        ),
+        "company_required" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::COMPANY_REQUIRED,
+            "err_admin_user.company_required",
+        ),
+        "company_not_found" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::COMPANY_NOT_FOUND,
+            "err_admin_user.company_not_found",
+        ),
+        "department_not_found" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::DEPARTMENT_NOT_FOUND,
+            "err_admin_user.department_not_found",
+        ),
+        "department_team_not_found" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::DEPARTMENT_TEAM_NOT_FOUND,
+            "err_admin_user.department_team_not_found",
+        ),
+        "department_team_mismatch" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::DEPARTMENT_TEAM_MISMATCH,
+            "err_admin_user.department_team_mismatch",
+        ),
+        "position_not_found" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::POSITION_NOT_FOUND,
+            "err_admin_user.position_not_found",
+        ),
+        "invalid_salary" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::INVALID_SALARY,
+            "err_admin_user.invalid_salary",
+        ),
+        "work_time_required" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::WORK_TIME_REQUIRED,
+            "err_admin_user.work_time_required",
+        ),
+
+        // ---- Server-side configuration ----
+        "admin_role_not_found" => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ErrorCode::ADMIN_ROLE_NOT_FOUND,
+            "err_admin_user.admin_role_not_found",
+        ),
+        "employee_role_not_found" => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ErrorCode::EMPLOYEE_ROLE_NOT_FOUND,
+            "err_admin_user.employee_role_not_found",
+        ),
+
+        // ---- Unknown / driver error ----
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ErrorCode::INTERNAL,
+            "err.internal",
+        ),
+    }
+}
 // Silence dead-code warning: `PasswordHasherPort` is imported
 // here so a future self-contained handler can re-use the
 // hasher without reaching back through `state.admin_users`.

@@ -118,4 +118,5 @@ err_admin_user:
   work_time_required: "工作日必须提供 start_time 和 end_time"
   admin_role_not_found: "未找到 ADMIN 角色或未启用"
   employee_role_not_found: "未找到 EMPLOYEE 角色或未启用"
-  image_invalid: "字段 \"{field}\" 的图片上传失败"
+  user_not_found: "用户不存在或已删除"
+  image_invalid: '字段 "{field}" 的图片上传失败'
