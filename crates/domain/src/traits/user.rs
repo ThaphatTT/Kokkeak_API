@@ -1,4 +1,4 @@
-//! User repository port (พอร์ต User repository — M2 + M14).
+//! User repository port (พอร์ต User repository — M2 + M14 + M22).
 //!
 //! Returns `None` when the entity is missing; returns `Err(...)` when
 //! the operation could not be performed (DB down, constraint
@@ -10,14 +10,17 @@
 //! because NEW_DB `[user]` has no email column; login is now
 //! `[user_username].user_username_username` (a free-form login id —
 //! email, phone, or alphanumeric handle).
+//!
+//! M22 added [`UserRepository::get_user_detail_full`] — read-side
+//! counterpart to [`UserRepository::admin_insert_full`].
 
 use async_trait::async_trait;
 use thiserror::Error;
 use uuid::Uuid;
 
 use crate::admin_user::{
-    AdminInsertUserError, AdminInsertUserRequest, AdminInsertUserResult, AdminUserListPagingInput,
-    AdminUserListPagingPage,
+    AdminInsertUserError, AdminInsertUserRequest, AdminInsertUserResult, AdminUserDetail,
+    AdminUserListPagingInput, AdminUserListPagingPage,
 };
 use crate::user::{User, UserListRow};
 
@@ -158,6 +161,34 @@ pub trait UserRepository: Send + Sync {
         let _ = (input, actor);
         Err(RepoError::Backend(
             "list_users_paging: not implemented by this repository adapter".into(),
+        ))
+    }
+
+    /// M22: full detail lookup for a single user — wraps
+    /// `dbo.SP_USER_DETAIL_FULL_GET`.
+    ///
+    /// Returns `Ok(None)` when the SP emits zero rows (i.e. the
+    /// `user_guid` doesn't resolve to a non-deleted `[user]` row).
+    /// Returns `Ok(Some(detail))` on a successful read; the
+    /// `AdminUserDetail` sub-blocks are individually `Option<_>`
+    /// so a user without (e.g.) a bank account still serialises
+    /// cleanly.
+    ///
+    /// `actor` is forwarded for audit log consistency; the SP
+    /// itself does NOT enforce admin gating — that lives at the
+    /// handler layer via [`Permission::PageUsersView`].
+    ///
+    /// Default impl returns `Backend("not implemented")` so the
+    /// existing test mocks don't break — only the MSSQL adapter
+    /// needs to override it.
+    async fn get_user_detail_full(
+        &self,
+        user_guid: Uuid,
+        actor: Uuid,
+    ) -> Result<Option<AdminUserDetail>, RepoError> {
+        let _ = (user_guid, actor);
+        Err(RepoError::Backend(
+            "get_user_detail_full: not implemented by this repository adapter".into(),
         ))
     }
 }

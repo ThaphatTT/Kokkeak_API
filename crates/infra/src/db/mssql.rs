@@ -184,6 +184,21 @@ pub fn read_datetime(row: &tiberius::Row, col: &str) -> Option<chrono::DateTime<
     row.get::<chrono::DateTime<chrono::Utc>, _>(col)
 }
 
+/// Read a `rust_decimal::Decimal` column by **name**. Returns
+/// `None` when NULL.
+///
+/// Used by mappers that bind a SQL Server `decimal(p, s)` column
+/// (e.g. `[user_salary].user_salary_amount decimal(18, 2)` — see
+/// `AGENTS.md` § 7.5 for the project-wide rule that money never
+/// uses `f64`). The native tiberius binding (via the `rust_decimal`
+/// feature on the tiberius crate) preserves the exact precision
+/// and scale the SP emits, so we never round-trip through a string
+/// (which would lose precision for values like `0.10` and
+/// silently truncate trailing zeros).
+pub fn read_decimal(row: &tiberius::Row, col: &str) -> Option<rust_decimal::Decimal> {
+    row.get::<rust_decimal::Decimal, _>(col)
+}
+
 /// Read a GUID column by **name** and emit it as a hyphenated
 /// `String` (e.g. `11111111-1111-1111-1111-111111111111`).
 ///

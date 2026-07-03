@@ -15,6 +15,12 @@
 //!   `dbo.SP_PERMISSION_USER_FIND_BY_USERNAME`). Handler translates
 //!   GUID → username via the existing `UserRepository::find_by_id`
 //!   path so the wire contract stays stable.
+//! - `GET /api/v1/admin/users/:guid/detail` — per-user full detail
+//!   (M22, backed by `dbo.SP_USER_DETAIL_FULL_GET`). Read-side
+//!   counterpart to `POST /api/v1/admin/users/full` — returns the
+//!   same admin form data the create flow accepts, with every
+//!   sub-block (login, company, roles, position, salary, schedule,
+//!   bank account, four attachments) returned as nested objects.
 //! - `GET /api/v1/admin/permissions?mode=<literal>` — role × permission
 //!   matrix (M15-prep). The `mode` is a pass-through literal the SP
 //!   uses to scope which role set to return (e.g. `SELECT_ADMIN`,
@@ -44,9 +50,11 @@ use kokkak_application::user_role::{PermissionUpdateInput, UpdatePermissionsInpu
 use kokkak_common::error::AppError;
 use kokkak_common::error_codes::ErrorCode;
 use kokkak_common::i18n::{current_locale, tr};
-use kokkak_common::response::{created, paginated, ApiResponse, PageMeta};
+use kokkak_common::response::{created, ok, paginated, ApiResponse, PageMeta};
+#[allow(unused_imports)]
+// `AdminUserDetail` is consumed by the utoipa::path body attribute on `get_user_detail_full_admin`.
 use kokkak_domain::{
-    AdminInsertUserError, AdminInsertUserResult, Permission, PermissionUpdateRow,
+    AdminInsertUserError, AdminInsertUserResult, AdminUserDetail, Permission, PermissionUpdateRow,
     PermissionUserGroup, RepoError, Role, UserRoleWithPermissions,
 };
 use rust_decimal::Decimal;
@@ -216,6 +224,14 @@ pub async fn create_user_admin(
 /// `keyword` filter is free-form (LIKE '%keyword%' across name /
 /// phone / email + concatenated first+last). `user_status` is the raw
 /// `int` from `[user].user_status`; omit it to disable the filter.
+///
+/// The three cohort flags (`user_is_customer` / `user_is_employee` /
+/// `user_is_freelance`) accept `true` / `false`; omit the parameter
+/// to disable the filter on that cohort. The three scope GUIDs
+/// (`department_guid` / `department_team_guid` / `position_guid`)
+/// restrict the result to users whose active role / current
+/// position matches the GUID. Whitespace-only values are treated
+/// as "no filter" by the application layer.
 #[derive(Debug, Default, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListUsersQuery {
     /// 1-based page number. Defaults to 1; values < 1 are
@@ -236,6 +252,31 @@ pub struct ListUsersQuery {
     /// raw int AND the human-readable name (`user_status_name`) so
     /// the frontend can display the legacy label without a remap.
     pub user_status: Option<i32>,
+    /// `[user].user_is_customer` filter.
+    /// - `Some(true)` → only customer-flagged users.
+    /// - `Some(false)` → only NON-customer users.
+    /// - `None` → no filter (the SP receives `NULL`).
+    pub user_is_customer: Option<bool>,
+    /// `[user].user_is_employee` filter — same semantics as
+    /// [`user_is_customer`](Self::user_is_customer).
+    pub user_is_employee: Option<bool>,
+    /// `[user].user_is_freelance` filter — same semantics as
+    /// [`user_is_customer`](Self::user_is_customer). Freelance
+    /// technicians are a separate cohort.
+    pub user_is_freelance: Option<bool>,
+    /// Scope filter: only users whose most-recent active role's
+    /// `user_user_role_department_guid` matches. Whitespace-only
+    /// values are collapsed to `None` (no filter).
+    pub department_guid: Option<String>,
+    /// Scope filter: only users whose most-recent active role's
+    /// `user_user_role_department_team_guid` matches. Whitespace-only
+    /// values are collapsed to `None` (no filter).
+    pub department_team_guid: Option<String>,
+    /// Scope filter: only users whose **current** position
+    /// (`user_position.is_current = 1`) matches the
+    /// `master_position_guid`. Whitespace-only values are collapsed
+    /// to `None` (no filter).
+    pub position_guid: Option<String>,
 }
 
 /// Response shape for the admin user listing — wraps the
@@ -292,6 +333,12 @@ pub async fn list_users_admin(
     let input = AdminUserListPagingInput {
         keyword: q.keyword.unwrap_or_default(),
         user_status: q.user_status,
+        user_is_customer: q.user_is_customer,
+        user_is_employee: q.user_is_employee,
+        user_is_freelance: q.user_is_freelance,
+        department_guid: q.department_guid,
+        department_team_guid: q.department_team_guid,
+        position_guid: q.position_guid,
         page: q.page.unwrap_or(1),
         page_size: q.page_size.unwrap_or(20),
     };
@@ -448,6 +495,123 @@ pub async fn list_user_permissions_admin(
         }),
     )
         .into_response())
+}
+
+// ============================================================================
+// M22: GET /api/v1/admin/users/:guid/detail  (per-user detail)
+// ============================================================================
+//
+// Admin-only lookup of one user's full detail — the read-side
+// counterpart to `POST /api/v1/admin/users/full`. Backed by
+// `dbo.SP_USER_DETAIL_FULL_GET`, which accepts a **GUID**
+// (`@p_user_guid`) directly — no GUID→username translation in
+// Rust. The SP returns either 0 rows (user missing / soft-deleted)
+// or 1 row with every related detail assembled via `OUTER APPLY`
+// blocks (profile image, company, roles, department/team, current
+// position, current salary, working schedule, default bank
+// account, four attachment paths).
+//
+// **Wire contract:**
+//   `GET /api/v1/admin/users/:guid/detail`
+//   200 OK with envelope: `{ success: true, data: AdminUserDetail, ... }`
+//   404 `not_found` — GUID doesn't resolve (or `user_status = 3`).
+//   500 `internal` — unexpected backend failure (via
+//   `into_localized_response`).
+//
+// **RBAC:** `Permission::PageUsersView` — same gate as the
+// `GET /api/v1/admin/users` listing. Viewing the page list implies
+// viewing any individual user's detail.
+
+/// `GET /api/v1/admin/users/:guid/detail` — admin user-detail screen.
+///
+/// Returns the same [`AdminUserDetail`] the SP emits. Sub-blocks
+/// (`username`, `profile_image`, `country`, `company`, `roles`,
+/// `scope`, `position`, `salary`, `schedule`, `bank_account`, the
+/// four `*_attachment` slots) are individually `Option<_>` so a
+/// user without (e.g.) a bank account still serialises cleanly
+/// instead of returning an empty record.
+///
+/// The SP takes a **GUID** (`@p_user_guid`) directly. The handler
+/// no longer needs the GUID→username translation step the M16
+/// design used; the URL's GUID is forwarded as-is.
+///
+/// **Errors:**
+/// - 401 `unauthorized` — missing / invalid Bearer token.
+/// - 403 `permission_denied` — caller lacks `PageUsersView`.
+/// - 404 `not_found` — GUID doesn't resolve to a user.
+/// - 500 `internal` — unexpected backend failure (via
+///   `into_localized_response`).
+#[utoipa::path(
+    get,
+    path = "/api/v1/admin/users/{guid}/detail",
+    tag = "admin",
+    params(
+        ("guid" = Uuid, Path, description = "User GUID (36-char UUID)"),
+    ),
+    responses(
+        (status = 200, description = "Full user detail (profile + login + company + roles + position + salary + schedule + bank + attachments)", body = AdminUserDetail),
+        (status = 401, description = "Not authenticated", body = crate::openapi::ApiError),
+        (status = 403, description = "Not an admin", body = crate::openapi::ApiError),
+        (status = 404, description = "User not found", body = crate::openapi::ApiError),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn get_user_detail_full_admin(
+    State(state): State<AppState>,
+    user: AuthnUser,
+    Path(guid): Path<Uuid>,
+) -> Result<Response, Response> {
+    // 1. RBAC — M22: same gate as the user list (`PageUsersView`).
+    //    Viewing the page list implies viewing any individual user's
+    //    detail; admin operators use this screen to inspect / edit.
+    if !user
+        .has_permission(Permission::PageUsersView, &state.permission_checker)
+        .await
+    {
+        let locale = current_locale();
+        let code_str = Permission::PageUsersView.code();
+        let localized = tr("err_auth.permission_denied", &locale, &[code_str]);
+        return Err(ApiError::from(AppError::Localized {
+            status: StatusCode::FORBIDDEN,
+            code: ErrorCode::PERMISSION_DENIED,
+            message: localized,
+        })
+        .into_response());
+    }
+
+    // 2. axum's `Path<Uuid>` extractor already rejected any
+    //    non-UUID path segment with 400 before this point. The
+    //    handler doesn't need a defensive GUID check — same
+    //    pattern as `list_user_permissions_admin` (M17).
+
+    // 3. Delegate to the admin user service. The service wraps
+    //    `dbo.SP_USER_DETAIL_FULL_GET` with the GUID directly —
+    //    no GUID→username translation needed (M22). The wire
+    //    payload is the full [`AdminUserDetail`] (user basic +
+    //    every related sub-block).
+    let detail = match state
+        .admin_users
+        .get_user_detail_full(user.id(), guid)
+        .await
+    {
+        Ok(Some(d)) => d,
+        Ok(None) => {
+            // SP returned zero rows: GUID didn't resolve, or the
+            // user is soft-deleted (`user_status = 3`). Map to
+            // 404 `not_found` with the existing localized message.
+            let locale = current_locale();
+            let localized = tr("err_auth.user_not_found", &locale, &[&guid.to_string()]);
+            return Err(ApiError::from(
+                AppError::NotFound(guid.to_string()).with_message(localized),
+            )
+            .into_response());
+        }
+        Err(e) => return Err(ApiError::from(e).into_localized_response(&state).await),
+    };
+
+    // 4. Standard 200 envelope via the `ok()` helper (no `meta`
+    //    — a single-user lookup isn't paginated).
+    Ok((StatusCode::OK, ok(detail)).into_response())
 }
 
 // ============================================================================
@@ -1459,11 +1623,26 @@ pub async fn admin_insert_user_full(
 }
 
 /// Convert a wire DTO day into the domain `DaySchedule`.
+///
+/// The wire DTO keeps `start_time` / `end_time` as `"HH:MM:SS"`
+/// strings (the existing `validator::length(max = 8)` constraint
+/// is cheap and the wire format is human-readable for the
+/// admin web form). The domain speaks [`chrono::NaiveTime`]
+/// (the SP column is `time(0)`), so we parse the wire string
+/// at the handler boundary and let chrono's `time` formatting
+/// serialize the response back to `"HH:MM:SS"` for free.
+///
+/// Invalid wire strings (e.g. `"25:99:99"`) propagate as a 422
+/// `validation` error via the `validator` crate's chained
+/// `validate` flow (the DTO field's own `length(max = 8)` is
+/// the cheap pre-filter; the actual parse here is the
+/// semantic check).
 fn dto_to_day_schedule(d: &DayScheduleDto) -> kokkak_domain::admin_user::DaySchedule {
+    let parse_hms = |s: &str| s.parse::<chrono::NaiveTime>().ok();
     kokkak_domain::admin_user::DaySchedule {
         is_working: d.is_working,
-        start_time: d.start_time.clone(),
-        end_time: d.end_time.clone(),
+        start_time: d.start_time.as_deref().and_then(parse_hms),
+        end_time: d.end_time.as_deref().and_then(parse_hms),
     }
 }
 

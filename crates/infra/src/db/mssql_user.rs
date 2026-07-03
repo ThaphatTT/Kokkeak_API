@@ -23,13 +23,19 @@ use async_trait::async_trait;
 use tiberius::ToSql;
 
 use kokkak_domain::admin_user::{
-    AdminInsertUserError, AdminInsertUserRequest, AdminInsertUserResult, AdminUserListPagingInput,
-    AdminUserListPagingPage, DaySchedule, UserListPagingRow,
+    AdminInsertUserError, AdminInsertUserRequest, AdminInsertUserResult, AdminUserDetail,
+    AdminUserDetailAttachment, AdminUserDetailBankAccount, AdminUserDetailCompany,
+    AdminUserDetailCountry, AdminUserDetailPosition, AdminUserDetailProfileImage,
+    AdminUserDetailRoles, AdminUserDetailSalary, AdminUserDetailScope, AdminUserDetailUsername,
+    AdminUserListPagingInput, AdminUserListPagingPage, DaySchedule, UserListPagingRow,
+    WeeklySchedule,
 };
 use kokkak_domain::{Permission, RepoError, Role, User, UserListRow, UserRepository, UserStatus};
 use uuid::Uuid;
 
-use crate::db::mssql::{exec_sp, read_guid_str, read_i32, read_str, MssqlPool, SpError};
+use crate::db::mssql::{
+    exec_sp, read_datetime, read_decimal, read_guid_str, read_i32, read_str, MssqlPool, SpError,
+};
 
 /// SQL Server-backed `UserRepository` (M14.5 — stored procedures).
 #[derive(Clone)]
@@ -603,16 +609,44 @@ impl UserRepository for MssqlUserRepository {
         let status_filter: Option<String> = input.user_status.map(|s| s.to_string());
         let keyword = input.keyword.clone();
 
+        // Bit filters: tiberius 0.12 implements `IntoSql for bool`
+        // (the wire shape is `BIT`). We bind each `Option<bool>`
+        // directly — `None` becomes `NULL` on the wire and the SP
+        // short-circuits via the `IS NULL OR = @p_xxx` guard.
+        let user_is_customer = input.user_is_customer;
+        let user_is_employee = input.user_is_employee;
+        let user_is_freelance = input.user_is_freelance;
+
+        // Scope filters (department / team / position GUIDs) are
+        // bound as `Option<&str>` — tiberius maps `None` to
+        // `NVARCHAR NULL`, and the SP's `IS NULL OR EXISTS(...)`
+        // guard short-circuits when the parameter is unset.
+        let department_guid = input.department_guid.as_deref();
+        let department_team_guid = input.department_team_guid.as_deref();
+        let position_guid = input.position_guid.as_deref();
+
         let rows = exec_sp(
             &self.pool,
             "EXEC dbo.SP_USER_LIST_PAGING \
                                      @p_keyword = @P1, \
                                      @p_user_status = @P2, \
-                                     @p_page = @P3, \
-                                     @p_page_size = @P4",
+                                     @p_user_is_customer = @P3, \
+                                     @p_user_is_employee = @P4, \
+                                     @p_user_is_freelance = @P5, \
+                                     @p_department_guid = @P6, \
+                                     @p_department_team_guid = @P7, \
+                                     @p_position_guid = @P8, \
+                                     @p_page = @P9, \
+                                     @p_page_size = @P10",
             &[
                 &keyword as &dyn ToSql,
                 &status_filter.as_deref() as &dyn ToSql,
+                &user_is_customer as &dyn ToSql,
+                &user_is_employee as &dyn ToSql,
+                &user_is_freelance as &dyn ToSql,
+                &department_guid as &dyn ToSql,
+                &department_team_guid as &dyn ToSql,
+                &position_guid as &dyn ToSql,
                 &page as &dyn ToSql,
                 &page_size as &dyn ToSql,
             ],
@@ -636,6 +670,45 @@ impl UserRepository for MssqlUserRepository {
             page: out_page,
             page_size: out_page_size,
         })
+    }
+
+    // --------------------------------------------------------------------
+    // M22: admin user-detail SP (SP_USER_DETAIL_FULL_GET).
+    // --------------------------------------------------------------------
+
+    /// `dbo.SP_USER_DETAIL_FULL_GET` - admin user-detail lookup.
+    ///
+    /// Returns either 0 rows (user not found / soft-deleted) or 1 row
+    /// with every related detail assembled via `OUTER APPLY` blocks.
+    /// The infra mapper reads every column by name so a future SP
+    /// column rename surfaces as empty string on the wire (defensive,
+    /// never a panic).
+    ///
+    /// ponytail: `actor` is currently unused by the SP (the SP does
+    /// not enforce admin gating - that lives at the handler via
+    /// `Permission::PageUsersView`). We accept it on the trait signature
+    /// so a future SP version that adds `@p_actor` for server-side
+    /// logging can be wired without breaking the trait.
+    async fn get_user_detail_full(
+        &self,
+        user_guid: Uuid,
+        actor: Uuid,
+    ) -> Result<Option<AdminUserDetail>, RepoError> {
+        let _ = actor; // SP does not take an actor param today.
+
+        let user_guid_str = user_guid.to_string();
+        let rows = exec_sp(
+            &self.pool,
+            "EXEC dbo.SP_USER_DETAIL_FULL_GET @p_user_guid = @P1",
+            &[&user_guid_str as &dyn ToSql],
+        )
+        .await?;
+
+        let row = match rows.first() {
+            None => return Ok(None),
+            Some(r) => r,
+        };
+        Ok(Some(row_to_admin_user_detail(row)))
     }
 }
 
@@ -729,18 +802,29 @@ fn read_roles_and_permissions(
     Ok((roles, permissions))
 }
 
-/// Split a [`DaySchedule`] into the three `(bool, Option<&str>,
-/// Option<&str>)` parts the SP expects (`is_working` +
+/// Split a [`DaySchedule`] into the three `(bool, Option<String>,
+/// Option<String>)` parts the SP expects (`is_working` +
 /// `start_time` + `end_time`).
+///
+/// `start_time` / `end_time` are typed as [`chrono::NaiveTime`] in
+/// the domain (the SP column is `time(0)`), but tiberius accepts
+/// either a `NaiveTime` or a `&str` "HH:MM:SS" for the `time(0)`
+/// parameter. We format to `"HH:MM:SS"` here so the SP gets the
+/// canonical string form and any future precision changes in
+/// chrono's default format stay isolated to this one helper.
 ///
 /// When `is_working` is `false`, both times are `None` (the SP
 /// will insert NULL into the `time(0)` columns — the row still
 /// exists; just no scheduled hours).
 ///
 /// ponytail: tiny inline helper; refactor to a macro only when a
-/// 3rd SP needs the same `DaySchedule`-style mapping.
-fn day_to_parts(d: &DaySchedule) -> (bool, Option<&str>, Option<&str>) {
-    (d.is_working, d.start_time.as_deref(), d.end_time.as_deref())
+/// 3rd SP needs the same `DaySchedule`-style mapping. The two
+/// `String` allocations per call are bounded to the admin write
+/// path (low frequency) and free us from a lifetime dance with
+/// the input `&DaySchedule`.
+fn day_to_parts(d: &DaySchedule) -> (bool, Option<String>, Option<String>) {
+    let fmt = |t: chrono::NaiveTime| t.format("%H:%M:%S").to_string();
+    (d.is_working, d.start_time.map(fmt), d.end_time.map(fmt))
 }
 
 /// Split a comma-separated role_codes string into Vec<Role>.
@@ -951,7 +1035,21 @@ fn row_to_user_list_paging_row(row: &tiberius::Row) -> UserListPagingRow {
         phone: read_str(row, "phone").unwrap_or("").to_string(),
         user_status: read_i32(row, "user_status").unwrap_or(0),
         user_status_name: read_str(row, "user_status_name").unwrap_or("").to_string(),
+        // BIT columns — the SP `CAST(ISNULL(col, 0) AS bit)`s these,
+        // so `None` on the wire means the column was dropped or the
+        // cast short-circuited; default to `false` (the safe choice
+        // — a missing flag is never a positive match).
+        user_is_customer: row.get::<bool, _>("user_is_customer").unwrap_or(false),
+        user_is_employee: row.get::<bool, _>("user_is_employee").unwrap_or(false),
+        user_is_freelance: row.get::<bool, _>("user_is_freelance").unwrap_or(false),
         role_name: read_str(row, "role_name").unwrap_or("").to_string(),
+        department_guid: read_guid_str(row, "department_guid"),
+        department_name: read_str(row, "department_name").unwrap_or("").to_string(),
+        department_team_guid: read_guid_str(row, "department_team_guid"),
+        department_team_name: read_str(row, "department_team_name")
+            .unwrap_or("")
+            .to_string(),
+        position_guid: read_guid_str(row, "position_guid"),
         position_name: read_str(row, "position_name").unwrap_or("").to_string(),
     }
 }
@@ -960,6 +1058,328 @@ fn row_to_user_list_paging_row(row: &tiberius::Row) -> UserListPagingRow {
 // `crates/infra/src/db/mssql_permission_user.rs` along with the
 // `find_user_permissions_by_username` adapter. The permission flow
 // no longer lives on the login/auth port.
+
+// ============================================================================
+// M22: row mapper for SP_USER_DETAIL_FULL_GET
+// ============================================================================
+//
+// The SP returns ONE row even when every OUTER APPLY sub-block
+// produced no row (the basic `[user]` row + every optional sub-block
+// column set to NULL). The mapper below:
+//
+//   1. Reads the always-present `[user]` columns directly.
+//   2. For each OUTER APPLY block, checks whether the block's
+//      primary GUID column is non-empty (== the SP found a row)
+//      and emits `Some(...)` only when it did.
+//   3. Falls back to empty string / 0 / false for every other
+//      column so a future SP column rename surfaces as empty on
+//      the wire instead of a panic.
+//
+// ponytail: thin pass-through mirroring the existing
+// `row_to_user_list_row` mapper style. Ceiling: if the SP grows
+// yet another OUTER APPLY block (e.g. emergency contact), add
+// another `Option<NewSubBlock>` to AdminUserDetail + a matching
+// here + one helper above.
+
+fn row_to_username(row: &tiberius::Row) -> Option<AdminUserDetailUsername> {
+    let guid = read_guid_str(row, "user_username_guid");
+    if guid.is_empty() {
+        return None;
+    }
+    Some(AdminUserDetailUsername {
+        user_username_guid: guid,
+        username: read_str(row, "user_username_username")
+            .unwrap_or("")
+            .to_string(),
+        status: read_i32(row, "user_username_status").unwrap_or(0),
+        created_at: read_datetime(row, "user_username_create_at"),
+        updated_at: read_datetime(row, "user_username_update_at"),
+    })
+}
+
+fn row_to_profile_image(row: &tiberius::Row) -> Option<AdminUserDetailProfileImage> {
+    let guid = read_guid_str(row, "user_img_profile_guid");
+    if guid.is_empty() {
+        return None;
+    }
+    Some(AdminUserDetailProfileImage {
+        user_img_profile_guid: guid,
+        profile_img_path: read_str(row, "profile_img_path").unwrap_or("").to_string(),
+    })
+}
+
+fn row_to_country(row: &tiberius::Row) -> Option<AdminUserDetailCountry> {
+    let guid = read_guid_str(row, "master_country_guid");
+    if guid.is_empty() {
+        return None;
+    }
+    Some(AdminUserDetailCountry {
+        country_guid: guid,
+        country_code: read_str(row, "country_code").unwrap_or("").to_string(),
+        country_name: read_str(row, "country_name").unwrap_or("").to_string(),
+    })
+}
+
+fn row_to_company(row: &tiberius::Row) -> Option<AdminUserDetailCompany> {
+    let guid = read_guid_str(row, "user_company_guid");
+    if guid.is_empty() {
+        return None;
+    }
+    Some(AdminUserDetailCompany {
+        user_company_guid: guid,
+        company_guid: read_guid_str(row, "company_guid"),
+        company_name: read_str(row, "company_name").unwrap_or("").to_string(),
+        company_tel: read_str(row, "company_tel").unwrap_or("").to_string(),
+        user_company_name: read_str(row, "user_company_name").unwrap_or("").to_string(),
+        user_company_tel: read_str(row, "user_company_tel").unwrap_or("").to_string(),
+        user_company_type: read_i32(row, "user_company_type").unwrap_or(0),
+        user_company_status: read_i32(row, "user_company_status").unwrap_or(0),
+    })
+}
+
+fn row_to_roles(row: &tiberius::Row) -> Option<AdminUserDetailRoles> {
+    let codes = read_str(row, "role_codes").unwrap_or("");
+    let names = read_str(row, "role_names").unwrap_or("");
+    if codes.is_empty() && names.is_empty() && !row_has_col(row, "user_is_admin") {
+        return None;
+    }
+    Some(AdminUserDetailRoles {
+        role_codes: codes.to_string(),
+        role_names: names.to_string(),
+        user_is_admin: row.get::<bool, _>("user_is_admin").unwrap_or(false),
+    })
+}
+
+fn row_to_scope(row: &tiberius::Row) -> Option<AdminUserDetailScope> {
+    let dept_guid = read_guid_str(row, "department_guid");
+    let team_guid = read_guid_str(row, "department_team_guid");
+    if dept_guid.is_empty() && team_guid.is_empty() {
+        return None;
+    }
+    Some(AdminUserDetailScope {
+        department_guid: dept_guid,
+        department_code: read_str(row, "department_code").unwrap_or("").to_string(),
+        department_name: read_str(row, "department_name").unwrap_or("").to_string(),
+        department_team_guid: team_guid,
+        department_team_code: read_str(row, "department_team_code")
+            .unwrap_or("")
+            .to_string(),
+        department_team_name: read_str(row, "department_team_name")
+            .unwrap_or("")
+            .to_string(),
+    })
+}
+
+fn row_to_position(row: &tiberius::Row) -> Option<AdminUserDetailPosition> {
+    let guid = read_guid_str(row, "user_position_guid");
+    if guid.is_empty() {
+        return None;
+    }
+    Some(AdminUserDetailPosition {
+        user_position_guid: guid,
+        position_guid: read_guid_str(row, "position_guid"),
+        position_code: read_str(row, "position_code").unwrap_or("").to_string(),
+        position_name: read_str(row, "position_name").unwrap_or("").to_string(),
+        // `master_position_level` is an `int` in NEW_DB (the
+        // master service reads it as `i32` — see
+        // `MasterPositionAutocompleteRow.level`). The SP may
+        // emit NULL for positions without an explicit level; the
+        // mapper surfaces that as `0` so the wire shape stays
+        // a non-optional `i32` (matches the autocomplete row).
+        position_level: read_i32(row, "position_level").unwrap_or(0),
+        position_start_at: read_datetime(row, "position_start_at"),
+        position_end_at: read_datetime(row, "position_end_at"),
+    })
+}
+
+fn row_to_salary(row: &tiberius::Row) -> Option<AdminUserDetailSalary> {
+    let guid = read_guid_str(row, "user_salary_guid");
+    if guid.is_empty() {
+        return None;
+    }
+    Some(AdminUserDetailSalary {
+        user_salary_guid: guid,
+        // user_salary_amount is decimal(18, 2) in NEW_DB (AGENTS.md
+        // sec 7.5 - money never uses f64). tiberius 0.12's rust_decimal
+        // feature binds the column directly, preserving the exact
+        // precision + scale the SP emits (no string round-trip,
+        // no precision loss for values like 0.10).
+        salary_amount: read_decimal(row, "salary_amount").unwrap_or_default(),
+        salary_currency: read_str(row, "salary_currency").unwrap_or("").to_string(),
+        salary_type: read_i32(row, "salary_type").unwrap_or(0),
+        salary_effective_from: read_datetime(row, "salary_effective_from"),
+        salary_effective_to: read_datetime(row, "salary_effective_to"),
+    })
+}
+
+fn row_to_schedule(row: &tiberius::Row) -> Option<WeeklySchedule> {
+    let guid = read_guid_str(row, "user_work_day_template_guid");
+    if guid.is_empty() {
+        return None;
+    }
+    // `monday_*_time` ... `sunday_*_time` columns are SQL Server
+    // `time(0)`. tiberius 0.12 (with the `chrono` feature) binds
+    // them directly to `chrono::NaiveTime` - no string round-trip,
+    // no precision loss, and the wire JSON still serialises as
+    // "HH:MM:SS" via chrono's default serde impl.
+    Some(WeeklySchedule {
+        monday: DaySchedule {
+            is_working: row.get::<bool, _>("monday_is_working").unwrap_or(false),
+            start_time: row.get::<chrono::NaiveTime, _>("monday_start_time"),
+            end_time: row.get::<chrono::NaiveTime, _>("monday_end_time"),
+        },
+        tuesday: DaySchedule {
+            is_working: row.get::<bool, _>("tuesday_is_working").unwrap_or(false),
+            start_time: row.get::<chrono::NaiveTime, _>("tuesday_start_time"),
+            end_time: row.get::<chrono::NaiveTime, _>("tuesday_end_time"),
+        },
+        wednesday: DaySchedule {
+            is_working: row.get::<bool, _>("wednesday_is_working").unwrap_or(false),
+            start_time: row.get::<chrono::NaiveTime, _>("wednesday_start_time"),
+            end_time: row.get::<chrono::NaiveTime, _>("wednesday_end_time"),
+        },
+        thursday: DaySchedule {
+            is_working: row.get::<bool, _>("thursday_is_working").unwrap_or(false),
+            start_time: row.get::<chrono::NaiveTime, _>("thursday_start_time"),
+            end_time: row.get::<chrono::NaiveTime, _>("thursday_end_time"),
+        },
+        friday: DaySchedule {
+            is_working: row.get::<bool, _>("friday_is_working").unwrap_or(false),
+            start_time: row.get::<chrono::NaiveTime, _>("friday_start_time"),
+            end_time: row.get::<chrono::NaiveTime, _>("friday_end_time"),
+        },
+        saturday: DaySchedule {
+            is_working: row.get::<bool, _>("saturday_is_working").unwrap_or(false),
+            start_time: row.get::<chrono::NaiveTime, _>("saturday_start_time"),
+            end_time: row.get::<chrono::NaiveTime, _>("saturday_end_time"),
+        },
+        sunday: DaySchedule {
+            is_working: row.get::<bool, _>("sunday_is_working").unwrap_or(false),
+            start_time: row.get::<chrono::NaiveTime, _>("sunday_start_time"),
+            end_time: row.get::<chrono::NaiveTime, _>("sunday_end_time"),
+        },
+    })
+}
+
+fn row_to_bank_account(row: &tiberius::Row) -> Option<AdminUserDetailBankAccount> {
+    let guid = read_guid_str(row, "user_bank_account_guid");
+    if guid.is_empty() {
+        return None;
+    }
+    Some(AdminUserDetailBankAccount {
+        user_bank_account_guid: guid,
+        bank_name: read_str(row, "bank_name").unwrap_or("").to_string(),
+        bank_code: read_str(row, "bank_code").unwrap_or("").to_string(),
+        branch_name: read_str(row, "branch_name").unwrap_or("").to_string(),
+        bank_account_name: read_str(row, "bank_account_name").unwrap_or("").to_string(),
+        bank_account_no: read_str(row, "bank_account_no").unwrap_or("").to_string(),
+        bank_account_no_masked: read_str(row, "bank_account_no_masked")
+            .unwrap_or("")
+            .to_string(),
+        bank_account_type: read_i32(row, "bank_account_type").unwrap_or(0),
+        bank_account_is_default: row
+            .get::<bool, _>("bank_account_is_default")
+            .unwrap_or(false),
+        bank_account_verified_status: read_i32(row, "bank_account_verified_status").unwrap_or(0),
+        bank_book_img_path: read_str(row, "bank_book_img_path")
+            .unwrap_or("")
+            .to_string(),
+    })
+}
+
+fn row_to_attachment(
+    row: &tiberius::Row,
+    guid_col: &str,
+    path_col: &str,
+) -> Option<AdminUserDetailAttachment> {
+    let guid = read_guid_str(row, guid_col);
+    if guid.is_empty() {
+        return None;
+    }
+    Some(AdminUserDetailAttachment {
+        user_details_attachment_guid: guid,
+        attachment_path: read_str(row, path_col).unwrap_or("").to_string(),
+    })
+}
+
+/// Best-effort column-existence check (tiberius has no public API
+/// for this; we use `try_get` to detect "column missing" vs
+/// "column is NULL").
+fn row_has_col(row: &tiberius::Row, col: &str) -> bool {
+    if let Ok(Some(_)) = row.try_get::<&str, _>(col) {
+        return true;
+    }
+    if let Ok(Some(_)) = row.try_get::<bool, _>(col) {
+        return true;
+    }
+    if let Ok(Some(_)) = row.try_get::<i32, _>(col) {
+        return true;
+    }
+    if let Ok(Some(_)) = row.try_get::<i64, _>(col) {
+        return true;
+    }
+    false
+}
+
+fn row_to_admin_user_detail(row: &tiberius::Row) -> AdminUserDetail {
+    AdminUserDetail {
+        user_guid: read_guid_str(row, "user_guid"),
+        user_first_name: read_str(row, "user_first_name").unwrap_or("").to_string(),
+        user_last_name: read_str(row, "user_last_name").unwrap_or("").to_string(),
+        full_name: read_str(row, "full_name").unwrap_or("").to_string(),
+        user_id_card: read_str(row, "user_id_card").unwrap_or("").to_string(),
+        user_tel: read_str(row, "user_tel").unwrap_or("").to_string(),
+        user_email: read_str(row, "user_email").unwrap_or("").to_string(),
+        user_gender: read_str(row, "user_gender").unwrap_or("").to_string(),
+
+        user_is_foreign: row.get::<bool, _>("user_is_foreign").unwrap_or(false),
+        user_country_guid: read_guid_str(row, "user_country_guid"),
+
+        user_province: read_str(row, "user_province").unwrap_or("").to_string(),
+        user_district: read_str(row, "user_district").unwrap_or("").to_string(),
+        user_sub_district: read_str(row, "user_sub_district").unwrap_or("").to_string(),
+        user_village: read_str(row, "user_village").unwrap_or("").to_string(),
+        user_post: read_str(row, "user_post").unwrap_or("").to_string(),
+        user_description: read_str(row, "user_description").unwrap_or("").to_string(),
+
+        user_is_customer_company: row
+            .get::<bool, _>("user_is_customer_company")
+            .unwrap_or(false),
+        user_is_customer: row.get::<bool, _>("user_is_customer").unwrap_or(false),
+        user_is_employee: row.get::<bool, _>("user_is_employee").unwrap_or(false),
+        user_is_freelance: row.get::<bool, _>("user_is_freelance").unwrap_or(false),
+        user_is_admin: row.get::<bool, _>("user_is_admin").unwrap_or(false),
+
+        user_status: read_i32(row, "user_status").unwrap_or(0),
+        user_status_name: read_str(row, "user_status_name").unwrap_or("").to_string(),
+
+        user_create_at: read_datetime(row, "user_create_at"),
+        user_create_by: read_str(row, "user_create_by").unwrap_or("").to_string(),
+        user_update_at: read_datetime(row, "user_update_at"),
+        user_update_by: read_str(row, "user_update_by").unwrap_or("").to_string(),
+
+        username: row_to_username(row),
+        profile_image: row_to_profile_image(row),
+        country: row_to_country(row),
+        company: row_to_company(row),
+        roles: row_to_roles(row),
+        scope: row_to_scope(row),
+        position: row_to_position(row),
+        salary: row_to_salary(row),
+        schedule: row_to_schedule(row),
+        user_work_day_template_guid: read_guid_str(row, "user_work_day_template_guid"),
+        bank_account: row_to_bank_account(row),
+
+        id_card_front: row_to_attachment(row, "id_card_front_guid", "id_card_front_path"),
+        id_card_back: row_to_attachment(row, "id_card_back_guid", "id_card_back_path"),
+        proof_of_address: row_to_attachment(row, "proof_of_address_guid", "proof_of_address_path"),
+        source_of_funds_statement: row_to_attachment(
+            row,
+            "source_of_funds_statement_guid",
+            "source_of_funds_statement_path",
+        ),
+    }
+}
 
 // ============================================================================
 // M16 round 2 cleanup: the duplicate `split_csv` / `row_to_user_list_row`

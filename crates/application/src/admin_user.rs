@@ -35,8 +35,11 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 pub use kokkak_domain::admin_user::{
-    AdminInsertUserError, AdminInsertUserRequest, AdminInsertUserResult, AdminUserListPagingInput,
-    AdminUserListPagingPage, DaySchedule, WeeklySchedule,
+    AdminInsertUserError, AdminInsertUserRequest, AdminInsertUserResult, AdminUserDetail,
+    AdminUserDetailAttachment, AdminUserDetailBankAccount, AdminUserDetailCompany,
+    AdminUserDetailCountry, AdminUserDetailPosition, AdminUserDetailProfileImage,
+    AdminUserDetailRoles, AdminUserDetailSalary, AdminUserDetailScope, AdminUserDetailUsername,
+    AdminUserListPagingInput, AdminUserListPagingPage, DaySchedule, WeeklySchedule,
 };
 use kokkak_domain::traits::user::RepoError;
 use kokkak_domain::UserRepository;
@@ -258,8 +261,16 @@ impl AdminUserService {
     ///   also matches the M16 admin list endpoint's cap).
     /// - `keyword` is trimmed; an all-whitespace string collapses
     ///   to empty so the SP's `LIKE N'%%'` path runs (no filter).
+    ///
     /// - `user_status` is forwarded verbatim — the SP accepts `NULL`
     ///   to mean "all statuses".
+    /// - `user_is_customer` / `user_is_employee` / `user_is_freelance`
+    ///   are forwarded verbatim — `Some(true)` filters to that cohort,
+    ///   `Some(false)` filters to the opposite, `None` means "no
+    ///   filter" (the SP receives `NULL`).
+    /// - `department_guid` / `department_team_guid` / `position_guid`
+    ///   are trimmed; an all-whitespace string collapses to `None`
+    ///   so the SP's `= ''` short-circuit runs (no filter).
     ///
     /// ponytail: clamping lives here AND in the SP — the application
     /// layer's clamp guarantees the wire shape (`page_size` is
@@ -272,9 +283,25 @@ impl AdminUserService {
         input: AdminUserListPagingInput,
     ) -> Result<AdminUserListPagingPage, RepoError> {
         // Normalize inputs — keep the wire contract predictable.
+        //
+        // The three GUID scope filters are stored as trimmed
+        // `Option<String>` so the SP's `= ''` short-circuit works
+        // when the caller sends an all-whitespace value. The three
+        // bit filters and `user_status` are forwarded as-is — the
+        // SP already understands `NULL` to mean "no filter" on
+        // every one of them.
+        let trim_to_none = |s: Option<String>| -> Option<String> {
+            s.map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+        };
         let normalized = AdminUserListPagingInput {
             keyword: input.keyword.trim().to_string(),
             user_status: input.user_status,
+            user_is_customer: input.user_is_customer,
+            user_is_employee: input.user_is_employee,
+            user_is_freelance: input.user_is_freelance,
+            department_guid: trim_to_none(input.department_guid),
+            department_team_guid: trim_to_none(input.department_team_guid),
+            position_guid: trim_to_none(input.position_guid),
             page: input.page.max(1),
             page_size: input.page_size.clamp(1, 100),
         };
@@ -287,6 +314,31 @@ impl AdminUserService {
         page.page = normalized.page as i32;
         page.page_size = normalized.page_size as i32;
         Ok(page)
+    }
+
+    /// M22: full detail lookup for a single user — wraps
+    /// `dbo.SP_USER_DETAIL_FULL_GET`.
+    ///
+    /// Read-side counterpart to [`Self::admin_insert_full`]. The
+    /// service is intentionally thin: it just forwards the GUID to
+    /// the repo + forwards the actor for audit log consistency.
+    /// All field-level validation (GUID format, soft-delete
+    /// handling) lives in the SP + repo layer.
+    ///
+    /// `actor_user_guid` is forwarded for audit logging; the SP
+    /// itself does NOT enforce admin gating (the handler already
+    /// gates on `Permission::PageUsersView`).
+    ///
+    /// Returns `Ok(None)` when the user doesn't resolve or is
+    /// soft-deleted; the handler maps that to a 404 `not_found`.
+    pub async fn get_user_detail_full(
+        &self,
+        actor_user_guid: Uuid,
+        user_guid: Uuid,
+    ) -> Result<Option<AdminUserDetail>, RepoError> {
+        self.users
+            .get_user_detail_full(user_guid, actor_user_guid)
+            .await
     }
 }
 
@@ -349,10 +401,14 @@ mod tests {
     }
 
     fn on(t: &str) -> DaySchedule {
+        // Parse "HH:MM:SS" string into NaiveTime. The test code
+        // uses chrono's default format ("%H:%M:%S") which matches
+        // the SQL Server `time(0)` wire format.
+        let parsed = t.parse::<chrono::NaiveTime>().expect("test time parse");
         DaySchedule {
             is_working: true,
-            start_time: Some(t.into()),
-            end_time: Some(t.into()),
+            start_time: Some(parsed),
+            end_time: Some(parsed),
         }
     }
 
@@ -382,7 +438,7 @@ mod tests {
         let bad = DaySchedule {
             is_working: true,
             start_time: None,
-            end_time: Some("17:00:00".into()),
+            end_time: Some("17:00:00".parse::<chrono::NaiveTime>().unwrap()),
         };
         let days = [off(), bad.clone(), off(), off(), off(), off(), off()];
         let err = schedule_missing_times(&ws(&days)).unwrap_err();
@@ -393,7 +449,7 @@ mod tests {
     fn schedule_on_without_end_fails() {
         let bad = DaySchedule {
             is_working: true,
-            start_time: Some("09:00:00".into()),
+            start_time: Some("09:00:00".parse::<chrono::NaiveTime>().unwrap()),
             end_time: None,
         };
         let days = [off(), off(), off(), off(), bad.clone(), off(), off()];
@@ -480,6 +536,15 @@ mod tests {
                 page_size: input.page_size as i32,
             })
         }
+        async fn get_user_detail_full(
+            &self,
+            _user_guid: Uuid,
+            _actor: Uuid,
+        ) -> Result<Option<AdminUserDetail>, RepoError> {
+            Err(RepoError::Backend(
+                "recording mock: get_user_detail_full".into(),
+            ))
+        }
     }
 
     /// AdminUserService only needs a repo for `list_users_paging`; the
@@ -522,9 +587,9 @@ mod tests {
                 actor,
                 AdminUserListPagingInput {
                     keyword: "x".into(),
-                    user_status: None,
                     page: 1,
                     page_size: 9999, // way over the cap
+                    ..Default::default()
                 },
             )
             .await
@@ -550,9 +615,9 @@ mod tests {
                 actor,
                 AdminUserListPagingInput {
                     keyword: String::new(),
-                    user_status: None,
                     page: 0, // < 1 should clamp to 1
                     page_size: 20,
+                    ..Default::default()
                 },
             )
             .await
@@ -572,9 +637,9 @@ mod tests {
             actor,
             AdminUserListPagingInput {
                 keyword: "   somchai   ".into(),
-                user_status: None,
                 page: 1,
                 page_size: 20,
+                ..Default::default()
             },
         )
         .await
@@ -595,9 +660,9 @@ mod tests {
                 actor,
                 AdminUserListPagingInput {
                     keyword: String::new(),
-                    user_status: None,
                     page: 1,
                     page_size: 0,
+                    ..Default::default()
                 },
             )
             .await
@@ -605,5 +670,232 @@ mod tests {
 
         // page_size=0 → clamped to 1 (don't allow empty pages).
         assert_eq!(page.page_size, 1);
+    }
+
+    // ----- New: scope-GUID filters collapse whitespace to None -----
+
+    #[tokio::test]
+    async fn list_users_paging_collapses_whitespace_scope_guids_to_none() {
+        let repo = Arc::new(RecordingRepo::default());
+        let svc = svc_with(repo.clone());
+        let actor = Uuid::new_v4();
+
+        svc.list_users_paging(
+            actor,
+            AdminUserListPagingInput {
+                keyword: String::new(),
+                page: 1,
+                page_size: 20,
+                department_guid: Some("   ".into()),
+                department_team_guid: Some("\t".into()),
+                position_guid: Some(" ".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let sent = repo.last_input.lock().unwrap();
+        let sent = sent.as_ref().unwrap();
+        // All-whitespace scope filters are collapsed to None so
+        // the SP's `= ''` short-circuit runs (no filter).
+        assert!(sent.department_guid.is_none());
+        assert!(sent.department_team_guid.is_none());
+        assert!(sent.position_guid.is_none());
+    }
+
+    #[tokio::test]
+    async fn list_users_paging_preserves_non_empty_scope_guids() {
+        let repo = Arc::new(RecordingRepo::default());
+        let svc = svc_with(repo.clone());
+        let actor = Uuid::new_v4();
+
+        svc.list_users_paging(
+            actor,
+            AdminUserListPagingInput {
+                keyword: String::new(),
+                page: 1,
+                page_size: 20,
+                department_guid: Some("  dept-abc  ".into()),
+                department_team_guid: Some("team-xyz".into()),
+                position_guid: Some("  pos-1".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let sent = repo.last_input.lock().unwrap();
+        let sent = sent.as_ref().unwrap();
+        // Non-empty values pass through (trimmed).
+        assert_eq!(sent.department_guid.as_deref(), Some("dept-abc"));
+        assert_eq!(sent.department_team_guid.as_deref(), Some("team-xyz"));
+        assert_eq!(sent.position_guid.as_deref(), Some("pos-1"));
+    }
+
+    // ----- M22: get_user_detail_full tests -----
+
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    use kokkak_domain::admin_user::AdminUserDetail;
+
+    /// In-memory mock that records every `get_user_detail_full`
+    /// call. The `scripted_outcome` field drives the response:
+    /// `0` → `Ok(Some(detail))`, `1` → `Ok(None)` (not found),
+    /// anything else → `Err(Backend(...))`.
+    #[derive(Default)]
+    struct DetailMock {
+        call_count: AtomicU32,
+        last_user_guid: std::sync::Mutex<Option<Uuid>>,
+        last_actor: std::sync::Mutex<Option<Uuid>>,
+        scripted_outcome: AtomicU32,
+    }
+
+    #[async_trait::async_trait]
+    impl UserRepository for DetailMock {
+        async fn find_by_id(&self, _id: Uuid) -> Result<Option<kokkak_domain::User>, RepoError> {
+            Err(RepoError::Backend("detail mock: find_by_id".into()))
+        }
+        async fn find_by_username(
+            &self,
+            _u: &str,
+        ) -> Result<Option<kokkak_domain::User>, RepoError> {
+            Err(RepoError::Backend("detail mock: find_by_username".into()))
+        }
+        async fn insert(&self, _u: &kokkak_domain::User) -> Result<(), RepoError> {
+            Err(RepoError::Backend("detail mock: insert".into()))
+        }
+        async fn update(&self, _u: &kokkak_domain::User) -> Result<(), RepoError> {
+            Err(RepoError::Backend("detail mock: update".into()))
+        }
+        async fn list_with_permissions(
+            &self,
+            _caller: Uuid,
+        ) -> Result<Vec<kokkak_domain::UserListRow>, RepoError> {
+            Err(RepoError::Backend(
+                "detail mock: list_with_permissions".into(),
+            ))
+        }
+        async fn find_username_guid_by_user_guid(
+            &self,
+            _id: Uuid,
+        ) -> Result<Option<String>, RepoError> {
+            Err(RepoError::Backend(
+                "detail mock: find_username_guid_by_user_guid".into(),
+            ))
+        }
+        async fn admin_insert_full(
+            &self,
+            _req: &kokkak_domain::AdminInsertUserRequest,
+        ) -> Result<kokkak_domain::AdminInsertUserResult, kokkak_domain::AdminInsertUserError>
+        {
+            Err(kokkak_domain::AdminInsertUserError::new(
+                "internal",
+                "detail mock: admin_insert_full",
+            ))
+        }
+        async fn list_users_paging(
+            &self,
+            _input: &AdminUserListPagingInput,
+            _actor: Uuid,
+        ) -> Result<AdminUserListPagingPage, RepoError> {
+            Err(RepoError::Backend("detail mock: list_users_paging".into()))
+        }
+        async fn get_user_detail_full(
+            &self,
+            user_guid: Uuid,
+            actor: Uuid,
+        ) -> Result<Option<AdminUserDetail>, RepoError> {
+            self.call_count.fetch_add(1, Ordering::SeqCst);
+            *self.last_user_guid.lock().unwrap() = Some(user_guid);
+            *self.last_actor.lock().unwrap() = Some(actor);
+            match self.scripted_outcome.load(Ordering::SeqCst) {
+                0 => Ok(Some(AdminUserDetail {
+                    user_guid: user_guid.to_string(),
+                    user_first_name: "Anousith".into(),
+                    user_last_name: "Tester".into(),
+                    full_name: "Anousith Tester".into(),
+                    user_status: 1,
+                    user_status_name: "Active".into(),
+                    ..Default::default()
+                })),
+                1 => Ok(None),
+                _ => Err(RepoError::Backend(
+                    "detail mock: simulated backend failure".into(),
+                )),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn get_user_detail_full_returns_some_when_repo_finds_user() {
+        let repo = Arc::new(DetailMock::default());
+        let svc = svc_with(repo.clone());
+        let actor = Uuid::new_v4();
+        let target = Uuid::new_v4();
+
+        let detail = svc.get_user_detail_full(actor, target).await.unwrap();
+
+        // Service forwards the result verbatim — `Some(detail)` on
+        // a successful repo lookup.
+        let detail = detail.expect("repo returned Some(detail)");
+        assert_eq!(detail.user_guid, target.to_string());
+        assert_eq!(detail.user_first_name, "Anousith");
+        assert_eq!(detail.user_status, 1);
+        assert_eq!(detail.user_status_name, "Active");
+
+        // The mock recorded exactly one call + the right args.
+        assert_eq!(repo.call_count.load(Ordering::SeqCst), 1);
+        assert_eq!(*repo.last_user_guid.lock().unwrap(), Some(target));
+        assert_eq!(*repo.last_actor.lock().unwrap(), Some(actor));
+    }
+
+    #[tokio::test]
+    async fn get_user_detail_full_returns_none_when_repo_finds_nothing() {
+        let repo = Arc::new(DetailMock::default());
+        repo.scripted_outcome.store(1, Ordering::SeqCst);
+        let svc = svc_with(repo.clone());
+        let actor = Uuid::new_v4();
+        let target = Uuid::new_v4();
+
+        let detail = svc.get_user_detail_full(actor, target).await.unwrap();
+
+        // The handler maps `Ok(None)` to a 404 `not_found` envelope.
+        assert!(detail.is_none(), "expected None (handler will 404)");
+    }
+
+    #[tokio::test]
+    async fn get_user_detail_full_propagates_repo_error() {
+        let repo = Arc::new(DetailMock::default());
+        repo.scripted_outcome.store(2, Ordering::SeqCst);
+        let svc = svc_with(repo.clone());
+        let actor = Uuid::new_v4();
+        let target = Uuid::new_v4();
+
+        // The handler maps any `RepoError` (other than `NotFound`)
+        // to a 500 `internal` envelope via `into_localized_response`.
+        let err = svc
+            .get_user_detail_full(actor, target)
+            .await
+            .expect_err("expected Backend error");
+        assert!(matches!(err, RepoError::Backend(_)));
+    }
+
+    #[tokio::test]
+    async fn get_user_detail_full_forwards_actor_unchanged() {
+        // The trait signature carries `actor` for future audit-log
+        // SP extensions; today the service must pass the actor
+        // through to the repo without renaming. This test guards
+        // that contract — if a refactor swaps the actor for the
+        // target (or vice versa), this test fails loudly.
+        let repo = Arc::new(DetailMock::default());
+        let svc = svc_with(repo.clone());
+        let actor = Uuid::new_v4();
+        let target = Uuid::new_v4();
+
+        svc.get_user_detail_full(actor, target).await.unwrap();
+
+        assert_eq!(*repo.last_actor.lock().unwrap(), Some(actor));
+        assert_eq!(*repo.last_user_guid.lock().unwrap(), Some(target));
     }
 }

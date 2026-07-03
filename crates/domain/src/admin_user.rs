@@ -1,8 +1,10 @@
-//! Admin user creation port — wraps `dbo.SP_USER_INSERT_FULL`.
+//! Admin user ports — wrap the rich admin-side `user` stored
+//! procedures.
 //!
-//! SP_USER_INSERT_FULL is the **rich** admin-side user-creation flow
-//! (the legacy ASP.NET admin form uses it). It accepts every
-//! detail the admin form collects in one round trip:
+//! ## `SP_USER_INSERT_FULL` (admin user creation)
+//!
+//! SP_USER_INSERT_FULL accepts every detail the admin form collects
+//! in one round trip:
 //!
 //! - basic profile (first / last name, id_card, tel, email, gender)
 //! - address (country / province / district / sub_district / village / post)
@@ -19,6 +21,17 @@
 //! - bank account (name / code / account_no / account_name / book image)
 //! - 4 attachment paths (id_card_front, id_card_back,
 //!   proof_of_address, source_of_funds_statement)
+//!
+//! ## `SP_USER_DETAIL_FULL_GET` (admin user detail lookup)
+//!
+//! SP_USER_DETAIL_FULL_GET is the read-side counterpart: one row per
+//! `user_guid` with every related detail assembled via `OUTER APPLY`
+//! blocks (profile image, company, roles, department/team, current
+//! position, current salary, working schedule, default bank
+//! account, four attachment paths). The Rust shape is a single
+//! [`AdminUserDetail`] with optional sub-structs — each sub-block is
+//! `None` when the user has no matching row (e.g. no company, no
+//! current position, no salary yet).
 //!
 //! The actor (admin creating the user) is identified by
 //! `user_username_guid` — the SP resolves it to `user_guid` via
@@ -105,16 +118,24 @@ impl AdminInsertUserError {
 /// and `end_time` must be non-NULL. When `is_working = false`,
 /// both fields are ignored (the SP still inserts NULL). Mirrors
 /// `dbo.user_work_day_template` column-by-column.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+///
+/// `start_time` / `end_time` are typed as [`chrono::NaiveTime`] so
+/// the domain speaks the DB's `time(0)` type natively (no string
+/// round-trip on the read path; the wire JSON still serialises as
+/// `"HH:MM:SS"` via chrono's default serde implementation). The
+/// tiberius `chrono` feature binds `time(0)` columns directly to
+/// `NaiveTime` — the infra mapper reads them via
+/// `row.get::<NaiveTime, _>(...)` and the write-side binds them
+/// as `"HH:MM:SS"` strings (the SP accepts either form).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct DaySchedule {
     /// Whether this weekday is a working day.
     pub is_working: bool,
-    /// `HH:MM:SS` string (DB type `time(0)`). `None` when
-    /// `is_working = false`.
-    pub start_time: Option<String>,
-    /// `HH:MM:SS` string (DB type `time(0)`). `None` when
-    /// `is_working = false`.
-    pub end_time: Option<String>,
+    /// `time(0)` value (DB column). `None` when `is_working = false`.
+    pub start_time: Option<chrono::NaiveTime>,
+    /// `time(0)` value (DB column). `None` when `is_working = false`.
+    pub end_time: Option<chrono::NaiveTime>,
 }
 
 /// Weekly working schedule template — one row per weekday.
@@ -122,7 +143,8 @@ pub struct DaySchedule {
 /// Field order matches the SP parameter order (`monday_*` ...
 /// `sunday_*`) so the infra layer can pass them through
 /// positionally without renaming.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct WeeklySchedule {
     /// Monday schedule.
     pub monday: DaySchedule,
@@ -309,10 +331,11 @@ pub struct AdminInsertUserRequest {
 /// Mirrors the SP's parameter list 1:1 so the infra layer can pass
 /// them through positionally without renaming.
 ///
-/// ponytail: `keyword` and `user_status` are the two filter axes the
-/// SP exposes. The ceiling is adding `role_code` / `position_guid` /
-/// date-range filters — at that point promote to a builder pattern so
-/// the SP signature stays flat while the Rust side stays readable.
+/// The SP supports ten parameters: four paging/keyword/status and
+/// six scope filters (user-type booleans + department/team/position
+/// GUIDs). The application layer is responsible for normalising
+/// `keyword` (trim) and clamping `page` / `page_size`; the SP itself
+/// only echoes the paging knobs.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[allow(missing_docs)]
 pub struct AdminUserListPagingInput {
@@ -323,6 +346,28 @@ pub struct AdminUserListPagingInput {
     /// `@p_user_status` — `None` means "all statuses" (the SP itself
     /// never receives `NULL`, it gets a sentinel — see infra layer).
     pub user_status: Option<i32>,
+    /// `@p_user_is_customer` — `Some(true)` returns customer-flagged
+    /// users only; `Some(false)` returns non-customers; `None` skips
+    /// the filter (the SP receives `NULL`).
+    pub user_is_customer: Option<bool>,
+    /// `@p_user_is_employee` — same semantics as
+    /// [`user_is_customer`](Self::user_is_customer).
+    pub user_is_employee: Option<bool>,
+    /// `@p_user_is_freelance` — same semantics as
+    /// [`user_is_customer`](Self::user_is_customer). Freelance
+    /// technicians are a separate cohort from employees.
+    pub user_is_freelance: Option<bool>,
+    /// `@p_department_guid` — restrict to users whose
+    /// `user_user_role.user_user_role_department_guid` matches and
+    /// whose role assignment is still active. `None` = no filter.
+    pub department_guid: Option<String>,
+    /// `@p_department_team_guid` — same active-role semantics as
+    /// [`department_guid`](Self::department_guid), scoped to team.
+    pub department_team_guid: Option<String>,
+    /// `@p_position_guid` — restrict to users whose
+    /// `user_position` is current (`is_current = 1`) and
+    /// `master_position_guid` matches. `None` = no filter.
+    pub position_guid: Option<String>,
     /// `@p_page` — 1-based page number. The SP defaults to 1 when
     /// the input is `< 1`.
     pub page: u32,
@@ -335,16 +380,24 @@ pub struct AdminUserListPagingInput {
 /// admin user-list screen.
 ///
 /// Column NAMES match the SP's SELECT aliases verbatim:
-///   `total_count`       (bigint — same value on every row of a page)
-///   `page`              (int     — echo of `@p_page`)
-///   `page_size`         (int     — echo of `@p_page_size`)
-///   `user_guid`         (varchar 36 — `[user].user_guid`)
-///   `full_name`         (varchar — COALESCEd to "")
-///   `phone`             (varchar — `[user].user_tel`, COALESCEd to "")
-///   `user_status`       (int — 0..3, see note below)
-///   `user_status_name`  (varchar — "Inactive"/"Active"/"Suspended"/"Deleted")
-///   `role_name`         (varchar CSV — COALESCEd "", already joined at SP level)
-///   `position_name`     (varchar — COALESCEd "", the *current* position)
+///   `total_count`             (bigint  — same value on every row of a page)
+///   `page`                    (int     — echo of `@p_page`)
+///   `page_size`               (int     — echo of `@p_page_size`)
+///   `user_guid`               (varchar 36 — `[user].user_guid`)
+///   `full_name`               (varchar — COALESCEd to "")
+///   `phone`                   (varchar — `[user].user_tel`, COALESCEd to "")
+///   `user_status`             (int — 0..3, see note below)
+///   `user_status_name`        (varchar — "Inactive"/"Active"/"Suspended"/"Deleted")
+///   `user_is_customer`        (bit — `[user].user_is_customer`)
+///   `user_is_employee`        (bit — `[user].user_is_employee`)
+///   `user_is_freelance`       (bit — `[user].user_is_freelance`)
+///   `role_name`               (varchar CSV — COALESCEd "", already joined at SP level)
+///   `department_guid`         (varchar 36 — most-recent active role's department)
+///   `department_name`         (varchar — joined from `user_department`)
+///   `department_team_guid`    (varchar 36 — most-recent active role's team)
+///   `department_team_name`    (varchar — joined from `user_department_team`)
+///   `position_guid`           (varchar 36 — current position's master)
+///   `position_name`           (varchar — COALESCEd "", the *current* position)
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct UserListPagingRow {
@@ -380,13 +433,46 @@ pub struct UserListPagingRow {
     /// Human-readable status label as computed by the SP:
     /// `Inactive` / `Active` / `Suspended` / `Deleted` / `Unknown`.
     pub user_status_name: String,
+    /// `[user].user_is_customer` — `true` for the customer cohort,
+    /// `false` for staff / technicians. Sourced directly from the
+    /// `[user]` row (the SP `CAST(ISNULL(..., 0) AS bit)`s it).
+    pub user_is_customer: bool,
+    /// `[user].user_is_employee` — `true` for the staff cohort
+    /// (admins, finance, ops, etc.). Independent from
+    /// [`user_is_customer`](Self::user_is_customer); a user can
+    /// theoretically carry both flags depending on legacy data.
+    pub user_is_employee: bool,
+    /// `[user].user_is_freelance` — `true` for freelance
+    /// technicians (a third cohort distinct from employees and
+    /// customers).
+    pub user_is_freelance: bool,
     /// Active role names, comma-joined (e.g. `"Admin, Finance Manager"`).
     /// The SP applies `STRING_AGG` with `DISTINCT` and an active-only
     /// filter — we keep it as a single `String` to match the SP shape
     /// 1:1 (the admin UI splits on `,` for badge rendering).
     pub role_name: String,
-    /// Current position name (`master_position.master_position_name`),
-    /// COALESCEd to "" when the user has no current position row.
+    /// GUID of the most-recently-assigned **active** department
+    /// (from `user_user_role.user_user_role_department_guid`,
+    /// ordered by `assigned_at DESC, created_at DESC`).
+    /// `""` when the user has no active role row.
+    pub department_guid: String,
+    /// Human-readable name of the department, joined from
+    /// `[user_department]`. `""` when no match.
+    pub department_name: String,
+    /// GUID of the most-recently-assigned **active** team
+    /// (from `user_user_role.user_user_role_department_team_guid`).
+    /// `""` when the user has no active role row.
+    pub department_team_guid: String,
+    /// Human-readable name of the team, joined from
+    /// `[user_department_team]`. `""` when no match.
+    pub department_team_name: String,
+    /// GUID of the user's **current** position (the
+    /// `user_position` row where `is_current = 1` and
+    /// `end_at` is in the future / NULL). `""` when the user
+    /// has no current position.
+    pub position_guid: String,
+    /// Human-readable position name (`master_position.master_position_name`).
+    /// `""` when the user has no current position row.
     pub position_name: String,
 }
 
@@ -409,4 +495,319 @@ pub struct AdminUserListPagingPage {
     pub page: i32,
     /// Page size returned.
     pub page_size: i32,
+}
+
+// ============================================================================
+// M22: GET /api/v1/admin/users/:guid/detail  (SP_USER_DETAIL_FULL_GET)
+// ============================================================================
+//
+// Wire shape for the admin user-detail screen. Mirrors
+// `dbo.SP_USER_DETAIL_FULL_GET` column-by-column. Every sub-block
+// (profile image, company, role, department, current position,
+// current salary, working schedule, default bank account, four
+// attachment paths) is wrapped in `Option<_>` so a user with no
+// company / no current position / no bank account still serialises
+// cleanly (the SP `OUTER APPLY` blocks return no row → the mapper
+// emits `None`).
+//
+// Field names use the SAME snake_case aliases the SP emits so the
+// infra mapper can read by column name without renaming.
+//
+// ponytail: all sub-structs are flat (no nested address/bank/etc.)
+// to keep the wire payload 1:1 with the SP's SELECT list. When the
+// SP grows new sub-blocks (e.g. emergency contact), add another
+// `Option<NewSubBlock>` here + a row mapper in the infra layer.
+
+/// Profile image row from `[user_img_profile]` (most recent active).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[allow(missing_docs)]
+pub struct AdminUserDetailProfileImage {
+    /// `[user_img_profile].user_img_profile_guid` (36-char UUID).
+    pub user_img_profile_guid: String,
+    /// Storage path under `users/{guid}/profile/{uuid}.webp`.
+    /// `""` when no image is set yet.
+    pub profile_img_path: String,
+}
+
+/// Company binding row from `[user_company]` (most recent active) +
+/// joined `[company]` fields.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[allow(missing_docs)]
+pub struct AdminUserDetailCompany {
+    /// `[user_company].user_company_guid` (36-char UUID).
+    pub user_company_guid: String,
+    /// `[company].company_guid` (36-char UUID) — `""` when the
+    /// user-company row exists without a master-company link.
+    pub company_guid: String,
+    /// Master `[company].company_name`. `""` when not set.
+    pub company_name: String,
+    /// Master `[company].company_tel`. `""` when not set.
+    pub company_tel: String,
+    /// `[user_company].user_company_name` — per-user display name.
+    pub user_company_name: String,
+    /// `[user_company].user_company_tel` — per-user contact tel.
+    pub user_company_tel: String,
+    /// `[user_company].user_company_type` (int).
+    pub user_company_type: i32,
+    /// `[user_company].user_company_status` (int 0/1).
+    pub user_company_status: i32,
+}
+
+/// Aggregated role data from `[user_user_role]` + `[user_role]`.
+///
+/// `role_codes` is a comma-separated string (`customer,admin,…`).
+/// `role_names` is a comma-separated human-readable list (admin UI
+/// splits on `,` for badge rendering — same convention as
+/// [`UserListPagingRow::role_name`]).
+/// `user_is_admin` is the `OR` of every role with `role_code = 'ADMIN'`
+/// (the SP computes this so the Rust side doesn't have to walk the
+/// CSV).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[allow(missing_docs)]
+pub struct AdminUserDetailRoles {
+    /// Comma-separated role codes (e.g. `"customer,admin"`).
+    pub role_codes: String,
+    /// Comma-separated role names (e.g. `"Customer, Admin"`).
+    pub role_names: String,
+    /// `true` if any active role carries the `ADMIN` code.
+    pub user_is_admin: bool,
+}
+
+/// Department / department-team scope from the most recent active
+/// `[user_user_role]` row.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[allow(missing_docs)]
+pub struct AdminUserDetailScope {
+    /// `[user_department].user_department_guid` (36-char UUID).
+    pub department_guid: String,
+    /// `[user_department].user_department_code` — admin UI lookup key.
+    pub department_code: String,
+    /// `[user_department].user_department_name` — display name.
+    pub department_name: String,
+    /// `[user_department_team].user_department_team_guid` (36-char UUID).
+    pub department_team_guid: String,
+    /// `[user_department_team].user_department_team_code`.
+    pub department_team_code: String,
+    /// `[user_department_team].user_department_team_name`.
+    pub department_team_name: String,
+}
+
+/// Current position row from `[user_position]` (most recent active +
+/// `is_current = 1`) + joined `[master_position]`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[allow(missing_docs)]
+pub struct AdminUserDetailPosition {
+    /// `[user_position].user_position_guid` (36-char UUID).
+    pub user_position_guid: String,
+    /// `[master_position].master_position_guid` (36-char UUID).
+    pub position_guid: String,
+    /// `[master_position].master_position_code`.
+    pub position_code: String,
+    /// `[master_position].master_position_name` — display name.
+    pub position_name: String,
+    /// `[master_position].master_position_level` (int 0..N). The SP
+    /// emits NULL for positions without an explicit level — the
+    /// mapper surfaces that as `0` (the same convention
+    /// `MasterPositionAutocompleteRow.level` uses so a missing
+    /// level sorts last under `ORDER BY level DESC`).
+    pub position_level: i32,
+    /// `[user_position].user_position_start_at` (UTC).
+    pub position_start_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// `[user_position].user_position_end_at` (UTC) — `None` when open-ended.
+    pub position_end_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Current salary row from `[user_salary]` (`is_current = 1`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[allow(missing_docs)]
+pub struct AdminUserDetailSalary {
+    /// `[user_salary].user_salary_guid` (36-char UUID).
+    pub user_salary_guid: String,
+    /// `[user_salary].user_salary_amount` (decimal).
+    pub salary_amount: Decimal,
+    /// `[user_salary].user_salary_currency` (e.g. `"THB"`).
+    pub salary_currency: String,
+    /// `[user_salary].user_salary_type` (int).
+    pub salary_type: i32,
+    /// `[user_salary].user_salary_effective_from` (UTC).
+    pub salary_effective_from: Option<chrono::DateTime<chrono::Utc>>,
+    /// `[user_salary].user_salary_effective_to` (UTC) — `None` when open-ended.
+    pub salary_effective_to: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Default bank account row from `[user_bank_account]` (most recent
+/// active + `is_default = 1` first).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[allow(missing_docs)]
+pub struct AdminUserDetailBankAccount {
+    /// `[user_bank_account].user_bank_account_guid` (36-char UUID).
+    pub user_bank_account_guid: String,
+    /// `[user_bank_account].user_bank_account_bank_name`.
+    pub bank_name: String,
+    /// `[user_bank_account].user_bank_account_bank_code`.
+    pub bank_code: String,
+    /// `[user_bank_account].user_bank_account_branch_name`.
+    pub branch_name: String,
+    /// `[user_bank_account].user_bank_account_name`.
+    pub bank_account_name: String,
+    /// `[user_bank_account].user_bank_account_no` — full account number.
+    /// Never log (PII). The masked variant is what the admin UI shows.
+    pub bank_account_no: String,
+    /// `[user_bank_account].user_bank_account_no_masked` — e.g. `"xxx-x-12345"`.
+    pub bank_account_no_masked: String,
+    /// `[user_bank_account].user_bank_account_type` (int).
+    pub bank_account_type: i32,
+    /// `[user_bank_account].user_bank_account_is_default` (bool).
+    pub bank_account_is_default: bool,
+    /// `[user_bank_account].user_bank_account_verified_status` (int).
+    pub bank_account_verified_status: i32,
+    /// `[user_bank_account].user_bank_account_book_img_path`.
+    pub bank_book_img_path: String,
+}
+
+/// One attachment row from `[user_details_attachment]` — most recent
+/// active row of the given type.
+///
+/// The SP returns four separate columns keyed by
+/// `user_details_attachment_type` (`1`=front, `2`=back, `3`=proof,
+/// `4`=source-of-funds); the Rust shape reuses this struct for all
+/// four slots.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[allow(missing_docs)]
+pub struct AdminUserDetailAttachment {
+    /// `[user_details_attachment].user_details_attachment_guid` (36-char UUID).
+    pub user_details_attachment_guid: String,
+    /// Storage path. `""` when no row of this type exists.
+    pub attachment_path: String,
+}
+
+/// Username row from `[user_username]` — most-recent active login.
+/// Password hash is NEVER returned (AGENTS.md § 12.1).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[allow(missing_docs)]
+pub struct AdminUserDetailUsername {
+    /// `[user_username].user_username_guid` (36-char UUID).
+    pub user_username_guid: String,
+    /// Login username (lowercased canonical form).
+    pub username: String,
+    /// `[user_username].user_username_status` (raw int).
+    pub status: i32,
+    /// `[user_username].user_username_create_at` (UTC).
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// `[user_username].user_username_update_at` (UTC).
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Country row joined from `[master_country]` — used to enrich the
+/// `user_country_guid` reference.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[allow(missing_docs)]
+pub struct AdminUserDetailCountry {
+    /// `[master_country].master_country_guid` (36-char UUID).
+    pub country_guid: String,
+    /// `[master_country].master_country_code` (e.g. `"LA"`).
+    pub country_code: String,
+    /// `[master_country].master_country_name` (e.g. `"Lao PDR"`).
+    pub country_name: String,
+}
+
+/// Full detail row returned by `SP_USER_DETAIL_FULL_GET`.
+///
+/// Every sub-block is `Option<_>` because each is fetched via
+/// `OUTER APPLY` in the SP — the row exists even when the user has
+/// no related company / position / salary / bank account. The
+/// handler returns a 404 when the SP emits zero rows entirely
+/// (i.e. the `user_guid` doesn't resolve or is soft-deleted).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[allow(missing_docs)]
+pub struct AdminUserDetail {
+    // ---- User Basic ----
+    /// `[user].user_guid` (36-char UUID).
+    pub user_guid: String,
+    pub user_first_name: String,
+    pub user_last_name: String,
+    /// `first_name + ' ' + last_name` (SP-computed).
+    pub full_name: String,
+    pub user_id_card: String,
+    pub user_tel: String,
+    pub user_email: String,
+    pub user_gender: String,
+
+    pub user_is_foreign: bool,
+    pub user_country_guid: String,
+
+    pub user_province: String,
+    pub user_district: String,
+    pub user_sub_district: String,
+    pub user_village: String,
+    pub user_post: String,
+    pub user_description: String,
+
+    pub user_is_customer_company: bool,
+    pub user_is_customer: bool,
+    pub user_is_employee: bool,
+    pub user_is_freelance: bool,
+    /// `user_is_admin` — `true` if any active role carries the
+    /// `ADMIN` code (SP-computed).
+    pub user_is_admin: bool,
+
+    pub user_status: i32,
+    /// Human-readable status label as computed by the SP:
+    /// `Inactive` / `Active` / `Suspended` / `Deleted` / `Unknown`.
+    pub user_status_name: String,
+
+    pub user_create_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub user_create_by: String,
+    pub user_update_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub user_update_by: String,
+
+    // ---- Login ----
+    pub username: Option<AdminUserDetailUsername>,
+
+    // ---- Profile Image ----
+    pub profile_image: Option<AdminUserDetailProfileImage>,
+
+    // ---- Country ----
+    pub country: Option<AdminUserDetailCountry>,
+
+    // ---- Company ----
+    pub company: Option<AdminUserDetailCompany>,
+
+    // ---- Role ----
+    pub roles: Option<AdminUserDetailRoles>,
+
+    // ---- Department / Department Team ----
+    pub scope: Option<AdminUserDetailScope>,
+
+    // ---- Position ----
+    pub position: Option<AdminUserDetailPosition>,
+
+    // ---- Salary ----
+    pub salary: Option<AdminUserDetailSalary>,
+
+    // ---- Working Schedule ----
+    pub schedule: Option<WeeklySchedule>,
+    /// `[user_work_day_template].user_work_day_template_guid`
+    /// (36-char UUID). `""` when no schedule row exists.
+    pub user_work_day_template_guid: String,
+
+    // ---- Bank Account ----
+    pub bank_account: Option<AdminUserDetailBankAccount>,
+
+    // ---- Attachments (4 slots, keyed by `user_details_attachment_type`) ----
+    pub id_card_front: Option<AdminUserDetailAttachment>,
+    pub id_card_back: Option<AdminUserDetailAttachment>,
+    pub proof_of_address: Option<AdminUserDetailAttachment>,
+    pub source_of_funds_statement: Option<AdminUserDetailAttachment>,
 }

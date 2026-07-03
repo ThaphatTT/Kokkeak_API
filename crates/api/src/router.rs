@@ -175,6 +175,16 @@ pub fn build(state: AppState) -> Router {
     // collected (address / bank / position / salary / schedule /
     // attachments). Both are exposed so the admin UI can pick
     // the lighter flow when only the basic fields are needed.
+    //
+    // M22: Read-side counterpart to M20-b —
+    // (`GET /api/v1/admin/users/:guid/detail`, backed by
+    // `dbo.SP_USER_DETAIL_FULL_GET`). Returns the same admin
+    // form data the create flow accepts, with every related
+    // sub-block (login / company / roles / position / salary /
+    // schedule / bank account / four attachments) as nested
+    // objects. Same `PageUsersView` RBAC as the user list —
+    // viewing the page list implies viewing any individual
+    // user's detail.
     let admin_users_routes = Router::new()
         .route(
             "/api/v1/admin/users",
@@ -187,6 +197,10 @@ pub fn build(state: AppState) -> Router {
         .route(
             "/api/v1/admin/users/:guid/permissions",
             get(handlers::admin::list_user_permissions_admin),
+        )
+        .route(
+            "/api/v1/admin/users/:guid/detail",
+            get(handlers::admin::get_user_detail_full_admin),
         )
         .layer(from_fn(admin_flag(Arc::new(state.clone()))));
 
