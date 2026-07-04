@@ -1,29 +1,4 @@
-//! `chat.persist` handler — write incoming chat messages to
-//! MongoDB / JSON-DB sim (M8).
-//!
-//! The HTTP API publishes a `chat.persist` NATS message after
-//! it has accepted a chat message into its in-memory state.
-//! The handler idempotently writes the message to the chat
-//! repository so the durability guarantee is met even if the
-//! primary `chat_messages` write was lost (e.g. process crash
-//! between insert_message and the response).
-//!
-//! The wire format is JSON:
-//! ```json
-//! {
-//!   "id":         "uuid",
-//!   "room_id":    "uuid",
-//!   "sender_id":  "uuid",
-//!   "body":       "...",
-//!   "sent_at":    "2026-...",
-//!   "read_by":    [],
-//! }
-//! ```
-//!
-//! The chat repository used here is supplied via a global
-//! (`CHAT_REPO` below) — wired in `kokkak_worker::main`. For
-//! the JSON-DB sim, we keep the path on `KOKKAK_CHAT__PATH`
-//! (default: `./.kokkak/chat.json`).
+
 
 use std::sync::Arc;
 
@@ -34,30 +9,22 @@ use tracing::{error, info, warn};
 
 use super::{Handler, HandlerContext, HandlerError};
 
-/// Worker-side chat repository (set once at startup by
-/// `kokkak_worker::main`).
 static CHAT_REPO: tokio::sync::OnceCell<Arc<dyn ChatRepository>> =
     tokio::sync::OnceCell::const_new();
 
-/// Install the chat repository used by the persist handler.
-/// Called from `kokkak_worker::main` after the JSON sim is
-/// opened.
 pub fn set_chat_repo(repo: Arc<dyn ChatRepository>) {
     if CHAT_REPO.set(repo).is_err() {
         warn!("chat persist handler: repo already set; ignoring second set");
     }
 }
 
-/// `chat.persist` handler (M8) — idempotently writes a chat
-/// message to the chat repository as a durability backstop.
 pub struct ChatPersistHandler {
     #[allow(dead_code)]
     ctx: HandlerContext,
 }
 
 impl ChatPersistHandler {
-    /// Build a handler with the shared context (the chat repository is
-    /// installed globally via [`set_chat_repo`]).
+
     pub fn new(ctx: HandlerContext) -> Self {
         Self { ctx }
     }

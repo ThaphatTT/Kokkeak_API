@@ -1,51 +1,25 @@
-//! User domain (เอนทิตี้ผู้ใช้ — M2 + M14 + M16).
-//!
-//! `User` is the central aggregate for everyone who can log in:
-//! customers, technicians, and admin staff. The same struct carries
-//! the role + permission set; per-role policy lives in application /
-//! API middleware (AGENTS.md § 12.3).
-//!
-//! **Persistence** matches `kokkeak/NEW_DB.txt` schema v2 (4 tables):
-//! - profile fields → `[user]`
-//! - login + password hash → `[user_username]`
-//! - roles → `[user_role]` joined via `[user_user_role]`
-//!
-//! Repositories JOIN the four tables at read time and run a 3-table
-//! INSERT in a single transaction at write time. The domain stays
-//! aggregate-shaped so the rest of the code is unaware of the
-//! underlying normalization (Ponytail: minimum surface change).
-//!
-//! **Locale**: removed from this aggregate (NEW_DB `[user]` has no
-//! locale column). Per-request locale is resolved from `Accept-Language`
-//! header / `?lang=` query / JWT claim via M11 middleware.
+
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Top-level role. Multi-role users are rare in the legacy system
-/// (KOKKAK mostly does single-role per user) but the model is
-/// open-ended via `Vec<Role>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub enum Role {
-    /// End user who books a handyman / technician.
+
     Customer,
-    /// Service provider who gets matched with orders.
+
     Technician,
-    /// Backoffice staff.
+
     Admin,
-    /// Super-admin (all permissions). Granted very sparingly.
+
     SuperAdmin,
 }
 
 impl Role {
-    /// Canonical snake_case identifier. Lowercase to match the wire
-    /// format on both sides of the DB:
-    ///   - SP returns `"admin"` (CSV in `[user_role]` rows)
-    ///   - JSON serializer emits `"customer"` via `#[serde(rename_all = "snake_case")]`
-    ///   - i18n error messages interpolate this value into placeholders
+
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Customer => "customer",
@@ -55,16 +29,6 @@ impl Role {
         }
     }
 
-    /// Case-insensitive parse. Returns `None` for unknown codes.
-    /// Used by:
-    ///   - The MSSQL repo (`parse_role_codes` in `infra/src/db/mssql_user.rs`)
-    ///     — the SP may emit `"ADMIN"` or `"admin"`; both must work.
-    ///   - The public register endpoint — mobile clients in the wild
-    ///     send `"Customer"` / `"customer"` interchangeably.
-    ///
-    /// ponytail: `to_ascii_lowercase` + 4-arm match. Any future role
-    /// adds one line. Ceiling: kebab-case (`"super-admin"`) is NOT
-    /// normalised — add it only if a real caller needs it.
     pub fn from_code(s: &str) -> Option<Self> {
         let lower = s.to_ascii_lowercase();
         match lower.as_str() {
@@ -77,170 +41,113 @@ impl Role {
     }
 }
 
-/// Granular permission codes sent to the frontend so each page can
-/// decide what to render.
-///
-/// Wire format is the SCREAMING_SNAKE_CASE string (`Permission::code()`)
-/// so the frontend can match it directly without a Rust-side enum
-/// mirror. The MSSQL stored procedure returns a comma-separated list of
-/// these codes (e.g. `DASHBOARD_VIEW,JOBS_CREATE`) which the repo
-/// parses via `Permission::from_code`.
-///
-/// Naming convention:
-/// - variant prefix `Page*View` → page-level visibility (sidebar / route guard)
-/// - non-`Page*` variants       → action-level (button / API capability)
-///
-/// The Rust variant name uses `Page` to convey the page-level intent,
-/// but the **wire code** (DB column, JSON response, `code()`) drops the
-/// `PAGE_` prefix — see the per-variant `#[serde(rename = "...")]` below
-/// and the `code()` method. The two always agree.
-///
-/// Adding a new permission = add a variant here + ask the DBA to add the
-/// code to `user_admin_panel_permission.user_admin_panel_permission_code`.
-/// The Rust side logs a WARN for unknown codes so missing entries are
-/// observable, not silent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Permission {
-    // ── Page visibility ──────────────────────────────────────────────
-    /// Dashboard page visible (KPIs, charts).
+
     #[serde(rename = "DASHBOARD_VIEW")]
     PageDashboardView,
 
-    /// Jobs (orders) list page visible.
     #[serde(rename = "JOBS_VIEW")]
     PageJobsView,
-    /// Finance page visible.
+
     #[serde(rename = "FINANCE_VIEW")]
     PageFinanceView,
-    /// Invoices page visible.
+
     #[serde(rename = "INVOICES_VIEW")]
     PageInvoicesView,
-    /// KYC page visible.
+
     #[serde(rename = "KYC_VIEW")]
     PageKycView,
-    /// Reports page visible.
+
     #[serde(rename = "REPORTS_VIEW")]
     PageReportsView,
-    /// Users management page visible.
+
     #[serde(rename = "USERS_VIEW")]
     PageUsersView,
-    /// Permission matrix page visible.
+
     #[serde(rename = "PERMISSIONS_VIEW")]
     PagePermissionsView,
-    /// Basic settings page visible.
+
     #[serde(rename = "BASIC_SETTINGS_VIEW")]
     PageBasicSettingsView,
-    /// Service catalog page visible.
+
     #[serde(rename = "SERVICE_VIEW")]
     PageServiceView,
 
-    // ── Jobs / orders actions ────────────────────────────────────────
-    /// Create a new job.
     JobsCreate,
-    /// Edit an existing job.
+
     JobsUpdate,
-    /// Cancel / delete a job.
+
     JobsDelete,
-    /// Export jobs to CSV / Excel.
+
     JobsExport,
 
-    // ── Finance actions ──────────────────────────────────────────────
-    /// Release escrow (transfer from platform → technician).
     FinanceEscrowRelease,
-    /// Export finance data.
+
     FinanceExport,
 
-    // ── Invoices actions ─────────────────────────────────────────────
-    /// Create a new invoice.
     InvoicesCreate,
-    /// Edit an existing invoice.
+
     InvoicesUpdate,
-    /// Export invoices.
+
     InvoicesExport,
 
-    // ── KYC actions ──────────────────────────────────────────────────
-    /// Approve a KYC submission.
     KycApprove,
-    /// Reject a KYC submission.
+
     KycReject,
 
-    // ── Reports actions ──────────────────────────────────────────────
-    /// Export reports.
     ReportsExport,
 
-    // ── User management actions ──────────────────────────────────────
-    /// Create a new user.
     UsersCreate,
-    /// Edit an existing user.
+
     UsersUpdate,
-    /// Delete / disable a user.
+
     UsersDelete,
 
-    // ── Permission matrix actions ────────────────────────────────────
-    /// Update role / permission assignments.
     PermissionsUpdate,
 
-    // ── Basic settings actions ───────────────────────────────────────
-    /// Update platform-wide basic settings.
     BasicSettingsUpdate,
 
-    // ── Service catalog actions ──────────────────────────────────────
-    /// Create a service category.
     ServiceCreate,
-    /// Edit a service category.
+
     ServiceUpdate,
-    /// Delete a service category.
+
     ServiceDelete,
 
-    // ── Banner (homepage promo) actions ──────────────────────────────
-    /// Create a banner.
     BannerCreate,
-    /// Edit a banner.
+
     BannerUpdate,
-    /// Delete / unpublish a banner.
+
     BannerDelete,
 
-    // ── Companies (provider companies) actions ───────────────────────
-    /// Create a company record.
     CompaniesCreate,
-    /// Edit a company record.
+
     CompaniesUpdate,
-    /// Delete / disable a company.
+
     CompaniesDelete,
-    /// Export companies to CSV / Excel.
+
     CompaniesExport,
 
-    // ── Marketing actions ───────────────────────────────────────────
-    /// Create a marketing campaign.
     MarketingCreate,
-    /// Edit a marketing campaign.
+
     MarketingUpdate,
-    /// Delete a marketing campaign.
+
     MarketingDelete,
-    /// Publish / activate a marketing campaign.
+
     MarketingPublish,
-    /// Export marketing data.
+
     MarketingExport,
 
-    // ── Social actions ──────────────────────────────────────────────
-    /// Update social media / feed config.
     SocialUpdate,
 
-    // ── Settings (newer UI surface — short-form SETTINGS_UPDATE / SETTING_VIEW) ──────
-    /// Update platform settings. The DB may store either this variant
-    /// or `BASIC_SETTINGS_UPDATE` depending on which UI surface registered
-    /// the permission first — see `from_code` for the wire-code mapping.
     SettingsUpdate,
-    /// Read settings page. The DB may store either this variant
-    /// or `BASIC_SETTINGS_VIEW` depending on which UI surface registered
-    /// the permission first — see `from_code` for the wire-code mapping.
+
     SettingView,
 }
 
 impl Permission {
-    /// Canonical SCREAMING_SNAKE_CASE identifier (stable, switch-friendly).
-    /// This is what the DBA stores and what the frontend receives.
+
     pub fn code(&self) -> &'static str {
         match self {
             Self::PageDashboardView => "DASHBOARD_VIEW",
@@ -305,11 +212,6 @@ impl Permission {
         }
     }
 
-    /// Parse from the SCREAMING_SNAKE_CASE string stored in
-    /// `user_admin_panel_permission.user_admin_panel_permission_code`.
-    /// Returns `None` for unknown codes so the MSSQL repo can log a
-    /// WARN (DBA may have added a new permission before the Rust enum
-    /// was updated) instead of panicking at startup.
     pub fn from_code(code: &str) -> Option<Self> {
         match code {
             "DASHBOARD_VIEW" => Some(Self::PageDashboardView),
@@ -369,13 +271,6 @@ impl Permission {
 
             "SOCIAL_UPDATE" => Some(Self::SocialUpdate),
 
-            // Newer-UI surface: `SETTINGS_UPDATE` → `SettingsUpdate`,
-            // `SETTING_VIEW` → `SettingView`. These are **independent
-            // variants** from the older `BASIC_SETTINGS_UPDATE` /
-            // `BASIC_SETTINGS_VIEW` pair — NOT aliases. The DB may
-            // store either form depending on which UI surface
-            // registered the permission first; both round-trip
-            // independently through `code()` / `from_code()`.
             "SETTINGS_UPDATE" => Some(Self::SettingsUpdate),
             "SETTING_VIEW" => Some(Self::SettingView),
 
@@ -384,32 +279,25 @@ impl Permission {
     }
 }
 
-/// Lifecycle status of a user account.
-///
-/// Persisted as `INT` in `[user].user_status` per NEW_DB.txt.
-/// Convention: `0 = Pending`, `1 = Active`, `2 = Suspended`, `3 = Deleted`.
-/// The MSSQL repo maps at the boundary (read/write); the JSON-DB sim
-/// keeps the enum's serde form for dev convenience.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UserStatus {
-    /// Newly created; cannot log in yet (email verification etc.).
+
     Pending,
-    /// Normal active user.
+
     Active,
-    /// Disabled by admin (login rejected).
+
     Suspended,
-    /// Soft-deleted; kept for audit. Cannot log in.
+
     Deleted,
 }
 
 impl UserStatus {
-    /// `true` iff this status can log in.
+
     pub fn can_login(&self) -> bool {
         matches!(self, Self::Active)
     }
 
-    /// Snake_case identifier (for JSON-DB sim).
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Pending => "pending",
@@ -419,7 +307,6 @@ impl UserStatus {
         }
     }
 
-    /// NEW_DB `INT` representation (`[user].user_status`).
     pub fn as_i32(&self) -> i32 {
         match self {
             Self::Pending => 0,
@@ -429,9 +316,6 @@ impl UserStatus {
         }
     }
 
-    /// Parse from NEW_DB `INT`. Returns `None` for unknown values so the
-    /// MSSQL repo surfaces a typed `RepoError::Backend` instead of
-    /// silently coercing garbage.
     pub fn from_i32(v: i32) -> Option<Self> {
         match v {
             0 => Some(Self::Pending),
@@ -443,81 +327,58 @@ impl UserStatus {
     }
 }
 
-/// The canonical user aggregate.
-///
-/// Fields are loaded by the repository from the 4 NEW_DB tables via JOIN.
-/// The struct is the unit the application / API layers see — the
-/// 4-table normalization is hidden in the persistence adapter.
-///
-/// **Security note**: `password_hash` is the argon2 PHC string. Plain
-/// passwords never live on the struct (AGENTS.md § 12.1).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
-    /// Stable identifier (`[user].user_guid`).
+
     pub id: Uuid,
-    /// First name (`[user].user_first_name`).
+
     pub first_name: String,
-    /// Last name (`[user].user_last_name`).
+
     pub last_name: String,
-    /// Login username (`[user_username].user_username_username`).
-    /// Lowercased on write. Unique across all users (DB-enforced).
+
     pub username: String,
-    /// argon2 PHC string (`[user_username].user_username_password`).
-    /// Never logged (AGENTS.md § 12.1).
+
     pub password_hash: String,
-    /// Roles joined from `[user_role]` via `[user_user_role]`.
+
     pub roles: Vec<Role>,
-    /// Effective permissions (role grants + explicit allow − deny)
-    /// joined from `[user_admin_panel_permission]` via the SP. Returned
-    /// to the frontend in `PublicUser.permissions` so each page can
-    /// decide what to render without a second round-trip.
+
     pub permissions: Vec<Permission>,
-    /// Account lifecycle (`[user].user_status`).
+
     pub status: UserStatus,
-    /// UTC timestamp of account creation (`[user].user_create_at`).
+
     pub created_at: DateTime<Utc>,
-    /// UTC timestamp of the last profile change (`[user].user_update_at`).
+
     pub updated_at: DateTime<Utc>,
 }
 
 impl User {
-    /// `true` iff the user has the given role.
+
     pub fn has_role(&self, role: Role) -> bool {
         self.roles.contains(&role)
     }
 
-    /// `true` iff the user is admin-level (Admin or SuperAdmin).
     pub fn is_admin(&self) -> bool {
         self.roles
             .iter()
             .any(|r| matches!(r, Role::Admin | Role::SuperAdmin))
     }
 
-    /// `true` iff the user is a super-admin.
     pub fn is_super_admin(&self) -> bool {
         self.roles.contains(&Role::SuperAdmin)
     }
 
-    /// `true` iff the user holds the given permission.
     pub fn has_permission(&self, permission: Permission) -> bool {
         self.permissions.contains(&permission)
     }
 
-    /// Convenience: emit the permission list as the wire codes
-    /// (`SCREAMING_SNAKE_CASE`) consumed by the frontend. Useful when
-    /// building ad-hoc responses that bypass `PublicUser`.
     pub fn permission_codes(&self) -> Vec<&'static str> {
         self.permissions.iter().map(|p| p.code()).collect()
     }
 
-    /// `true` iff the user can authenticate right now.
     pub fn can_authenticate(&self) -> bool {
         self.status.can_login()
     }
 
-    /// Display name assembled from first + last. Useful for admin
-    /// panels and audit logs where the legacy `display_name` field
-    /// used to live. Returns a trimmed single string.
     pub fn display_name(&self) -> String {
         let first = self.first_name.trim();
         let last = self.last_name.trim();
@@ -533,82 +394,26 @@ impl User {
     }
 }
 
-// ============================================================================
-// M16: admin user-list wire type (1:1 with the SP SELECT list)
-// ============================================================================
-//
-// One stored procedure backs the admin user-management screen:
-//
-// - `SP_PERMISSION_USER_LIST` → [`UserListRow`] (one row per user)
-//
-// The struct below mirrors the SP SELECT list 1:1 so the row mapper
-// in `kokkak_infra::db::mssql_user` is a field-by-field copy. CSVs
-// (`role_codes`, `role_names`) are pre-split into `Vec<String>` at
-// the infra layer so the admin UI never has to re-parse.
-//
-// **M17 cleanup**: the detail-row type and its backing SP
-// (`SP_PERMISSION_USER_FIND_BY_USERNAME`) moved to
-// `kokkak_domain::permission::PermissionUserDetailRow` + a dedicated
-// [`PermissionUserRepository`] port. The permission flow no longer
-// shares SPs / row types with the login/auth flow — see
-// `crates/domain/src/traits/permission.rs` for the new port.
-//
-// **Note on `permission_codes` (M16 round 2)**: the LIST SP
-// intentionally omits the full `permission_codes` CSV — only the
-// cheap `has_permission` boolean is exposed. The admin UI fetches
-// the full code list per user via the M17 detail endpoint
-// (`SP_PERMISSION_USER_DETAIL_FIND_BY_GUID`). This keeps the LIST
-// payload O(users) instead of O(users × permissions) and lets the
-// list page scale to large user tables.
-//
-// We deliberately keep [`UserListRow`] **separate** from [`User`]:
-// - `User` is the login-facing aggregate (full_name split into first/last).
-// - The SP rows are denormalised for admin display (CSV for badges,
-//   `has_override` / `effective_status` flags).
-// Forcing a single struct would either leak SP shape into the
-// aggregate or strip admin-display fields the SP returns.
-
-/// One row from `SP_PERMISSION_USER_LIST` — flat per-user summary
-/// for the admin user list screen.
-///
-/// The CSV columns are pre-split into `Vec<String>` at the infra
-/// layer so the wire payload never carries CSV strings.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct UserListRow {
-    /// `user.user_guid` (36-char UUID).
+
     pub user_guid: String,
-    /// `first_name + ' ' + last_name` from `[user]`, COALESCEd to "".
+
     pub full_name: String,
-    /// `user_username.user_username_username` (the login handle —
-    /// email, phone, or alphanumeric). SP aliases it as `email`.
+
     pub email: String,
-    /// Active role codes, e.g. `["customer", "finance_manager"]`.
-    /// Parsed from the SP's `STRING_AGG(user_role_code, ',')` CSV.
+
     pub role_codes: Vec<String>,
-    /// Human-readable role names matching `role_codes` 1:1 by index,
-    /// e.g. `["Customer", "Finance Manager"]`.
+
     pub role_names: Vec<String>,
-    /// `1` if the user holds any effective permission (cheap "has
-    /// any perms?" badge for the admin list).
-    ///
-    /// The **actual** permission codes live behind the detail
-    /// endpoint (`SP_PERMISSION_USER_FIND_BY_USERNAME`) — the LIST
-    /// payload intentionally omits them to stay O(users) instead
-    /// of O(users × permissions).
+
     pub has_permission: bool,
-    /// `1` if the user has any explicit per-permission override
-    /// (allow or deny) recorded in `user_permission_override`.
+
     pub has_override: bool,
-    /// `[user].user_status` mapped to [`UserStatus`]. Unknown ints
-    /// fall back to [`UserStatus::Pending`] so the wire shape stays
-    /// stable if a future migration adds a new lifecycle state.
+
     pub user_status: UserStatus,
-    /// `user_username.user_username_status` raw `int`. No enum
-    /// because the username row's status is internal to the
-    /// auth flow — the admin UI displays the `user_status` enum
-    /// and only needs this for a future "username inactive"
-    /// indicator.
+
     pub user_username_status: i32,
 }
 
@@ -729,16 +534,13 @@ mod tests {
         assert_eq!(v["last_name"], "Wonder");
         assert_eq!(v["roles"][0], "customer");
         assert_eq!(v["status"], "active");
-        // password_hash must be in the JSON representation (it is
-        // the repository / DB that hides it from the API surface).
+
         assert!(v["password_hash"].is_string());
     }
 
     #[test]
     fn permission_code_round_trip_covers_all_variants() {
-        // Every variant we ship must round-trip through code() and
-        // from_code(). Adding a new variant without updating both
-        // arms of this test will fail here.
+
         let samples = [
             Permission::PageDashboardView,
             Permission::PageJobsView,
@@ -789,16 +591,13 @@ mod tests {
         for p in samples {
             assert_eq!(Permission::from_code(p.code()), Some(p));
         }
-        // A foreign code returns None (not a panic).
+
         assert_eq!(Permission::from_code("SOMETHING_NEW"), None);
     }
 
     #[test]
     fn permission_serializes_as_screaming_snake_case_code() {
-        // Wire format is the code string, not the Rust variant name —
-        // this is what the frontend matches on. `Page*View` variants
-        // carry a per-variant `#[serde(rename)]` that drops the `PAGE_`
-        // prefix to match `code()` and the DB wire format.
+
         let json = serde_json::to_string(&Permission::JobsCreate).unwrap();
         assert_eq!(json, "\"JOBS_CREATE\"");
 

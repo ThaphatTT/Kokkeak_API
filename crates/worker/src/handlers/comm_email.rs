@@ -1,20 +1,17 @@
-//! `comm.email` handler — SMTP delivery (M4).
-//!
-//! Stub: logs the payload. Production wires the SMTP client in M6+.
+
 
 use async_trait::async_trait;
 use tracing::info;
 
 use super::{Handler, HandlerContext, HandlerError};
 
-/// `comm.email` handler — SMTP delivery (M4). Log-only stub today.
 pub struct CommEmailHandler {
     #[allow(dead_code)]
     ctx: HandlerContext,
 }
 
 impl CommEmailHandler {
-    /// Build a handler with the shared context.
+
     pub fn new(ctx: HandlerContext) -> Self {
         Self { ctx }
     }

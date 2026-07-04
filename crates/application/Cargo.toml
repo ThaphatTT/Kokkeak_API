@@ -8,35 +8,35 @@ authors.workspace = true
 description = "Use cases: orchestrate domain + repo traits (1 action = 1 use case)"
 
 [dependencies]
-# Core
+
 tokio = { workspace = true, features = ["sync"] }
 async-trait = { workspace = true }
 
-# Internal — use cases sit between domain (entities/traits) and infra
-# (adapters). Application code only depends on the domain traits; the
-# concrete adapter is wired in `api::main`.
+
+
+
 kokkak-domain = { path = "../domain" }
 kokkak-common = { path = "../common" }
 
-# Errors / serde
+
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
-# Time / UUID / decimal
+
 chrono = { workspace = true }
 uuid = { workspace = true }
 rust_decimal = { workspace = true }
 rust_decimal_macros = { workspace = true }
 
-# Validation
+
 validator = { workspace = true }
 
-# Logging / metrics
+
 tracing = { workspace = true }
 metrics = { workspace = true }
 
 [dev-dependencies]
-# The `infra` crate hosts the concrete password / JWT services used
-# by the application tests. Production wires them in `api::main`.
+
+
 kokkak-infra = { path = "../infra" }

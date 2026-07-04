@@ -1,9 +1,4 @@
-//! Order use cases (M3 + M6 create).
-//!
-//! Read-mostly: list orders for the current customer / technician
-//! with keyset pagination. M6 adds the **create** use case which
-//! persists a new order and (optionally) publishes a
-//! `order.dispatch` message so the worker can fan out to candidates.
+
 
 use std::sync::Arc;
 
@@ -12,44 +7,40 @@ use kokkak_domain::{Cursor, Order, OrderRepository, OrderStatus, QueuePort, Repo
 use rust_decimal::Decimal;
 use uuid::Uuid;
 
-/// One page of orders for the customer / technician list routes.
 #[derive(Debug, Clone)]
 pub struct OrderListPage {
-    /// Orders in this page (sorted by `created_at` desc).
+
     pub items: Vec<Order>,
-    /// Cursor for the next page; `None` when this is the last page.
+
     pub next_cursor: Option<String>,
 }
 
-/// Input for the `create_order` use case (M6).
 #[derive(Debug, Clone)]
 pub struct CreateOrderInput {
-    /// Short service category code (e.g. `"AC_REPAIR"`).
+
     pub service_code: String,
-    /// Customer placing the order.
+
     pub customer_id: Uuid,
-    /// Short description of the problem (free text).
+
     pub description: String,
-    /// Where the work happens (free text; full address).
+
     pub address: String,
-    /// Quoted / agreed total in LAK (`Decimal`, never `f64`).
+
     pub total: Decimal,
-    /// Work-site latitude (optional; drives Haversine distance in matching).
+
     pub order_lat: Option<f64>,
-    /// Work-site longitude (optional).
+
     pub order_lon: Option<f64>,
 }
 
-/// Order use case bundle (M6).
 pub struct OrderService {
     orders: Arc<dyn OrderRepository>,
-    /// Optional NATS producer for `order.dispatch` (set via `with_queue`).
+
     queue: Option<Arc<dyn QueuePort>>,
 }
 
 impl OrderService {
-    /// Construct the service with the order repository. The NATS queue
-    /// is `None` by default — use [`Self::with_queue`] to attach it.
+
     pub fn new(orders: Arc<dyn OrderRepository>) -> Self {
         Self {
             orders,
@@ -57,20 +48,15 @@ impl OrderService {
         }
     }
 
-    /// Attach a NATS queue so `create_order` can publish
-    /// `order.dispatch` after persisting the new order.
     pub fn with_queue(mut self, queue: Arc<dyn QueuePort>) -> Self {
         self.queue = Some(queue);
         self
     }
 
-    /// Borrow the underlying order repository (used by
-    /// `PaymentService` to look up the order being paid).
     pub fn orders_repo(&self) -> Arc<dyn OrderRepository> {
         self.orders.clone()
     }
 
-    /// List a customer's own orders (newest first, keyset pagination).
     pub async fn list_for_customer(
         &self,
         customer_id: Uuid,
@@ -100,7 +86,6 @@ impl OrderService {
         Ok(OrderListPage { items, next_cursor })
     }
 
-    /// List orders assigned to a technician (newest first, keyset pagination).
     pub async fn list_for_technician(
         &self,
         technician_id: Uuid,
@@ -130,9 +115,6 @@ impl OrderService {
         Ok(OrderListPage { items, next_cursor })
     }
 
-    /// Create a new order (M6). Persists the order, then publishes an
-    /// `order.dispatch` message on the configured queue (if any) so
-    /// the worker can fan out to candidate technicians.
     pub async fn create_order(&self, input: CreateOrderInput) -> Result<Order, RepoError> {
         if input.total < Decimal::ZERO {
             return Err(RepoError::Backend("total must be non-negative".into()));
@@ -152,8 +134,6 @@ impl OrderService {
         };
         self.orders.insert(&order).await?;
 
-        // Best-effort publish — never block the request on queue
-        // errors (AGENTS.md § 10: external work is async).
         if let Some(q) = &self.queue {
             let payload = serde_json::json!({
                 "order_id": order.id,
@@ -182,12 +162,6 @@ mod tests {
     use std::str::FromStr;
     use uuid::Uuid;
 
-    /// In-memory mock of [`OrderRepository`] for unit tests.
-    ///
-    /// ponytail: HashMap-backed, no async runtime — just enough for the
-    /// pagination test below. Ceiling: doesn't model `list_for_technician`
-    /// (the unit test only covers customer pagination); extend when a
-    /// future test needs the technician view.
     #[derive(Default)]
     struct MockOrderRepository {
         by_id: std::sync::Mutex<HashMap<Uuid, Order>>,
@@ -210,8 +184,7 @@ mod tests {
                 .filter(|o| o.customer_id == customer_id)
                 .cloned()
                 .collect();
-            // Production lists most-recent-first (OrderService cursor
-            // keys off `created_at`); mirror that ordering here.
+
             items.sort_by_key(|b| std::cmp::Reverse(b.created_at));
             if let Some(cursor) = after {
                 if let Ok(payload) = cursor.decode::<serde_json::Value>() {

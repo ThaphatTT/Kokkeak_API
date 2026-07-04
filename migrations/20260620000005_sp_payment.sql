@@ -1,10 +1,10 @@
--- ============================================================================
--- KOKKAK NEW DB v2 - Stored Procedures: Payment
--- ============================================================================
 
--- ----------------------------------------------------------------------------
--- API_PAYMENT_CREATE
--- ----------------------------------------------------------------------------
+
+
+
+
+
+
 IF OBJECT_ID('dbo.API_PAYMENT_CREATE', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.API_PAYMENT_CREATE AS BEGIN SET NOCOUNT ON; END');
 GO
@@ -37,10 +37,10 @@ BEGIN
 END;
 GO
 
--- ----------------------------------------------------------------------------
--- API_PAYMENT_CONFIRM
--- Atomic status flip 1 (pending) -> 2 (paid).
--- ----------------------------------------------------------------------------
+
+
+
+
 IF OBJECT_ID('dbo.API_PAYMENT_CONFIRM', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.API_PAYMENT_CONFIRM AS BEGIN SET NOCOUNT ON; END');
 GO
@@ -67,11 +67,11 @@ BEGIN
 END;
 GO
 
--- ----------------------------------------------------------------------------
--- API_PAYMENT_CALC_COMMISSION
--- Returns commission rate + commission amount + net to technician.
--- 3 columns + error_code/message for uniform shape.
--- ----------------------------------------------------------------------------
+
+
+
+
+
 IF OBJECT_ID('dbo.API_PAYMENT_CALC_COMMISSION', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.API_PAYMENT_CALC_COMMISSION AS BEGIN SET NOCOUNT ON; END');
 GO
@@ -97,9 +97,9 @@ BEGIN
 END;
 GO
 
--- ----------------------------------------------------------------------------
--- API_PAYMENT_LIST_BY_TECHNICIAN
--- ----------------------------------------------------------------------------
+
+
+
 IF OBJECT_ID('dbo.API_PAYMENT_LIST_BY_TECHNICIAN', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.API_PAYMENT_LIST_BY_TECHNICIAN AS BEGIN SET NOCOUNT ON; END');
 GO

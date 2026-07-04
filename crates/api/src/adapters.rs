@@ -1,7 +1,4 @@
-//! Adapters that bridge infra concrete types to application ports.
-//!
-//! Lives in the API crate (composition root) so the application
-//! crate does not need to depend on infra.
+
 
 use std::sync::Arc;
 
@@ -11,7 +8,6 @@ use kokkak_infra::auth::jwt::JwtService;
 use kokkak_infra::auth::password::PasswordHasherImpl;
 use uuid::Uuid;
 
-/// Adapter: `PasswordHasherImpl` → `PasswordHasherPort`.
 pub struct PasswordHasherAdapter {
     inner: Arc<PasswordHasherImpl>,
 }
@@ -42,7 +38,6 @@ impl PasswordHasherPort for PasswordHasherAdapter {
     }
 }
 
-/// Adapter: `JwtService` → `JwtIssuerPort`.
 pub struct JwtIssuerAdapter {
     inner: Arc<JwtService>,
 }

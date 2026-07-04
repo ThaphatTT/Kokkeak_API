@@ -1,6 +1,4 @@
-//! Worker runner — connects to NATS, subscribes to handler subjects,
-//! dispatches messages through the idempotency cache, and runs the
-//! handler (M4).
+
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,29 +14,27 @@ use tracing::{error, info, warn};
 use crate::handlers::{Handler, HandlerError};
 use crate::idempotency::{Idempotency, IdempotencyKey, InMemoryIdempotency};
 
-/// Errors raised by the worker runner.
 #[derive(Debug, Error)]
 pub enum WorkerError {
-    /// NATS connect / subscribe failed.
+
     #[error("nats connect failed: {0}")]
     Nats(String),
-    /// Worker startup config is invalid (e.g. NATS URL unset).
+
     #[error("invalid worker config: {0}")]
     Config(String),
 }
 
-/// Worker config.
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
-    /// Subjects to subscribe to.
+
     pub subjects: Vec<String>,
-    /// Stream name to ensure before subscribing.
+
     pub stream_name: String,
-    /// Idempotency TTL.
+
     pub idempotency_ttl: Duration,
-    /// Pull consumer batch size.
+
     pub pull_max_messages: usize,
-    /// Pull consumer fetch timeout.
+
     pub pull_expires_in: Duration,
 }
 
@@ -64,7 +60,6 @@ impl Default for WorkerConfig {
     }
 }
 
-/// The worker. Cheap to clone — all state is `Arc`-wrapped.
 #[derive(Clone)]
 pub struct Worker {
     config: WorkerConfig,
@@ -74,7 +69,7 @@ pub struct Worker {
 }
 
 impl Worker {
-    /// Build a worker from a connected NATS queue + handler list.
+
     pub fn new(
         config: WorkerConfig,
         queue: Arc<NatsQueue>,
@@ -89,7 +84,6 @@ impl Worker {
         }
     }
 
-    /// Build a worker with a default in-memory idempotency cache.
     pub fn with_in_memory_idempotency(
         config: WorkerConfig,
         queue: Arc<NatsQueue>,
@@ -99,7 +93,6 @@ impl Worker {
         Self::new(config, queue, handlers, idempotency)
     }
 
-    /// Ensure the stream + its subjects exist (idempotent).
     pub async fn ensure_topology(&self) -> Result<(), WorkerError> {
         let subjects: Vec<&str> = self.config.subjects.iter().map(|s| s.as_str()).collect();
         self.queue
@@ -108,7 +101,6 @@ impl Worker {
             .map_err(|e| WorkerError::Nats(e.to_string()))
     }
 
-    /// Run the consumer loop until `shutdown_rx` fires.
     pub async fn run(
         self,
         mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
@@ -124,7 +116,6 @@ impl Worker {
         let cfg = self.config.clone();
         let idempotency = self.idempotency.clone();
 
-        // Map subject -> handler.
         let subject_to_handler: Arc<std::collections::HashMap<String, Arc<dyn Handler>>> = {
             let mut m = std::collections::HashMap::new();
             for h in &self.handlers {
@@ -133,7 +124,6 @@ impl Worker {
             Arc::new(m)
         };
 
-        // Ensure the stream exists.
         let stream = jet
             .get_or_create_stream(async_nats::jetstream::stream::Config {
                 name: cfg.stream_name.clone(),
@@ -143,8 +133,6 @@ impl Worker {
             .await
             .map_err(|e| WorkerError::Nats(e.to_string()))?;
 
-        // Spawn per-handler pull consumer tasks. Each task is cancelled
-        // when `shutdown_rx` flips to `true`.
         let mut tasks = Vec::new();
         for subject in cfg.subjects.iter() {
             let handler = match subject_to_handler.get(subject) {
@@ -202,8 +190,7 @@ impl Worker {
                                 continue;
                             }
                         };
-                        // Use Nats-Msg-Id when the publisher set one, else
-                        // the JetStream sequence (always unique per stream).
+
                         let message_id = msg
                             .message
                             .headers
@@ -219,7 +206,7 @@ impl Worker {
                         let payload = msg.message.payload.clone();
                         let key = IdempotencyKey::new(subject.clone(), message_id.clone());
                         match idempotency.claim(&key, cfg.idempotency_ttl).await {
-                            Ok(true) => { /* first time, run handler */ }
+                            Ok(true) => {  }
                             Ok(false) => {
                                 info!(subject = %subject, message_id = %message_id, "skip duplicate");
                                 let _ = msg.ack().await;
@@ -247,7 +234,6 @@ impl Worker {
             }));
         }
 
-        // Wait for shutdown signal.
         let _ = shutdown_rx.changed().await;
         info!("worker received shutdown signal, stopping consumers");
         for t in tasks {
@@ -257,8 +243,6 @@ impl Worker {
     }
 }
 
-/// Build a `Worker` from settings + handler list, using the in-memory
-/// idempotency cache.
 pub async fn from_settings(
     settings: &NatsSettings,
     log_format: LogFormat,
@@ -272,7 +256,7 @@ pub async fn from_settings(
     let queue = NatsQueue::connect(settings)
         .await
         .map_err(|e| WorkerError::Nats(e.to_string()))?;
-    let _ = log_format; // log format is set globally by main
+    let _ = log_format;
     Ok(Worker::with_in_memory_idempotency(
         WorkerConfig::default(),
         Arc::new(queue),

@@ -1,14 +1,5 @@
-# Lao locale (primary market — sdplao.com).
-#
-# Per AGENTS.md § 13, Lao is the primary market for KOKKAK. Every
-# user-visible string in the API must have a Lao translation;
-# this file is the source of truth.
-#
-# NOTE: starter copy. Native Lao reviewers on the KOKKAK team
-# must audit every string before shipping. Translations convey
-# *meaning*, not a literal word-for-word rendering.
 
-# -- generic error envelope --
+
 err:
   bad_request: "ຄຳຂໍບໍ່ຖືກຕ້ອງ: {0}"
   unauthorized: "ບໍ່ໄດ້ຮັບອະນຸຍາດ"
@@ -19,7 +10,6 @@ err:
   rate_limited: "ຖືກຈຳກັດຈຳນວນຄຳຂໍ"
   internal: "ຜິດພາດພາຍໃນ: {0}"
 
-# -- AuthError / auth handlers --
 err_auth:
   invalid_credentials: "ອີເມວຫຼືລະຫັດຜ່ານບໍ່ຖືກຕ້ອງ"
   token_expired: "ໂທເຄັນໝົດອາຍຸແລ້ວ"
@@ -36,13 +26,11 @@ err_auth:
   role_not_allowed: "ບໍ່ອະນຸຍາດໃຫ້ໃຊ້ບົດບາດນີ້: {0}"
   user_not_found: "ບໍ່ພົບຜູ້ໃຊ້: {0}"
 
-# -- RepoError (generic) --
 err_repo:
   not_found: "ບໍ່ພົບ: {0}"
   conflict: "ຂັດແຍ່ງ: {0}"
   backend: "ລະບົບຈັດເກັບຂໍ້ມູນຂັດຂ້ອງ: {0}"
 
-# -- ChatError + ChatRepoError --
 err_chat:
   not_participant: "ທ່ານບໍ່ແມ່ນສະມາຊິກຂອງຫ້ອງ {0}"
   room_not_found: "ບໍ່ພົບຫ້ອງ {0}"
@@ -56,7 +44,6 @@ err_chat_repo:
   not_found: "ບໍ່ພົບ: {0}"
   backend: "ລະບົບແຊັດຂັດຂ້ອງ: {0}"
 
-# -- PaymentError + PaymentRepoError --
 err_payment:
   order_not_payable: "ຄຳສັ່ງວຽກ {0} ບໍ່ສາມາດຊຳລະເງິນໄດ້ (ສະຖານະບໍ່ກົງກັນ)"
   not_found: "ບໍ່ພົບການຊຳລະເງິນ {0}"
@@ -71,15 +58,12 @@ err_payment_repo:
   not_found: "ບໍ່ພົບ: {0}"
   backend: "ລະບົບຊຳລະເງິນຂັດຂ້ອງ: {0}"
 
-# -- Order handlers --
 err_order:
   invalid_total: "ຍອດເງິນບໍ່ຖືກຕ້ອງ"
 
-# -- Generic request validation --
 err_request:
   bad_timestamp: "after ຕ້ອງເປັນ timestamp ແບບ RFC3339"
 
-# -- Admin permissions (M15-prep: GET /api/v1/admin/permissions) --
 err_permission:
   mode_required: "ຕ້ອງລະບຸ query parameter `mode`"
   invalid_role_guid: "user_role_guid ບໍ່ແມ່ນ UUID ທີ່ຖືກຕ້ອງ"
@@ -89,7 +73,6 @@ err_permission:
   invalid_override_effect: "effect ຕ້ອງເປັນ 'allow' ຫຼື 'deny'"
   invalid_override_status: "status ຕ້ອງເປັນ 0 ຫຼື 1"
 
-# -- M20-b: admin user creation (SP_USER_INSERT_FULL) --
 err_admin_user:
   actor_required: "ຕ້ອງລະບຸ actor"
   actor_not_found: "ບໍ່ພົບ actor ຫຼື actor ບໍ່ໄດ້ເປີດໃຊ້ງານ"

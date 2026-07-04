@@ -1,17 +1,17 @@
--- ============================================================================
--- KOKKAK NEW_DB v2 - Stored Procedures: Order Service
---
--- Reference: NEW_DB.txt order_service_header / order_service_body /
--- order_service_assignment.
---
--- Output convention (uniform with 20260620000001_sp_user.sql):
---   Write SPs return a single row: (id, error_code, error_message)
---   Read SPs return entity rows (no error_code needed; empty set = not found).
--- ============================================================================
 
--- ----------------------------------------------------------------------------
--- API_ORDER_CREATE
--- ----------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
 IF OBJECT_ID('dbo.API_ORDER_CREATE', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.API_ORDER_CREATE AS BEGIN SET NOCOUNT ON; END');
 GO
@@ -77,9 +77,9 @@ BEGIN
 END;
 GO
 
--- ----------------------------------------------------------------------------
--- API_ORDER_GET (header + body + assignment as 3 result sets)
--- ----------------------------------------------------------------------------
+
+
+
 IF OBJECT_ID('dbo.API_ORDER_GET', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.API_ORDER_GET AS BEGIN SET NOCOUNT ON; END');
 GO
@@ -124,9 +124,9 @@ BEGIN
 END;
 GO
 
--- ----------------------------------------------------------------------------
--- API_ORDER_LIST_BY_CUSTOMER
--- ----------------------------------------------------------------------------
+
+
+
 IF OBJECT_ID('dbo.API_ORDER_LIST_BY_CUSTOMER', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.API_ORDER_LIST_BY_CUSTOMER AS BEGIN SET NOCOUNT ON; END');
 GO
@@ -153,9 +153,9 @@ BEGIN
 END;
 GO
 
--- ----------------------------------------------------------------------------
--- API_ORDER_LIST_BY_TECHNICIAN
--- ----------------------------------------------------------------------------
+
+
+
 IF OBJECT_ID('dbo.API_ORDER_LIST_BY_TECHNICIAN', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.API_ORDER_LIST_BY_TECHNICIAN AS BEGIN SET NOCOUNT ON; END');
 GO
@@ -184,10 +184,10 @@ BEGIN
 END;
 GO
 
--- ----------------------------------------------------------------------------
--- API_ORDER_ASSIGN_TECHNICIAN (atomic first-accept wins)
--- Result: (id, error_code, error_message). 0 = won the race, 1 = lost.
--- ----------------------------------------------------------------------------
+
+
+
+
 IF OBJECT_ID('dbo.API_ORDER_ASSIGN_TECHNICIAN', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.API_ORDER_ASSIGN_TECHNICIAN AS BEGIN SET NOCOUNT ON; END');
 GO
@@ -221,9 +221,9 @@ BEGIN
 END;
 GO
 
--- ----------------------------------------------------------------------------
--- API_ORDER_UPDATE_STATUS
--- ----------------------------------------------------------------------------
+
+
+
 IF OBJECT_ID('dbo.API_ORDER_UPDATE_STATUS', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.API_ORDER_UPDATE_STATUS AS BEGIN SET NOCOUNT ON; END');
 GO

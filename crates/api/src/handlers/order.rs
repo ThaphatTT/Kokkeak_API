@@ -1,8 +1,4 @@
-//! Order HTTP handlers (M3 + M6 + M11 i18n).
-//!
-//! - GET /api/v1/orders/me  (customer: list my orders)
-//! - GET /api/v1/orders/assigned  (technician: list my assigned orders)
-//! - POST /api/v1/orders  (customer: create a new order)
+
 
 use axum::{
     extract::{Query, State},
@@ -53,7 +49,6 @@ impl From<kokkak_domain::Order> for OrderItem {
     }
 }
 
-/// GET /api/v1/orders/me  — list orders for the current customer.
 #[utoipa::path(
     get,
     path = "/api/v1/orders/me",
@@ -109,10 +104,6 @@ pub struct CreateOrderRequest {
     pub order_lon: Option<f64>,
 }
 
-/// POST /api/v1/orders  — create a new order (M6).
-///
-/// Only customers can create orders. The persisted order is then
-/// published on `order.dispatch` for the worker to fan out.
 #[utoipa::path(
     post,
     path = "/api/v1/orders",
@@ -147,9 +138,7 @@ pub async fn create_order(
     let total: rust_decimal::Decimal = match req.total.parse() {
         Ok(d) => d,
         Err(_) => {
-            // Localized "invalid total" message — uses the
-            // file-based `tr` because the error is a client
-            // validation problem, not a backend failure.
+
             let msg = tr("err_order.invalid_total", &locale, &[]);
             let envelope: ApiResponse<()> = ApiResponse {
                 success: false,
@@ -188,7 +177,6 @@ pub async fn create_order(
         .into_response())
 }
 
-/// GET /api/v1/orders/assigned  — list orders assigned to the current technician.
 #[utoipa::path(
     get,
     path = "/api/v1/orders/assigned",

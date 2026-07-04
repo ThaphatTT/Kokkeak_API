@@ -1,4 +1,4 @@
-//! `HealthCheck` for NATS (เช็คสถานะ NATS).
+
 
 use std::sync::Arc;
 
@@ -7,13 +7,12 @@ use kokkak_domain::{HealthCheck, HealthError};
 
 use crate::queue::nats::NatsQueue;
 
-/// `HealthCheck` that verifies the NATS connection is open.
 pub struct NatsHealthCheck {
     queue: Arc<NatsQueue>,
 }
 
 impl NatsHealthCheck {
-    /// Wrap an existing NATS queue client.
+
     pub fn new(queue: Arc<NatsQueue>) -> Self {
         Self { queue }
     }

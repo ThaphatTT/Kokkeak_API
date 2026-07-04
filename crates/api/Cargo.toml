@@ -12,7 +12,7 @@ name = "kokkak-api"
 path = "src/main.rs"
 
 [dependencies]
-# Core
+
 tokio = { workspace = true }
 axum = { workspace = true, features = ["ws", "macros"] }
 tower = { workspace = true }
@@ -24,87 +24,87 @@ chrono = { workspace = true }
 async-trait = { workspace = true }
 rust_decimal = { workspace = true }
 
-# Telemetry
+
 tracing = { workspace = true }
 metrics = { workspace = true }
 
-# M2: JWT decoding in extractor
+
 jsonwebtoken = { workspace = true }
 
-# Internal
+
 kokkak-common = { path = "../common" }
-# T-16: enable the `openapi` feature on domain so the entity
-# types derive `utoipa::ToSchema` for the mobile-facing spec.
+
+
 kokkak-domain = { path = "../domain", features = ["openapi"] }
 kokkak-infra = { path = "../infra" }
 kokkak-application = { path = "../application" }
 
-# M8: WebSocket gateway (axum::extract::ws) + per-connection
-# future plumbing.
+
+
 futures = { workspace = true }
 tokio-stream = { version = "0.1", features = ["sync"] }
 
-# Validation
+
 validator = { workspace = true }
 
-# M9 / T-16: base64 decoder for `*_img_b64` fields on
-# /api/v1/admin/users/full (admin handler calls
-# `ImageProcessor::process_and_store` after stripping the
-# data-URL prefix and decoding the body).
+
+
+
+
 base64 = { workspace = true }
 
-# T-23-b: `Storage::get` returns `Bytes`; reused by the
-# `/files/*` handler to stream the response body to the
-# browser.
+
+
+
 bytes = "1"
 
-# T-23-b: HMAC-SHA256 signer/verifier for `/files/*` URLs.
+
 hmac = { workspace = true }
 sha2  = { workspace = true }
 
-# M10 repo_factory
+
 thiserror = { workspace = true }
 
-# M_dev: auto-load `.env` so `KOKKAK_AUTH__JWT_SECRET=...` and friends
-# work without the operator having to `export` each one before
-# `cargo run`. figment 0.10's `Env` provider reads only from process
-# env (not from a file), so we use dotenvy to bridge. `.ok()` makes
-# the call a no-op in production where no `.env` exists.
+
+
+
+
+
 dotenvy = "0.15"
 
-# T-09: HTTPS server via axum-server + rustls. The rustls config
-# builder lives in `src/tls.rs`; this binary is the only place the
-# server actually binds, so the deps stay local.
+
+
+
 axum-server = { workspace = true }
 rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
 anyhow = { workspace = true }
 
-# T-12: cert file watcher for LE 90-day rotation.
+
 notify = { workspace = true }
 
-# T-07: per-IP rate limiting (GCRA via governor).
+
 tower_governor = { workspace = true }
 
-# R-02: Redis-backed rate limit (shared counter across replicas).
-# Shares the `redis` + `deadpool-redis` versions that `kokkak-infra`
-# already uses for the L2 cache; pinning here keeps the workspace
-# single-source-of-truth.
+
+
+
+
 redis = { workspace = true }
 deadpool-redis = { workspace = true }
 
-# T-16: OpenAPI spec generation + Swagger UI.
+
 utoipa = { workspace = true, features = ["axum_extras", "chrono", "uuid", "decimal"] }
 utoipa-swagger-ui = { workspace = true, features = ["axum"] }
 
 [dev-dependencies]
-# T-31: feature_gate tests deserialize a FeatureFlagSettings via YAML.
+
 serde_yaml = "0.9"
-# Test body / JSON inspection in handler tests.
+
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
 tower = { workspace = true, features = ["util"] }
 uuid = { workspace = true }
-# T-06: middleware integration tests need to read the response
-# body bytes to verify gzip encoding and uncompressed size.
+
+
 http-body-util = "0.1"

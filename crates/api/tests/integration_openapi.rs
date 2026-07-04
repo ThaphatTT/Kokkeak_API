@@ -1,11 +1,4 @@
-//! Integration tests for the T-16 OpenAPI spec.
-//!
-//! We test the spec directly via `ApiDoc::openapi()` instead of
-//! routing through the full AppState (the openapi routes need
-//! no state — they just serialize the spec to JSON).
-//!
-//! A separate test verifies the route wiring by building a
-//! minimal router with the openapi routes only.
+
 
 use kokkak_api::openapi::ApiDoc;
 use std::collections::BTreeMap;
@@ -15,7 +8,7 @@ use utoipa::OpenApi;
 #[tokio::test]
 async fn spec_root_conforms_to_openapi_3() {
     let spec = ApiDoc::openapi();
-    // OpenApiVersion serializes to "3.0.3" — check via JSON.
+
     let json = serde_json::to_value(&spec.openapi).unwrap();
     assert_eq!(json, serde_json::json!("3.0.3"));
     assert_eq!(spec.info.title, "Kokkeak API");
@@ -24,9 +17,7 @@ async fn spec_root_conforms_to_openapi_3() {
 
 #[tokio::test]
 async fn spec_documents_all_critical_paths() {
-    // Mobile team relies on these endpoints being documented.
-    // If a route is removed, this test fails — that's the
-    // contract.
+
     let spec = ApiDoc::openapi();
     let paths: Vec<&str> = spec.paths.paths.keys().map(|s| s.as_str()).collect();
 
@@ -57,9 +48,7 @@ async fn spec_documents_all_critical_paths() {
 
 #[tokio::test]
 async fn spec_documents_idempotency_key_header_on_protected_posts() {
-    // The 3 protected POSTs MUST document the Idempotency-Key
-    // header parameter — without it, mobile devs won't know
-    // they need to send one.
+
     let spec = ApiDoc::openapi();
     for path in [
         "/api/v1/orders",
@@ -85,8 +74,7 @@ async fn spec_documents_idempotency_key_header_on_protected_posts() {
 
 #[tokio::test]
 async fn spec_documents_bearer_auth() {
-    // The spec declares bearer auth so the Swagger UI
-    // "Authorize" button works.
+
     let spec = ApiDoc::openapi();
     let schemes: BTreeMap<String, _> = spec
         .components
@@ -101,8 +89,7 @@ async fn spec_documents_bearer_auth() {
 
 #[tokio::test]
 async fn spec_documents_domain_entities() {
-    // The mobile-facing types (PublicUser, Order, Payment, ...) must
-    // be present in `components.schemas` so the spec is reusable.
+
     let spec = ApiDoc::openapi();
     let schemas: BTreeMap<String, _> = spec
         .components
@@ -134,8 +121,7 @@ async fn spec_documents_domain_entities() {
 
 #[tokio::test]
 async fn spec_documents_error_envelope() {
-    // Every 4xx / 5xx response uses the standard error envelope.
-    // The schema must be present so mobile devs know the shape.
+
     let spec = ApiDoc::openapi();
     let schemas: BTreeMap<String, _> = spec
         .components
@@ -154,10 +140,7 @@ async fn spec_documents_error_envelope() {
 
 #[tokio::test]
 async fn error_codes_catalog_includes_all_published_codes() {
-    // T-17: the catalog endpoint must list every code in
-    // kokkak_common::error_codes::ErrorCode. If the catalog
-    // is out of sync with the constants, mobile devs will be
-    // missing entries.
+
     use kokkak_api::openapi::error_codes_catalog;
 
     let catalog = error_codes_catalog();
@@ -186,9 +169,7 @@ async fn error_codes_catalog_status_matches_semantics() {
     use kokkak_api::openapi::error_codes_catalog;
     let catalog = error_codes_catalog();
     for entry in catalog {
-        // 4xx codes must be in 400-499; 5xx in 500-599. This is
-        // the contract — mobile devs rely on it to dispatch
-        // (retry on 5xx, show error on 4xx).
+
         let valid_range = (400..500).contains(&entry.status) || (500..600).contains(&entry.status);
         assert!(
             valid_range,

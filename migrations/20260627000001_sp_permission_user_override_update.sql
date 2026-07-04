@@ -1,45 +1,45 @@
--- =============================================================================
--- M18: SP_PERMISSION_USER_OVERRIDE_UPDATE
--- -----------------------------------------------------------------------------
--- Batch upsert into `user_permission_override` (one row per SP call).
--- The application layer loops this SP — one request item → one call → one
--- result row. Per-item validation rejections (invalid effect / status,
--- missing user / permission) return a result row with `success = 0`
--- and a stable machine code (`INVALID_EFFECT` / `INVALID_STATUS` /
--- `USER_NOT_FOUND` / `PERMISSION_NOT_FOUND`); the CATCH block fires
--- only on unexpected DB errors and ends in a `THROW` so tiberius
--- surfaces it as a connection error (no row is delivered).
---
--- Lives in KOKKAK_MASTER (same DB as the M17 permission SPs).
--- =============================================================================
 
--- ----------------------------------------------------------------------------
--- SP_PERMISSION_USER_OVERRIDE_UPDATE
--- ----------------------------------------------------------------------------
--- Parameters (all bound):
---   @p_user_permission_override_user_guid         varchar(50)  (required)
---   @p_user_permission_override_permission_guid   varchar(50)  (required)
---   @p_user_permission_override_effect             varchar(10)  (required)
---   @p_user_permission_override_reason             nvarchar(max) = NULL
---   @p_user_permission_override_assigned_by        varchar(50)  = NULL
---   @p_user_permission_override_status             int          = 1
---   @p_create_by                                   varchar(50)  = NULL
---   @p_update_by                                   varchar(50)  = NULL
---
--- Result (single row, always):
---   success                                        bit
---   code                                           varchar(32)
---   message                                        varchar(512)
---   user_permission_override_guid                  varchar(50)  (NULL on failure)
---   user_permission_override_user_guid             varchar(50)  (echo)
---   user_permission_override_permission_guid       varchar(50)  (echo)
---   user_permission_override_effect                varchar(10)  (post-lowercase)
---   user_permission_override_status                int          (post-coalesce)
---
--- Success codes:  UPDATED, CREATED
--- Failure codes:  INVALID_EFFECT, INVALID_STATUS,
---                 USER_NOT_FOUND, PERMISSION_NOT_FOUND, ERROR
--- ----------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 IF OBJECT_ID('dbo.SP_PERMISSION_USER_OVERRIDE_UPDATE', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.SP_PERMISSION_USER_OVERRIDE_UPDATE AS BEGIN SET NOCOUNT ON; END');
 GO
@@ -78,9 +78,7 @@ BEGIN
            OR LTRIM(RTRIM(@p_user_permission_override_assigned_by)) = ''
             SET @p_user_permission_override_assigned_by = @p_update_by;
 
-        /* =========================================================
-           Validate effect
-           ========================================================= */
+        
         IF @p_user_permission_override_effect NOT IN ('allow', 'deny')
         BEGIN
             ROLLBACK TRANSACTION;
@@ -93,9 +91,7 @@ BEGIN
             RETURN;
         END;
 
-        /* =========================================================
-           Validate status
-           ========================================================= */
+        
         IF @p_user_permission_override_status NOT IN (0, 1)
         BEGIN
             ROLLBACK TRANSACTION;
@@ -108,9 +104,7 @@ BEGIN
             RETURN;
         END;
 
-        /* =========================================================
-           Validate user
-           ========================================================= */
+        
         IF NOT EXISTS (
             SELECT 1
             FROM dbo.[user]
@@ -128,9 +122,7 @@ BEGIN
             RETURN;
         END;
 
-        /* =========================================================
-           Validate permission
-           ========================================================= */
+        
         IF NOT EXISTS (
             SELECT 1
             FROM dbo.user_permission
@@ -148,18 +140,14 @@ BEGIN
             RETURN;
         END;
 
-        /* =========================================================
-           Find existing override
-           ========================================================= */
+        
         SELECT TOP 1
             @existing_guid = user_permission_override_guid
         FROM dbo.user_permission_override WITH (UPDLOCK, HOLDLOCK)
         WHERE user_permission_override_user_guid = @p_user_permission_override_user_guid
           AND user_permission_override_permission_guid = @p_user_permission_override_permission_guid;
 
-        /* =========================================================
-           UPDATE ถ้ามีอยู่แล้ว
-           ========================================================= */
+        
         IF @existing_guid IS NOT NULL
         BEGIN
             UPDATE dbo.user_permission_override
@@ -188,9 +176,7 @@ BEGIN
             RETURN;
         END;
 
-        /* =========================================================
-           INSERT ถ้าไม่มี
-           ========================================================= */
+        
         SET @existing_guid = CONVERT(varchar(50), NEWID());
 
         INSERT INTO dbo.user_permission_override (

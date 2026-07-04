@@ -1,20 +1,4 @@
-//! Integration tests for the T-06 HTTP middleware stack:
-//! CORS, compression, and request timeout.
-//!
-//! These tests build a minimal router with each layer wired
-//! exactly the way `main.rs` does at production startup. The
-//! expectation is that each middleware applies its contract:
-//!
-//! - **CORS**: a preflight OPTIONS request from an allowed origin
-//!   returns the `access-control-allow-origin` header.
-//! - **Compression**: a request with `Accept-Encoding: gzip`
-//!   receives a `content-encoding: gzip` response when the body
-//!   is large enough to be worth compressing.
-//! - **Timeout**: a handler that sleeps longer than the configured
-//!   timeout returns HTTP 408 or 500 (tower-http 0.6 default).
-//!
-//! The tests are deliberately scoped to ONE layer per test so a
-//! regression points at the offending middleware immediately.
+
 
 use std::time::Duration;
 
@@ -37,7 +21,6 @@ use tower_http::cors::CorsLayer;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 
-/// Build a router wired the same way `main.rs` does in production.
 fn app_with_cors(allow_origins: &[&str]) -> Router {
     let origins: Vec<HeaderValue> = allow_origins
         .iter()
@@ -71,8 +54,7 @@ fn app_with_cors(allow_origins: &[&str]) -> Router {
 }
 
 fn app_with_compression() -> Router {
-    // Body large enough that compression shrinks it noticeably.
-    // `flate2` default threshold is 32 bytes; we send 1 KB.
+
     const BODY: &str = "x";
     let body = BODY.repeat(1024);
 
@@ -101,8 +83,6 @@ fn app_with_timeout(secs: u64) -> Router {
         .layer(TimeoutLayer::new(Duration::from_secs(secs)))
 }
 
-// ---- CORS ----
-
 #[tokio::test]
 async fn cors_preflight_from_allowed_origin_returns_acao_header() {
     let app = app_with_cors(&["https://app.example.com"]);
@@ -128,10 +108,7 @@ async fn cors_preflight_from_allowed_origin_returns_acao_header() {
 
 #[tokio::test]
 async fn cors_simple_request_from_disallowed_origin_lacks_acao_header() {
-    // No CORS layer at all (allowlist empty) → browser sees no
-    // ACAO header on the response and rejects the response
-    // client-side. The server still returns the body normally;
-    // it is the BROWSER that enforces the same-origin policy.
+
     let app = app_with_cors(&[]);
 
     let req = Request::builder()
@@ -170,8 +147,6 @@ async fn cors_simple_request_from_allowed_origin_returns_acao_header() {
     );
 }
 
-// ---- Compression ----
-
 #[tokio::test]
 async fn compression_with_gzip_accept_encoding_returns_gzip_body() {
     let app = app_with_compression();
@@ -205,13 +180,11 @@ async fn compression_without_accept_encoding_returns_plain_body() {
         resp.headers().get(header::CONTENT_ENCODING).is_none(),
         "no Accept-Encoding → response must NOT be compressed"
     );
-    // Body should be readable as the original text.
+
     let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let body_text = std::str::from_utf8(&body_bytes).unwrap();
     assert_eq!(body_text.len(), 1024, "body must be 1 KB uncompressed");
 }
-
-// ---- Timeout ----
 
 #[tokio::test]
 async fn timeout_fast_handler_completes_normally() {
@@ -224,10 +197,7 @@ async fn timeout_fast_handler_completes_normally() {
 
 #[tokio::test]
 async fn timeout_slow_handler_returns_408_or_500() {
-    // tower-http 0.6 `TimeoutLayer::new` is deprecated in favour
-    // of `with_status_code(408)`. The current API returns 500.
-    // Accept either status so this test stays green across the
-    // upgrade.
+
     let app = app_with_timeout(1);
 
     let req = Request::builder().uri("/slow").body(Body::empty()).unwrap();
@@ -240,8 +210,6 @@ async fn timeout_slow_handler_returns_408_or_500() {
         resp.status()
     );
 }
-
-// ---- Rate limit ----
 
 fn app_with_rate_limit(rps: u64, burst: u32) -> Router {
     let governor_conf = std::sync::Arc::new(
@@ -259,9 +227,6 @@ fn app_with_rate_limit(rps: u64, burst: u32) -> Router {
         })
 }
 
-/// Build a request with a `ConnectInfo` extension so
-/// `PeerIpKeyExtractor` can extract the source IP. Each test
-/// uses a distinct IP so the per-IP buckets don't bleed.
 fn request_with_ip(path: &str, ip: [u8; 4]) -> Request<Body> {
     let connect_info = ConnectInfo(SocketAddr::from((ip, 30_000)));
     Request::builder()
@@ -273,9 +238,7 @@ fn request_with_ip(path: &str, ip: [u8; 4]) -> Request<Body> {
 
 #[tokio::test]
 async fn rate_limit_burst_then_429() {
-    // burst=2 → first two requests pass, third is throttled.
-    // Using a distinct IP per test prevents the limiter's GCRA
-    // state from carrying over between runs.
+
     let app = app_with_rate_limit(1, 2);
 
     let resp1 = app
@@ -292,7 +255,6 @@ async fn rate_limit_burst_then_429() {
         .unwrap();
     assert_eq!(resp2.status(), StatusCode::OK);
 
-    // Third request from the same IP — bucket empty → 429.
     let resp3 = app
         .clone()
         .oneshot(request_with_ip("/echo", [10, 0, 0, 1]))
@@ -307,11 +269,9 @@ async fn rate_limit_burst_then_429() {
 
 #[tokio::test]
 async fn rate_limit_distinct_ips_have_independent_buckets() {
-    // Each IP gets its own token bucket — IP A exhausting its
-    // burst must NOT affect IP B.
+
     let app = app_with_rate_limit(1, 1);
 
-    // IP A: drain the bucket.
     let a1 = app
         .clone()
         .oneshot(request_with_ip("/echo", [10, 0, 0, 2]))
@@ -325,7 +285,6 @@ async fn rate_limit_distinct_ips_have_independent_buckets() {
         .unwrap();
     assert_eq!(a2.status(), StatusCode::TOO_MANY_REQUESTS);
 
-    // IP B: still has a full bucket.
     let b1 = app
         .clone()
         .oneshot(request_with_ip("/echo", [10, 0, 0, 3]))
@@ -340,13 +299,9 @@ async fn rate_limit_distinct_ips_have_independent_buckets() {
 
 #[tokio::test]
 async fn rate_limit_429_includes_x_ratelimit_after_header() {
-    // tower_governor attaches an `x-ratelimit-after` header to
-    // 429 responses (NOT the standard `Retry-After`) so
-    // well-behaved clients can back off. Verify the header is
-    // present and parses as a positive integer.
+
     let app = app_with_rate_limit(1, 1);
 
-    // Drain the bucket.
     let _ = app
         .clone()
         .oneshot(request_with_ip("/echo", [10, 0, 0, 4]))
@@ -363,11 +318,7 @@ async fn rate_limit_429_includes_x_ratelimit_after_header() {
         .headers()
         .get("x-ratelimit-after")
         .expect("429 must include x-ratelimit-after header");
-    // The wait time is the GCRA deficit in seconds — with
-    // burst=1 and rate=1 rps, the deficit is sub-second and the
-    // header rounds to 0. That's fine; clients still parse it
-    // and back off. We just verify the header is present and
-    // parses as a non-negative integer.
+
     let secs: u64 = wait
         .to_str()
         .unwrap()
@@ -376,15 +327,12 @@ async fn rate_limit_429_includes_x_ratelimit_after_header() {
     let _ = secs;
 }
 
-// ---- T-16: Request safety layers ----
-
 fn app_with_body_limit(limit_bytes: usize) -> Router {
     Router::new()
         .route(
             "/echo",
             get(|| async { (StatusCode::OK, "ok") }).post(|body: axum::body::Bytes| async move {
-                // Return the byte count so the test can verify the
-                // body was actually received.
+
                 (StatusCode::OK, format!("{}", body.len()))
             }),
         )
@@ -393,7 +341,7 @@ fn app_with_body_limit(limit_bytes: usize) -> Router {
 
 #[tokio::test]
 async fn body_limit_within_limit_passes_through() {
-    // 1 KiB body against a 2 KiB limit → accepted.
+
     let app = app_with_body_limit(2 * 1024);
     let body = vec![b'x'; 1024];
     let req = Request::builder()
@@ -408,10 +356,7 @@ async fn body_limit_within_limit_passes_through() {
 
 #[tokio::test]
 async fn body_limit_oversized_request_returns_413() {
-    // 4 KiB body against a 1 KiB limit → 413 Payload Too Large.
-    // `RequestBodyLimitLayer` checks the `Content-Length` header
-    // when present and short-circuits without reading the body,
-    // so this stays fast even for huge advertised sizes.
+
     let app = app_with_body_limit(1024);
     let body = vec![b'x'; 4 * 1024];
     let req = Request::builder()
@@ -460,8 +405,7 @@ fn app_with_load_shed(cap: usize) -> Router {
         .route(
             "/slow",
             get(|| async {
-                // Hold the permit long enough for the second
-                // request to be shed.
+
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 (StatusCode::OK, "ok")
             }),
@@ -474,7 +418,7 @@ fn app_with_load_shed(cap: usize) -> Router {
 
 #[tokio::test]
 async fn load_shed_under_cap_succeeds() {
-    // cap=2, 1 concurrent request → passes through.
+
     let app = app_with_load_shed(2);
     let req = Request::builder().uri("/slow").body(Body::empty()).unwrap();
     let resp = app.oneshot(req).await.unwrap();
@@ -483,8 +427,7 @@ async fn load_shed_under_cap_succeeds() {
 
 #[tokio::test]
 async fn load_shed_over_cap_returns_503() {
-    // cap=1, 2 concurrent slow requests → first wins, second
-    // is shed with HTTP 503 (`Service Unavailable`).
+
     let app = app_with_load_shed(1);
 
     let req1 = Request::builder().uri("/slow").body(Body::empty()).unwrap();
@@ -493,7 +436,6 @@ async fn load_shed_over_cap_returns_503() {
     let (r1, r2) = tokio::join!(app.clone().oneshot(req1), app.clone().oneshot(req2),);
     let (s1, s2) = (r1.unwrap().status(), r2.unwrap().status());
 
-    // Exactly one must succeed; the other must be a 503.
     let outcomes = [s1, s2];
     let ok_count = outcomes.iter().filter(|s| **s == StatusCode::OK).count();
     let shed_count = outcomes

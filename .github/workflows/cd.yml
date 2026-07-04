@@ -1,13 +1,4 @@
-# CD pipeline — Kokkeak (T-23).
-#
-# Triggered by pushing a semver tag (`v*`). Builds the multi-arch
-# container image, pushes it to ghcr.io, then `helm upgrade`s
-# staging. Production deploy is a separate workflow / manual job
-# with a different secrets scope — we keep that out of this file
-# intentionally so PR reviewers don't need prod credentials.
-#
-# Rollback path: re-run the workflow with the previous tag (or
-# `helm rollback kokkak-staging <revision>`).
+
 
 name: CD
 
@@ -27,7 +18,7 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  # ---- Build + push image ----
+
   build:
     name: Build & push image
     runs-on: ubuntu-latest
@@ -41,8 +32,7 @@ jobs:
 
       - name: Resolve image tag
         id: meta
-        # If pushed via tag, use the tag. Otherwise fall back to
-        # the short SHA (for manual workflow_dispatch).
+
         run: |
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
@@ -76,11 +66,10 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # Provenance + SBOM — required by some registries.
+
           provenance: true
           sbom: true
 
-  # ---- Deploy to staging ----
   deploy-staging:
     name: Deploy to staging
     runs-on: ubuntu-latest
@@ -114,8 +103,7 @@ jobs:
         shell: bash
 
       - name: Smoke test
-        # Curl /readyz until it returns 200 or timeout. A 503
-        # means readiness probes are still failing — abort.
+
         run: |
           for i in {1..30}; do
             status=$(curl -sk -o /dev/null -w "%{http_code}" \
@@ -130,7 +118,6 @@ jobs:
           exit 1
         shell: bash
 
-  # ---- Rollback helper ----
   rollback:
     name: Rollback staging
     runs-on: ubuntu-latest
@@ -150,9 +137,7 @@ jobs:
           mkdir -p "$HOME/.kube"
           echo "${{ secrets.KUBECONFIG_STAGING }}" | base64 -d > "$HOME/.kube/config"
           helm history kokkak-staging --namespace kokkak-staging
-          # Roll back to the revision *before* this deploy. If
-          # the failure is post-install (no previous revision),
-          # `helm uninstall` cleans up.
+
           PREV=$(helm history kokkak-staging -n kokkak-staging -o json | jq -r '[.[] | select(.status == "deployed")] | .[-1].revision' 2>/dev/null || echo 0)
           if [[ "$PREV" -gt 0 ]]; then
             helm rollback kokkak-staging "$PREV" --namespace kokkak-staging --wait

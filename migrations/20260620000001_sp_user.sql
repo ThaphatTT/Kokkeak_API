@@ -1,25 +1,25 @@
--- ============================================================================
--- KOKKAK NEW_DB v2 - Stored Procedures: User & Auth
---
--- Reference: kokkeak/NEW_DB.txt (4 tables) + KOKKEAK_MIGRATION_PLAN/02_DATABASE.md
---
--- Output convention (uniform across all API_* SPs):
---   Every SP returns ONE result set whose column shape depends on the op.
---   For write operations, the result row is:
---       <primary_value_column>, error_code INT, error_message NVARCHAR(255)
---   error_code: 0 = ok, 1 = not_found, 2 = conflict, 3 = bad_input
---   For read operations, regular columns followed by error_code + error_message.
---   The Rust side reads the first row and maps error_code to RepoError.
---
--- Why this shape (not OUTPUT params)?
---   tiberius's RPC support for OUTPUT params is spotty across patch
---   versions. A single SELECT result set is portable + trivially testable.
--- ============================================================================
 
--- ----------------------------------------------------------------------------
--- API_USER_REGISTER
--- Returns: (user_guid, error_code, error_message). 0 = ok.
--- ----------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 IF OBJECT_ID('dbo.API_USER_REGISTER', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.API_USER_REGISTER AS BEGIN SET NOCOUNT ON; END');
 GO
@@ -39,7 +39,7 @@ BEGIN
     BEGIN TRY
         BEGIN TRAN;
 
-        -- Lookup role
+        
         SELECT @role_guid = user_role_guid
         FROM [user_role]
         WHERE user_role_code = @p_role_code AND user_role_status = 1;
@@ -52,7 +52,7 @@ BEGIN
             RETURN;
         END;
 
-        -- Profile row
+        
         INSERT INTO [user] (
             user_guid, user_first_name, user_last_name,
             user_status, user_create_at, user_create_by,
@@ -63,7 +63,7 @@ BEGIN
             SYSUTCDATETIME(), @new_guid
         );
 
-        -- Credentials row
+        
         INSERT INTO [user_username] (
             user_username_guid, user_username_user_guid,
             user_username_username, user_username_password,
@@ -76,7 +76,7 @@ BEGIN
             SYSUTCDATETIME(), @new_guid
         );
 
-        -- Role assignment
+        
         INSERT INTO [user_user_role] (
             user_user_role_guid, user_user_role_user_guid, user_user_role_role_guid,
             user_user_role_status, user_user_role_assigned_by, user_user_role_assigned_at,
@@ -106,11 +106,11 @@ BEGIN
 END;
 GO
 
--- ----------------------------------------------------------------------------
--- API_USER_FIND_BY_USERNAME
--- Result: profile row + second result set = role codes (comma-separated).
---          Empty result set when not found.
--- ----------------------------------------------------------------------------
+
+
+
+
+
 IF OBJECT_ID('dbo.API_USER_FIND_BY_USERNAME', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.API_USER_FIND_BY_USERNAME AS BEGIN SET NOCOUNT ON; END');
 GO
@@ -136,11 +136,11 @@ BEGIN
     WHERE u.user_status <> 3
       AND LOWER(un.user_username_username) = LOWER(@p_username);
 
-    -- Roles (separate result set; empty if user not found)
-    -- Filter per RDBMS Permssion.md §1.8 + §3 Step 5:
-    --   user_user_role.status = 1 (assignment active)
-    --   user_role.status      = 1 (role itself not retired)
-    --   user_user_role_expire_at IS NULL OR > now (not expired)
+    
+    
+    
+    
+    
     SELECT STUFF((
         SELECT ',' + ur.user_role_code
         FROM [user_user_role] uur
@@ -158,9 +158,9 @@ BEGIN
 END;
 GO
 
--- ----------------------------------------------------------------------------
--- API_USER_FIND_BY_ID (same shape as above)
--- ----------------------------------------------------------------------------
+
+
+
 IF OBJECT_ID('dbo.API_USER_FIND_BY_ID', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.API_USER_FIND_BY_ID AS BEGIN SET NOCOUNT ON; END');
 GO
@@ -201,10 +201,10 @@ BEGIN
 END;
 GO
 
--- ----------------------------------------------------------------------------
--- API_USER_UPDATE
--- Result: (user_guid, error_code, error_message). error_code 1 = not found.
--- ----------------------------------------------------------------------------
+
+
+
+
 IF OBJECT_ID('dbo.API_USER_UPDATE', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.API_USER_UPDATE AS BEGIN SET NOCOUNT ON; END');
 GO
@@ -249,10 +249,10 @@ BEGIN
 END;
 GO
 
--- ----------------------------------------------------------------------------
--- API_USER_SET_ROLES (replace role set — used by admin endpoints M15+)
--- Result: (user_guid, error_code, error_message). 0 = ok, 1 = no-op.
--- ----------------------------------------------------------------------------
+
+
+
+
 IF OBJECT_ID('dbo.API_USER_SET_ROLES', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.API_USER_SET_ROLES AS BEGIN SET NOCOUNT ON; END');
 GO

@@ -1,30 +1,4 @@
-//! Master-data HTTP handlers (M20).
-//!
-//! Shared reference-data endpoints consumed by every client (mobile /
-//! customer web / admin web). The routes are intentionally
-//! **authenticated-only** (no admin gate) — master data is consumed
-//! by every role. The handler pattern below scales one-for-one:
-//! each new master type needs (a) one SP, (b) one trait method,
-//! (c) one service method, (d) one handler + query struct, (e) one
-//! route under `/api/v1/master/<type>` (dropdown) or
-//! `/api/v1/master/<type>/autocomplete` (typeahead).
-//!
-//! ## Dropdown filter contract (`/api/v1/master/countries`)
-//!
-//! `?keyword=<text>&status=<0|1|2>` — both optional.
-//!
-//! - `keyword` is forwarded as-is (trim handled by the SP).
-//! - `status=0` returns inactive countries; `status=1` active;
-//!   no `status=` (default) also returns active (1). Status=3
-//!   (deleted) is hard-excluded by the SP regardless.
-//!
-//! ## Autocomplete filter contract (`/api/v1/master/<type>/autocomplete`)
-//!
-//! `?keyword=<text>&take=<int>` — both optional.
-//!
-//! - `keyword` → SP applies prefix-LIKE on name + code.
-//! - `take` → SP defaults to 20, clamps to `[1, 100]`. The infra
-//!   adapter re-clamps so the trait contract is self-documenting.
+
 
 use axum::{
     extract::{Query, State},
@@ -33,11 +7,7 @@ use axum::{
     Json,
 };
 use kokkak_common::response::ApiResponse;
-// `MasterDropdownRow` / `UserDepartmentTeamAutocompleteRow` are
-// referenced only inside utoipa `body = ...` annotation strings —
-// Rust's unused-imports lint doesn't see those as real uses, so the
-// `#[allow]` is the documented escape hatch for type-only imports
-// consumed by proc macros / derive attributes.
+
 #[allow(unused_imports)]
 use kokkak_domain::{
     MasterDropdownRow, MasterPositionAutocompleteRow, UserDepartmentTeamAutocompleteRow,
@@ -47,33 +17,14 @@ use serde::Deserialize;
 use crate::error::{ApiError, IntoLocalizedResponse};
 use crate::state::AppState;
 
-/// Query string for `GET /api/v1/master/countries`.
-///
-/// Mirrors the SP's `@p_keyword` / `@p_master_country_status`
-/// shape. Both fields are `Option` — the handler treats absence
-/// as "no filter" (the SP defaults `@p_master_country_status=1`
-/// when the adapter binds the absent case to active-only).
 #[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct CountriesQuery {
-    /// Free-text filter against `master_country_name` /
-    /// `master_country_code` (LIKE %keyword%).
+
     pub keyword: Option<String>,
-    /// `master_country_status` to filter on. Omit for active-only
-    /// (`1`). Pass `0` to include inactive, `2` for any other
-    /// non-deleted status. `3` (deleted) is hard-excluded.
+
     pub status: Option<i32>,
 }
 
-/// `GET /api/v1/master/countries?keyword=&status=`
-///
-/// Country dropdown endpoint shared by mobile / customer web /
-/// admin web. Returns one entry per country (`value` = stable
-/// GUID string, `label` = display name). The wire shape is the
-/// [`MasterDropdownRow`] DTO — one method, one DTO, every master
-/// type routes through the same contract.
-///
-/// Authenticated only (any role). The dropdown is not admin-gated
-/// — adding `@p_user_guid` would break mobile clients.
 #[utoipa::path(
     get,
     path = "/api/v1/master/countries",
@@ -97,10 +48,7 @@ pub async fn list_countries(
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(error = %e, "master.list_countries failed");
-            // Route through ApiError + IntoLocalizedResponse so the
-            // 500 envelope renders the per-request locale via the
-            // i18n catalog (`err.internal`) instead of a hardcoded
-            // English string. Matches every other handler's pattern.
+
             return Err(ApiError::from(e).into_localized_response(&state).await);
         }
     };
@@ -117,38 +65,16 @@ pub async fn list_countries(
         .into_response())
 }
 
-/// Query string for `GET /api/v1/master/user-department-teams/autocomplete`.
-///
-/// All three fields are optional — the handler treats absence as
-/// "no filter" and lets the SP apply its own defaults (`take = 20`,
-/// capped at `100`, hard-coded active-only). The infra adapter
-/// re-clamps `take` to `[1, 100]` even though the SP does the same,
-/// so the trait contract is self-documenting.
 #[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct AutocompleteUserDepartmentTeamQuery {
-    /// Scope to one parent department. Omit to search across every
-    /// department (admin-web "global" picker view).
+
     pub user_department_guid: Option<String>,
-    /// Free-text filter against team name / code and department
-    /// name / code. Trim is handled by the SP.
+
     pub keyword: Option<String>,
-    /// Max rows to return. Omit for SP default (`20`); values
-    /// `<= 0` map to `20`; values `> 100` are clamped to `100`.
+
     pub take: Option<i32>,
 }
 
-/// `GET /api/v1/master/user-department-teams/autocomplete`
-///
-/// Autocomplete lookup for the admin user-form's
-/// `user_department_team` picker. Returns up to `take` rows with
-/// both team and parent-department columns, ordered by department
-/// name → team name → team code. Wire shape is
-/// [`UserDepartmentTeamAutocompleteRow`].
-///
-/// Authenticated only (same gate as the country dropdown — the
-/// admin web console enforces the admin role on the client side;
-/// adding a server-side admin gate would 401 mobile technicians
-/// who legitimately need to read this lookup).
 #[utoipa::path(
     get,
     path = "/api/v1/master/user-department-teams/autocomplete",
@@ -192,34 +118,14 @@ pub async fn autocomplete_user_department_team(
         .into_response())
 }
 
-/// Query string for `GET /api/v1/master/user-departments/autocomplete`.
-///
-/// Both fields are optional — the handler treats absence as "no
-/// filter" and lets the SP / infra adapter apply the documented
-/// defaults (`take = 20`, capped at `100`, hard-coded active-only).
 #[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct AutocompleteUserDepartmentQuery {
-    /// Free-text filter against `user_department_name` /
-    /// `user_department_code` (prefix-LIKE). Trim is handled by the SP.
+
     pub keyword: Option<String>,
-    /// Max rows to return. Omit for SP default (`20`); values
-    /// `<= 0` map to `20`; values `> 100` are clamped to `100`.
+
     pub take: Option<i32>,
 }
 
-/// `GET /api/v1/master/user-departments/autocomplete`
-///
-/// Autocomplete lookup for the admin user-form's
-/// `user_department` picker. Returns up to `take` rows ordered by
-/// `user_department_name` → `user_department_code`. Wire shape is
-/// the same [`MasterDropdownRow`] as the country dropdown — clients
-/// pattern-match on `value` regardless of which master type is in
-/// play (country vs user_department share the contract).
-///
-/// Authenticated only (same gate as the country dropdown — the
-/// admin web console enforces the admin role on the client side;
-/// adding a server-side admin gate would 401 mobile technicians
-/// who legitimately need to read this lookup).
 #[utoipa::path(
     get,
     path = "/api/v1/master/user-departments/autocomplete",
@@ -259,45 +165,16 @@ pub async fn autocomplete_user_department(
         .into_response())
 }
 
-/// Query string for `GET /api/v1/master/positions/autocomplete`.
-///
-/// All fields are optional — the handler treats absence as "no
-/// filter" and lets the SP apply its own defaults (`take = 20`,
-/// active-only `status = 1`). The infra adapter re-clamps `take`
-/// to `[1, 100]` so the trait contract is self-documenting (same
-/// pattern as the user-department autocomplete).
 #[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct PositionsAutocompleteQuery {
-    /// Narrow to positions belonging to this `user_department_team`
-    /// (GUID). Omit for every active position across every team.
-    /// Mirrors the `user_department_team` autocomplete's department
-    /// filter, so the admin UI can drill down from team → position
-    /// in one chain of typeaheads.
+
     pub department_team_guid: Option<String>,
-    /// Free-text filter against `master_position_name` /
-    /// `master_position_code` (prefix-LIKE). Trim is handled by the SP.
+
     pub keyword: Option<String>,
-    /// Max rows to return. Omit for SP default (`20`); values
-    /// `<= 0` map to `20`; values `> 100` are clamped to `100`.
+
     pub take: Option<i32>,
 }
 
-/// `GET /api/v1/master/positions/autocomplete`
-///
-/// Autocomplete lookup for the admin user-form's `master_position`
-/// picker. Returns up to `take` rows ordered by
-/// `master_position_level DESC → master_position_name ASC →
-/// master_position_code ASC`. Wire shape is the richer
-/// [`MasterPositionAutocompleteRow`] (carries `code`, `description`,
-/// `level`, `status`, and the joined `user_department_team_*` /
-/// `user_department_*` breadcrumb alongside the `value` / `label`
-/// pair), so the admin UI can render rich autocomplete results
-/// instead of a plain label/value dropdown.
-///
-/// Authenticated only (same gate as the country dropdown — the admin
-/// web console enforces the admin role client-side; adding a
-/// server-side admin gate would 401 mobile technicians who
-/// legitimately need to read this lookup).
 #[utoipa::path(
     get,
     path = "/api/v1/master/positions/autocomplete",

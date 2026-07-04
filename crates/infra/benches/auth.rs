@@ -1,10 +1,4 @@
-//! Criterion bench — JWT verify + argon2 verify (T-27).
-//!
-//! Both run on every authenticated request. Argon2 is expensive
-//! by design (memory-hard), so the bench reports the per-call
-//! cost — operators need that number to size CPU budgets.
-//!
-//! Run: `cargo bench -p kokkak-infra`
+
 
 use std::time::Duration;
 
@@ -36,17 +30,13 @@ fn bench_jwt_verify(c: &mut Criterion) {
 
 fn bench_argon2_verify(c: &mut Criterion) {
     let hasher = PasswordHasherImpl::new();
-    // Hash a known password once, then bench the verify path.
-    // `hash` is much slower than `verify` (it has to choose
-    // params + produce the encoded output), so measuring only
-    // verify gives the realistic per-login cost.
+
     let hash = hasher
         .hash("correct horse battery staple")
         .expect("hash succeeds");
 
     let mut group = c.benchmark_group("auth::argon2_verify");
-    // Argon2 is slow on purpose; let the bench run long enough
-    // for stable numbers (default 5s is too short).
+
     group.measurement_time(Duration::from_secs(15));
     group.bench_function("verify_one", |b| {
         b.iter(|| hasher.verify("correct horse battery staple", &hash))

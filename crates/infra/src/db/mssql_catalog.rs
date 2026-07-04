@@ -1,8 +1,4 @@
-//! SQL Server-backed `ServiceRepository` (M14.5 — stored procedures).
-//!
-//! See `migrations/20260620000002_sp_service.sql` for SP definitions.
-//! Methods without a matching SP return `RepoError::Backend` (the trait
-//! contract is fulfilled; admin endpoints that need them land in M15+).
+
 
 use async_trait::async_trait;
 use tiberius::ToSql;
@@ -13,14 +9,13 @@ use kokkak_domain::{RepoError, ServiceCategory, ServiceRepository};
 
 use crate::db::mssql::{exec_sp, read_i32, read_str, read_uuid, MssqlPool};
 
-/// SQL Server-backed `ServiceRepository` (M14.5 — stored procedures).
 #[derive(Clone)]
 pub struct MssqlServiceRepository {
     pool: MssqlPool,
 }
 
 impl MssqlServiceRepository {
-    /// Construct the repository with a shared `MssqlPool`.
+
     pub fn new(pool: MssqlPool) -> Self {
         Self { pool }
     }
@@ -39,7 +34,7 @@ impl ServiceRepository for MssqlServiceRepository {
     }
 
     async fn find_by_code(&self, code: &str) -> Result<Option<ServiceCategory>, RepoError> {
-        // M14.5: no dedicated SP; client-side filter on LIST_ACTIVE.
+
         let rows = exec_sp(
             &self.pool,
             "EXEC dbo.API_SERVICE_LIST_ACTIVE @p_lang_code = @P1",
@@ -77,27 +72,12 @@ impl ServiceRepository for MssqlServiceRepository {
     }
 }
 
-/// Hydrate a `ServiceCategory` from `API_SERVICE_GET` / `API_SERVICE_LIST_ACTIVE`.
-///
-/// Read by column name (not positional index) so the mapper
-/// survives future SP-side column reorders. The authoritative SELECT
-/// list lives in `migrations/20260620000002_sp_service.sql`:
-///
-/// | Column            | Consumed as                |
-/// |-------------------|----------------------------|
-/// | `id`              | `ServiceCategory.id`       |
-/// | `name_th`         | `ServiceCategory.code`     |
-/// | `priority`        | `ServiceCategory.sort_order`|
-///
-/// The remaining columns (`category_main_id`, `name_en`, `status`, ...)
-/// are not modelled on `ServiceCategory` yet — they fall through to
-/// the default-constructed fields.
 fn row_to_service(row: &tiberius::Row) -> ServiceCategory {
     let id = read_uuid(row, "id").unwrap_or_else(Uuid::nil);
     let name_th = read_str(row, "name_th").unwrap_or("").to_string();
     ServiceCategory {
         id,
-        code: name_th, // name_th serves as a placeholder code
+        code: name_th,
         default_price: None,
         warranty_days: 30,
         active: true,

@@ -1,14 +1,14 @@
--- ============================================================================
--- KOKKAK NEW DB v2 - Stored Procedures: Chat
---
--- Output convention (uniform): write SPs return (id, error_code, error_message).
--- Read SPs return entity rows (empty set = not found).
--- ============================================================================
 
--- ----------------------------------------------------------------------------
--- API_CHAT_CREATE_ROOM
--- 1:1 idempotent: reuses an existing room if participants match.
--- ----------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
 IF OBJECT_ID('dbo.API_CHAT_CREATE_ROOM', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.API_CHAT_CREATE_ROOM AS BEGIN SET NOCOUNT ON; END');
 GO
@@ -54,9 +54,9 @@ BEGIN
 END;
 GO
 
--- ----------------------------------------------------------------------------
--- API_CHAT_LIST_ROOMS
--- ----------------------------------------------------------------------------
+
+
+
 IF OBJECT_ID('dbo.API_CHAT_LIST_ROOMS', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.API_CHAT_LIST_ROOMS AS BEGIN SET NOCOUNT ON; END');
 GO
@@ -87,9 +87,9 @@ BEGIN
 END;
 GO
 
--- ----------------------------------------------------------------------------
--- API_CHAT_SEND_MESSAGE
--- ----------------------------------------------------------------------------
+
+
+
 IF OBJECT_ID('dbo.API_CHAT_SEND_MESSAGE', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.API_CHAT_SEND_MESSAGE AS BEGIN SET NOCOUNT ON; END');
 GO
@@ -119,9 +119,9 @@ BEGIN
 END;
 GO
 
--- ----------------------------------------------------------------------------
--- API_CHAT_LIST_MESSAGES
--- ----------------------------------------------------------------------------
+
+
+
 IF OBJECT_ID('dbo.API_CHAT_LIST_MESSAGES', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.API_CHAT_LIST_MESSAGES AS BEGIN SET NOCOUNT ON; END');
 GO
@@ -151,9 +151,9 @@ BEGIN
 END;
 GO
 
--- ----------------------------------------------------------------------------
--- API_CHAT_MARK_READ
--- ----------------------------------------------------------------------------
+
+
+
 IF OBJECT_ID('dbo.API_CHAT_MARK_READ', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.API_CHAT_MARK_READ AS BEGIN SET NOCOUNT ON; END');
 GO

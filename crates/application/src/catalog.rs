@@ -1,32 +1,27 @@
-//! Catalog use cases (M3).
-//!
-//! Read-mostly: list active service categories with keyset pagination.
+
 
 use std::sync::Arc;
 
 use kokkak_domain::{Cursor, RepoError, ServiceCategory, ServiceRepository};
 
-/// One page of active service categories.
 #[derive(Debug, Clone)]
 pub struct ServiceListPage {
-    /// Service categories in this page (sorted by `sort_order`).
+
     pub items: Vec<ServiceCategory>,
-    /// Cursor for the next page; `None` when this is the last page.
+
     pub next_cursor: Option<String>,
 }
 
-/// Catalog use case bundle (M3 — read-mostly).
 pub struct CatalogService {
     services: Arc<dyn ServiceRepository>,
 }
 
 impl CatalogService {
-    /// Construct the service with a `ServiceRepository` port.
+
     pub fn new(services: Arc<dyn ServiceRepository>) -> Self {
         Self { services }
     }
 
-    /// List active service categories with keyset pagination on `sort_order`.
     pub async fn list_active(
         &self,
         after: Option<String>,
@@ -41,7 +36,7 @@ impl CatalogService {
         };
         let limit = limit.clamp(1, 200);
         let items = self.services.list_active(cursor, limit).await?;
-        // Build a next cursor from the last item's sort_order.
+
         let next_cursor = if (items.len() as u32) == limit {
             items.last().map(|i| {
                 let payload = serde_json::json!({ "after_sort": i.sort_order });
@@ -55,7 +50,6 @@ impl CatalogService {
         Ok(ServiceListPage { items, next_cursor })
     }
 
-    /// Look up a single service category by its short code (e.g. `"AC_REPAIR"`).
     pub async fn find_by_code(&self, code: &str) -> Result<Option<ServiceCategory>, RepoError> {
         self.services.find_by_code(code).await
     }
@@ -71,12 +65,6 @@ mod tests {
     use std::str::FromStr;
     use uuid::Uuid;
 
-    /// In-memory mock of [`ServiceRepository`] for unit tests.
-    ///
-    /// ponytail: HashMap-backed, no async runtime — just enough for the
-    /// pagination + insert tests in this file. Ceiling: doesn't model the
-    /// `active=false` filter exhaustively (we always insert active
-    /// samples); extend the predicate when a future test needs it.
     #[derive(Default)]
     struct MockServiceRepository {
         by_id: std::sync::Mutex<HashMap<Uuid, ServiceCategory>>,

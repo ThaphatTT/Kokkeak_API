@@ -1,40 +1,4 @@
-//! API-layer error glue (T-06).
-//!
-//! Sits between the typed domain errors (`AuthError`, `RepoError`,
-//! `ChatError`, `PaymentError`) and the [`AppError`] envelope used by
-//! axum handlers. Provides:
-//!
-//! - A local newtype [`ApiError`] that wraps [`AppError`] and
-//!   implements `From<E>` for every domain error enum. Handlers
-//!   return `Result<T, ApiError>` and use `?` to bubble domain
-//!   errors.
-//! - An [`IntoLocalizedResponse`] extension trait — given an
-//!   [`AppState`], looks up the translation key for the error
-//!   variant and wraps the result in [`AppError::with_message`] so
-//!   the user sees the request's locale instead of the English
-//!   `Display`.
-//!
-//! Together these collapse the previous
-//! `auth_error_to_response(...)` boilerplate to a single
-//! `.into_localized_response(&state).await` call.
-//!
-//! ## Why a newtype?
-//!
-//! Rust's orphan rule forbids `impl From<ForeignA> for ForeignB`
-//! when both types live outside the current crate. `AppError`
-//! lives in `kokkak_common` and the domain errors live in
-//! `kokkak_domain`; both are foreign to `kokkak_api`. Wrapping
-//! [`AppError`] in the local [`ApiError`] newtype lets us implement
-//! `From<AuthError>` (and the others) for `ApiError` directly.
-//! `IntoResponse` and `IntoLocalizedResponse` delegate to the inner
-//! [`AppError`] so callers see no behavioral difference.
-//!
-//! ponytail: the `LocalizedError` trait (in `domain::error`) is the
-//! single source of truth for (key, args). `AppError` re-uses those
-//! same keys via its variant → key mapping below. If a new domain
-//! error lands, both the `From` impl AND the
-//! `l10n_key_for_app_error` mapping must grow together — the
-//! `from_auth_error_maps_to_localizable_variant` test catches drift.
+
 
 use std::fmt;
 
@@ -47,14 +11,6 @@ use kokkak_domain::{
 
 use crate::state::AppState;
 
-/// API-layer error envelope: the inner [`AppError`] plus the local
-/// [`From`] impls handlers need.
-///
-/// Handlers should return `Result<T, ApiError>` instead of
-/// `Result<T, AppError>` so that `?` works against domain errors
-/// without the orphan rule blocking it. The newtype is transparent
-/// — [`IntoResponse`] and [`IntoLocalizedResponse`] delegate to the
-/// inner [`AppError`].
 #[derive(Debug)]
 pub struct ApiError(pub AppError);
 
@@ -83,8 +39,7 @@ impl From<AuthError> for ApiError {
             AuthError::TokenExpired => AppError::TokenExpired,
             AuthError::InvalidToken(reason) => AppError::InvalidToken(reason),
             AuthError::Forbidden(reason) => AppError::Forbidden(reason),
-            // M14: renamed from EmailTaken to match NEW_DB's
-            // username-based login identifier.
+
             AuthError::UsernameTaken => AppError::UsernameTaken,
             AuthError::Validation(msg) => AppError::Validation(msg),
             AuthError::Backend(msg) => AppError::Internal(msg),
@@ -153,22 +108,8 @@ impl IntoResponse for ApiError {
     }
 }
 
-/// Extension trait that localizes an error at the API layer.
-///
-/// Handlers that want the response body in the request's locale
-/// call `err.into_localized_response(&state).await` instead of
-/// returning `Err(err)` directly. The lookup re-uses the same
-/// translation keys the [`LocalizedError`] trait provides for
-/// domain errors.
-///
-/// ponytail: extension trait (not inherent method) so it can pull
-/// in [`AppState`] without bloating [`AppError`] with a state-aware
-/// API. The `common` crate stays free of HTTP concerns.
 pub trait IntoLocalizedResponse {
-    /// Render a localized [`axum::response::Response`] for the error,
-    /// using the per-request locale and the supplied `AppState`'s
-    /// `TranslationRepository`. Falls back to the English `Display`
-    /// string if the translation key is missing from the catalog.
+
     fn into_localized_response(
         self,
         state: &AppState,
@@ -183,8 +124,7 @@ impl IntoLocalizedResponse for ApiError {
 
 impl IntoLocalizedResponse for AppError {
     async fn into_localized_response(self, state: &AppState) -> Response {
-        // For already-localized errors, skip the lookup — the caller
-        // already supplied the rendered message.
+
         if let AppError::Localized { .. } = &self {
             return self.into_response();
         }
@@ -197,20 +137,8 @@ impl IntoLocalizedResponse for AppError {
     }
 }
 
-/// Translation key for an [`AppError`] variant.
-///
-/// Mirror of the [`LocalizedError`] mappings in
-/// `kokkak_domain::error`. New variants must extend both this match
-/// AND the `from_auth_error_maps_to_localizable_variant` test so
-/// drift is caught at `cargo test` time.
 fn l10n_key_for_app_error(err: &AppError) -> &'static str {
-    // ponytail: key prefix migration (2026-07-01). The catalog at
-    // crates/common/locales/*.yml uses `err.*` (no `_general` infix);
-    // the previous `err_general.*` keys rendered as literal `<key>`
-    // to API consumers. `err_auth.role_not_allowed` is a brand-new
-    // key added to all three locales in the same commit — keeping
-    // the lookup table here single-sourced so future variants only
-    // touch one place.
+
     match err {
         AppError::BadRequest(_) => "err.bad_request",
         AppError::Unauthorized => "err_auth.invalid_credentials",
@@ -225,15 +153,11 @@ fn l10n_key_for_app_error(err: &AppError) -> &'static str {
         AppError::RoleNotAllowed(_) => "err_auth.role_not_allowed",
         AppError::RateLimited { .. } => "err.rate_limited",
         AppError::Internal(_) => "err.internal",
-        // Handled by the early return in `into_localized_response` —
-        // unreachable in practice.
+
         AppError::Localized { .. } => "",
     }
 }
 
-/// Positional arguments for the key returned by
-/// [`l10n_key_for_app_error`]. Mirrors the per-variant payload shape
-/// so `tr_with_repo` can substitute `{0}` placeholders.
 fn l10n_args_for_app_error(err: &AppError) -> Vec<String> {
     match err {
         AppError::BadRequest(s)
@@ -261,13 +185,7 @@ mod tests {
 
     #[test]
     fn from_auth_error_maps_to_localizable_variant() {
-        // Each AuthError variant must map to an ApiError variant
-        // whose l10n_key matches the AuthError's own LocalizedError
-        // key — EXCEPT AuthError::Backend, which collapses into the
-        // shared AppError::Internal catch-all (key `err.internal`).
-        // That trade-off is intentional: Internal is the cross-source
-        // catch-all and a per-source key would force a typed
-        // AppError variant per source.
+
         let pairs: Vec<(AuthError, &str)> = vec![
             (
                 AuthError::InvalidCredentials,
@@ -281,7 +199,7 @@ mod tests {
             (AuthError::Forbidden("nope".into()), "err_auth.forbidden"),
             (AuthError::UsernameTaken, "err_auth.username_taken"),
             (AuthError::Validation("x".into()), "err_auth.validation"),
-            // Backend is the documented exception — see comment above.
+
         ];
         for (src, expected_key) in pairs {
             let api_err: ApiError = ApiError::from(src);
@@ -293,19 +211,10 @@ mod tests {
             );
         }
 
-        // AuthError::Backend gets the shared catch-all key.
         let api_err: ApiError = ApiError::from(AuthError::Backend("x".into()));
         assert_eq!(l10n_key_for_app_error(&api_err.0), "err.internal");
     }
 
-    /// Locks the 5 keys fixed on 2026-07-01 against drift back to
-    /// the broken `err_general.*` / missing-role_not_allowed state.
-    /// Each variant renders to a stable dotted key that **must**
-    /// exist in `crates/common/locales/{en,th,lo}.yml` — when the
-    /// yml is missing the entry, `tr()` wraps the key in `<...>`
-    /// and the user sees literal `<err.bad_request>` in the
-    /// response body. If this test ever fails, the lookup table
-    /// here and the catalog are out of sync.
     #[test]
     fn i18n_key_drift_2026_07_01_locked_in() {
         let cases: Vec<(AppError, &str)> = vec![
@@ -332,9 +241,6 @@ mod tests {
         }
     }
 
-    /// `AuthError::RateLimited` (domain layer) must match the API
-    /// layer's `AppError::RateLimited` key. Both point at the
-    /// same `err.rate_limited` yml entry.
     #[test]
     fn auth_error_rate_limited_key_matches_api_layer() {
         assert_eq!(AuthError::RateLimited(60).l10n_key(), "err.rate_limited");
@@ -342,44 +248,22 @@ mod tests {
 
     #[test]
     fn all_login_failure_modes_produce_byte_identical_unauthorized_response() {
-        // OWASP Authentication Cheat Sheet § "Authentication Responses":
-        // the server MUST return a generic message that does NOT
-        // disclose whether the user account exists. The KOKKAK auth
-        // use case already collapses all 5 reasons into
-        // `AuthError::InvalidCredentials`; this test pins the
-        // **HTTP layer** invariant — the same `AppError::Unauthorized`
-        // with the same code, same status, same i18n key, regardless
-        // of which failure path the login service took.
-        //
-        // If a future change re-introduces a different error
-        // variant (e.g. `AccountSuspended`) for any of these
-        // scenarios, this test fails loudly so the security review
-        // catches it.
-        //
-        // Note: AuthError does not expose the internal
-        // `LoginFailureReason` enum (it's private to the auth
-        // service), so the test exercises the public surface that
-        // the HTTP layer actually sees. The 5 scenarios below are
-        // the 5 distinct public `AuthError` outcomes a login
-        // attempt can produce.
+
         let scenarios: Vec<(&'static str, AuthError)> = vec![
-            // 1. user-not-found
+
             (
                 "user_not_found",
-                AuthError::InvalidCredentials, // collapsed at use case layer
+                AuthError::InvalidCredentials,
             ),
-            // 2. wrong-password
+
             ("wrong_password", AuthError::InvalidCredentials),
-            // 3. account-suspended (still collapses)
+
             ("account_suspended", AuthError::InvalidCredentials),
-            // 4. account-deleted (still collapses)
+
             ("account_deleted", AuthError::InvalidCredentials),
-            // 5. account-pending (still collapses)
+
             ("account_pending", AuthError::InvalidCredentials),
-            // 6. rate-limited (the ONE non-generic path — surfaces
-            //    429 with Retry-After, not 401). Documented
-            //    exception: the user IS being told they're being
-            //    throttled, not denied, so a different status is OK.
+
         ];
 
         for (label, src) in scenarios {
@@ -513,8 +397,7 @@ mod tests {
 
     #[test]
     fn init_i18n_succeeds_for_translation_tests() {
-        // init_i18n is idempotent; this test only ensures the catalog
-        // is loadable from the current working directory.
+
         #[allow(clippy::let_unit_value)]
         let _ = init_i18n("en");
     }

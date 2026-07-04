@@ -1,23 +1,4 @@
-//! SQL Server-backed `UserRepository` (M14.5 — stored procedures only).
-//!
-//! Implements [`UserRepository`] via tiberius + the NEW_DB v2 stored
-//! procedures. No inline SQL — every operation is `EXEC dbo.API_USER_*`.
-//!
-//! ponytail: the executor is intentionally thin (one helper per repo).
-//! Ceiling: SPs could be replaced by an ORM (diesel / sea-orm) when
-//! the schema stabilizes; for now SPs give the DBA explicit control
-//! over the multi-table JOINs + role lookup logic.
-//!
-//! ## Storage procedure contract
-//!
-//! Every `API_USER_*` SP follows the uniform output shape documented in
-//! `migrations/20260620000001_sp_user.sql`. The Rust side reads the
-//! first row of the first result set and maps `error_code` to
-//! `RepoError`:
-//! - `error_code = 0` → ok
-//! - `error_code = 1` → `NotFound`
-//! - `error_code = 2` → `Conflict` (username taken)
-//! - `error_code = 3` → `Backend` (validation / unknown)
+
 
 use async_trait::async_trait;
 use tiberius::ToSql;
@@ -37,14 +18,13 @@ use crate::db::mssql::{
     exec_sp, read_datetime, read_decimal, read_guid_str, read_i32, read_str, MssqlPool, SpError,
 };
 
-/// SQL Server-backed `UserRepository` (M14.5 — stored procedures).
 #[derive(Clone)]
 pub struct MssqlUserRepository {
     pool: MssqlPool,
 }
 
 impl MssqlUserRepository {
-    /// Construct the repository with a shared `MssqlPool`.
+
     pub fn new(pool: MssqlPool) -> Self {
         Self { pool }
     }
@@ -53,9 +33,7 @@ impl MssqlUserRepository {
 #[async_trait]
 impl UserRepository for MssqlUserRepository {
     async fn find_by_id(&self, id: Uuid) -> Result<Option<User>, RepoError> {
-        // GUID stored as varchar(50) in DB per project convention — bind
-        // as String. SP_-prefixed SPs (e.g. SP_USER_FIND_BY_ID) accept
-        // varchar(50); API_-prefixed SPs keep UNIQUEIDENTIFIER.
+
         let id_str = id.to_string();
         let rows = exec_sp(
             &self.pool,
@@ -63,7 +41,7 @@ impl UserRepository for MssqlUserRepository {
             &[&id_str as &dyn ToSql],
         )
         .await?;
-        // First row: profile. Second row: roles + permissions CSV.
+
         let profile = rows
             .first()
             .ok_or_else(|| RepoError::Backend("SP_USER_FIND_BY_ID returned no row".into()))?;
@@ -83,19 +61,13 @@ impl UserRepository for MssqlUserRepository {
             &[&username as &dyn ToSql],
         )
         .await?;
-        // Empty result → user not found.
+
         let profile = match rows.first() {
             None => return Ok(None),
             Some(r) => r,
         };
         let user = row_to_user(profile)?;
-        // Roles CSV from the second result set.
-        // Status (user_user_role.status=1, user_role.status=1) and
-        // expire_at are filtered inside the SP (see
-        // migrations/20260620000001_sp_user.sql + RDBMS Permssion.md
-        // §1.8 + §3 Step 5) — we only see roles that already passed.
-        // Effective permissions (role + allow − deny) + data scope
-        // land in M15+ via a dedicated SP_USER_GET_EFFECTIVE_PERMISSIONS.
+
         let (roles, permissions) = read_roles_and_permissions(&rows, 1)?;
         Ok(Some(User {
             roles,
@@ -105,17 +77,13 @@ impl UserRepository for MssqlUserRepository {
     }
 
     async fn insert(&self, user: &User) -> Result<(), RepoError> {
-        // API_USER_REGISTER takes the first role code only (multi-role
-        // is rare; admin endpoint M15+ will use API_USER_SET_ROLES for
-        // post-registration role changes). For now, register with the
-        // first role and use API_USER_SET_ROLES for the rest.
+
         let role_code = user
             .roles
             .first()
             .map(|r| r.as_str())
             .ok_or_else(|| RepoError::Backend("at least one role required".into()))?;
 
-        // 1. Register (creates user + username + first role).
         let reg_rows = exec_sp(
             &self.pool,
             "EXEC dbo.API_USER_REGISTER \
@@ -144,7 +112,6 @@ impl UserRepository for MssqlUserRepository {
             SpError::Other => Err(RepoError::Backend(msg.to_string())),
         }?;
 
-        // 2. If the user has more than one role, append via SET_ROLES.
         if user.roles.len() > 1 {
             let extra: Vec<&str> = user.roles[1..].iter().map(|r| r.as_str()).collect();
             let csv = extra.join(",");
@@ -155,7 +122,7 @@ impl UserRepository for MssqlUserRepository {
                 &[&user.id as &dyn ToSql, &csv as &dyn ToSql],
             )
             .await?;
-            let _ = set_rows; // API_USER_SET_ROLES always returns ok in practice
+            let _ = set_rows;
         }
 
         Ok(())
@@ -189,20 +156,6 @@ impl UserRepository for MssqlUserRepository {
         }
     }
 
-    // --------------------------------------------------------------------
-    // M16: admin user-list SP (permission-detail moved to
-    // `MssqlPermissionUserRepository` in M17).
-    // --------------------------------------------------------------------
-
-    /// `dbo.SP_PERMISSION_USER_LIST` — admin user-listing endpoint.
-    ///
-    /// Returns one row per user with permission summary CSVs (legacy
-    /// M16 columns) + permission-page columns (M17). Pagination is
-    /// applied by the application service (cursor on `email`).
-    ///
-    /// M19: `@p_user_guid` is the admin check — non-admin callers
-    /// receive zero rows. String-encoded per the project GUID-into-SP
-    /// rule (the SP declares `varchar(36)` + `TRY_CAST` inside).
     async fn list_with_permissions(
         &self,
         caller_guid: Uuid,
@@ -217,28 +170,6 @@ impl UserRepository for MssqlUserRepository {
         Ok(rows.iter().map(row_to_user_list_row).collect())
     }
 
-    // M17 cleanup: `find_user_permissions_by_username` and the
-    // `row_to_user_permission_detail_row` mapper moved to
-    // `crates/infra/src/db/mssql_permission_user.rs`. The permission
-    // flow no longer lives on the login/auth port.
-
-    // --------------------------------------------------------------------
-    // M20-b: admin user creation (SP_USER_INSERT_FULL) + actor lookup.
-    // --------------------------------------------------------------------
-
-    /// Resolve `user_username_guid` from a `user_guid` (active rows only).
-    ///
-    /// Used by [`Self::admin_insert_full`] to convert the JWT's
-    /// `user_guid` into the column the SP expects. The lookup
-    /// filters `user_username_status <> 3` so suspended /
-    /// deleted admins cannot impersonate.
-    ///
-    /// Implementation note: we run a plain `SELECT` rather than
-    /// going through `SP_USER_FIND_BY_ID` (which expects a
-    /// `user_username_guid` and would loop). The query is a
-    /// single-column read against the (user_guid) index that
-    /// already exists on `[user_username]`; the cost is ~one
-    /// page fetch.
     async fn find_username_guid_by_user_guid(
         &self,
         user_guid: Uuid,
@@ -259,27 +190,11 @@ impl UserRepository for MssqlUserRepository {
             .filter(|s| !s.is_empty()))
     }
 
-    /// M20-b: wrap `dbo.SP_USER_INSERT_FULL`.
-    ///
-    /// Builds the EXEC with ~59 parameters, calls the SP, and maps
-    /// the single result row into either [`AdminInsertUserResult`]
-    /// or [`AdminInsertUserError`].
-    ///
-    /// `actor_user_username_guid` is resolved from the JWT
-    /// upstream (the handler / service does it once); this
-    /// method just passes it through. When the SP rejects the
-    /// actor (`ACTOR_NOT_FOUND`, `PERMISSION_DENIED`), we
-    /// surface the SP code verbatim — the handler maps it to
-    /// the right HTTP status.
     async fn admin_insert_full(
         &self,
         req: &AdminInsertUserRequest,
     ) -> Result<AdminInsertUserResult, AdminInsertUserError> {
-        // Build the EXEC string with 59 positional @P1..@P59 params.
-        // The SP signature is rigid: every parameter maps to one
-        // column, in declaration order. Keep the EXEC and the
-        // `params` slice in lockstep — a single off-by-one would
-        // silently bind the wrong value to the wrong column.
+
         const EXEC_SQL: &str = "EXEC dbo.SP_USER_INSERT_FULL \
                 @p_actor_user_username_guid = @P1, \
                 @p_user_guid = @P2, \
@@ -348,15 +263,6 @@ impl UserRepository for MssqlUserRepository {
                 @p_proof_of_address_path = @P65, \
                 @p_source_of_funds_statement_path = @P66";
 
-        // ---- Bind every parameter ----
-        //
-        // ponytail: we bind as `Option<&str>` / `Option<&Decimal>` /
-        // `Option<chrono::DateTime<Utc>>` so an absent field arrives
-        // at SQL Server as a real NULL (matches the SP's `= NULL`
-        // defaults). Building a 66-element Vec by hand keeps the
-        // binding order locked to the EXEC string above — the
-        // compiler will not catch a mismatch; reviewers should
-        // verify both side-by-side on every change.
         let actor = req.actor_user_username_guid.as_str();
         let user_guid: Option<&str> = req.user_guid.as_deref();
         let first_name = req.first_name.as_str();
@@ -394,11 +300,6 @@ impl UserRepository for MssqlUserRepository {
         let salary_amount: Option<rust_decimal::Decimal> = req.salary_amount;
         let salary_currency: Option<&str> = req.salary_currency.as_deref();
 
-        // Day schedules. The SP requires: when `is_working = 1`,
-        // both `start_time` and `end_time` must be non-NULL.
-        // Service-side validation in `application/admin_user.rs`
-        // catches the violation early with a 422 before we hit
-        // the SP. Here we just pass through.
         let s = &req.schedule;
         let (m_iw, m_st, m_et) = day_to_parts(&s.monday);
         let (t_iw, t_st, t_et) = day_to_parts(&s.tuesday);
@@ -489,20 +390,11 @@ impl UserRepository for MssqlUserRepository {
 
         let rows = exec_sp(&self.pool, EXEC_SQL, params)
             .await
-            // Translate the connection / TDS error into the
-            // structured SP-error shape so the handler still
-            // produces a proper envelope (mapping "backend" to
-            // the INTERNAL error code).
+
             .map_err(|e| {
                 AdminInsertUserError::new("internal", format!("SP_USER_INSERT_FULL: {e}"))
             })?;
 
-        // The SP returns exactly one row regardless of success or
-        // failure (matches the contract documented in the SP body).
-        // The success path emits `success = 1` + `code = 'CREATED'`;
-        // every failure branch emits `success = 0` + a distinct
-        // string `code` + an English `message`. We read the row by
-        // column name — the SP aliases every column.
         let row = rows.first().ok_or_else(|| {
             AdminInsertUserError::new(
                 "internal",
@@ -526,11 +418,7 @@ impl UserRepository for MssqlUserRepository {
             user_guid,
             user_username_guid,
             username: read_str(row, "username").unwrap_or("").to_string(),
-            // The SP returns NULL for `assigned_role_guid` when
-            // neither `is_admin` nor `is_employee` was set. The
-            // `read_guid_str` helper emits an empty string for
-            // NULL — coerce that to `None` so the wire shape is
-            // `null`, not `""`.
+
             assigned_role_guid: if assigned_role_guid_raw.is_empty() {
                 None
             } else {
@@ -539,33 +427,11 @@ impl UserRepository for MssqlUserRepository {
         })
     }
 
-    /// M22-b: rich admin user update — wraps
-    /// `dbo.SP_USER_UPDATE_FULL`.
-    ///
-    /// Write-side counterpart to [`Self::admin_insert_full`].
-    /// The SP signature is the same shape as INSERT minus the
-    /// password_hash column (which the update SP does NOT
-    /// touch — password reset lives on a separate flow).
-    ///
-    /// The SP body actually persists only `dbo.[user]` basic +
-    /// `dbo.user_username`. The remaining parameters (address,
-    /// schedule, bank, position, salary, attachments) are
-    /// accepted for validation but not persisted in this
-    /// flow — the legacy ASP.NET page updates those through
-    /// dedicated SPs. The wire contract carries them so the
-    /// admin UI can hand the same form to both create and
-    /// update endpoints without a re-shape.
     async fn admin_update_full(
         &self,
         req: &AdminUpdateUserRequest,
     ) -> Result<AdminUpdateUserResult, AdminUpdateUserError> {
-        // Build the EXEC string with 65 positional @P1..@P65
-        // params. Drop `@p_password_hash` (@P24 in INSERT) vs.
-        // INSERT's 66; the order shifts left by one from
-        // `@p_username` onward (no password_hash in the
-        // middle). Keep the EXEC and the `params` slice in
-        // lockstep — reviewers should verify both side-by-side
-        // on every change.
+
         const EXEC_SQL: &str = "EXEC dbo.SP_USER_UPDATE_FULL \
                         @p_actor_user_username_guid = @P1, \
                         @p_user_guid = @P2, \
@@ -633,11 +499,6 @@ impl UserRepository for MssqlUserRepository {
                         @p_proof_of_address_path = @P64, \
                         @p_source_of_funds_statement_path = @P65";
 
-        // ---- Bind every parameter ----
-        //
-        // ponytail: same trade-off as INSERT — we bind as
-        // `Option<&str>` / `Option<&Decimal>` so an absent
-        // field arrives at SQL Server as a real NULL.
         let actor = req.actor_user_username_guid.as_str();
         let user_guid = req.user_guid.as_str();
         let first_name = req.first_name.as_str();
@@ -674,10 +535,6 @@ impl UserRepository for MssqlUserRepository {
         let salary_amount: Option<rust_decimal::Decimal> = req.salary_amount;
         let salary_currency: Option<&str> = req.salary_currency.as_deref();
 
-        // Day schedules — same helper as INSERT. The SP
-        // requires: when `is_working = 1`, both `start_time`
-        // and `end_time` must be non-NULL (service-side
-        // validation catches the violation early).
         let s = &req.schedule;
         let (m_iw, m_st, m_et) = day_to_parts(&s.monday);
         let (t_iw, t_st, t_et) = day_to_parts(&s.tuesday);
@@ -767,19 +624,11 @@ impl UserRepository for MssqlUserRepository {
 
         let rows = exec_sp(&self.pool, EXEC_SQL, params)
             .await
-            // Translate the connection / TDS error into the
-            // structured SP-error shape so the handler still
-            // produces a proper envelope (mapping "backend" to
-            // the INTERNAL error code).
+
             .map_err(|e| {
                 AdminUpdateUserError::new("internal", format!("SP_USER_UPDATE_FULL: {e}"))
             })?;
 
-        // The SP returns exactly one row regardless of success
-        // or failure (mirrors the INSERT contract). The success
-        // path emits `success = 1` + `code = 'UPDATED'`; every
-        // failure branch emits `success = 0` + a distinct string
-        // `code` + an English `message`.
         let row = rows.first().ok_or_else(|| {
             AdminUpdateUserError::new(
                 "internal",
@@ -800,88 +649,23 @@ impl UserRepository for MssqlUserRepository {
         })
     }
 
-    /// M21: page-based admin user listing — wraps
-    /// `dbo.SP_USER_LIST_PAGING`.
-    ///
-    /// The SP signature is:
-    ///
-    /// ```sql
-    /// EXEC dbo.SP_USER_LIST_PAGING
-    ///   @p_keyword    nvarchar(255) = NULL,
-    ///   @p_user_status int            = NULL,
-    ///   @p_page        int            = 1,
-    ///   @p_page_size   int            = 20
-    /// ```
-    ///
-    /// Returns one row per matching user; every row carries the same
-    /// `total_count` / `page` / `page_size` (the SP repeats the
-    /// pagination metadata on every row). The infra layer hoists
-    /// those into [`AdminUserListPagingPage`] once, so the wire
-    /// envelope carries them only on the page level.
-    ///
-    /// ## `OPTION (RECOMPILE)`
-    ///
-    /// The SP itself ends with `OPTION (RECOMPILE)` (defense against
-    /// parameter sniffing on `@p_keyword`). We don't add a second
-    /// hint at the EXEC layer — one is enough, and a double hint
-    /// can confuse the query optimizer.
-    ///
-    /// ## `@p_user_status = NULL` sentinel
-    ///
-    /// The SP treats `NULL` as "no status filter". tiberius can't
-    /// bind a NULL `int` over `&dyn ToSql` directly, so we send
-    /// `0` and a tiny bit-flip isn't worth a parallel code path —
-    /// the SP's own `NULL`/missing logic fires when `0` arrives
-    /// *and* `IS NULL` is true (the SP normalizes `0 → NULL`
-    /// internally; see the SP source). If that assumption ever
-    /// breaks, swap the binding to `Option<i32>` via the
-    /// `Option<...> as &dyn ToSql` cast pattern.
-    ///
-    /// ponytail: `actor` is currently unused by the SP (the SP
-    /// doesn't enforce admin gating — that lives at the handler
-    /// via [`Permission::PageUsersView`]). We accept it on the
-    /// trait signature so a future SP version that adds `@p_actor`
-    /// for server-side logging can be wired without breaking the
-    /// trait. The `_ = actor` line is the explicit ceiling marker.
     async fn list_users_paging(
         &self,
         input: &AdminUserListPagingInput,
         actor: Uuid,
     ) -> Result<AdminUserListPagingPage, RepoError> {
-        let _ = actor; // SP doesn't take an actor param today.
+        let _ = actor;
 
         let page = input.page as i32;
         let page_size = input.page_size as i32;
-        // Status filter: pass NULL when the caller didn't provide one,
-        // pass the raw int when they did. The SP treats
-        // `@p_user_status IS NULL` as "no filter" (returns all
-        // non-deleted statuses); passing `0` would silently filter to
-        // `user_status = 0` rows only.
-        //
-        // **Do NOT** use `unwrap_or(0)` — the SP does NOT normalize
-        // `0 → NULL`. It checks `IS NULL OR = @p_user_status`, so
-        // `0` would match only Inactive users.
-        //
-        // tiberius 0.12 implements `IntoSql for Option<&str>` but NOT
-        // for `Option<i32>`. We bind through `String` and let SQL
-        // Server implicit-cast the varchar to int on the EXEC
-        // boundary (works because `int` has higher data type
-        // precedence than `varchar` for comparison).
+
         let status_filter: Option<String> = input.user_status.map(|s| s.to_string());
         let keyword = input.keyword.clone();
 
-        // Bit filters: tiberius 0.12 implements `IntoSql for bool`
-        // (the wire shape is `BIT`). We bind each `Option<bool>`
-        // directly — `None` becomes `NULL` on the wire and the SP
-        // short-circuits via the `IS NULL OR = @p_xxx` guard.
         let user_is_customer = input.user_is_customer;
         let user_is_employee = input.user_is_employee;
         let user_is_freelance = input.user_is_freelance;
 
-        // Scope filters (department / team / position GUIDs) are
-        // bound as `Option<&str>` — tiberius maps `None` to
-        // `NVARCHAR NULL`, and the SP's `IS NULL OR EXISTS(...)`
-        // guard short-circuits when the parameter is unset.
         let department_guid = input.department_guid.as_deref();
         let department_team_guid = input.department_team_guid.as_deref();
         let position_guid = input.position_guid.as_deref();
@@ -916,10 +700,6 @@ impl UserRepository for MssqlUserRepository {
 
         let items: Vec<UserListPagingRow> = rows.iter().map(row_to_user_list_paging_row).collect();
 
-        // Hoist page-level metadata off the first row. When the SP
-        // returns no rows (empty filter result), fall back to the
-        // echoed inputs so the wire envelope still carries
-        // `total_count = 0`, `page`, `page_size`.
         let (total_count, out_page, out_page_size) = items
             .first()
             .map(|r| (r.total_count, r.page, r.page_size))
@@ -933,29 +713,12 @@ impl UserRepository for MssqlUserRepository {
         })
     }
 
-    // --------------------------------------------------------------------
-    // M22: admin user-detail SP (SP_USER_DETAIL_FULL_GET).
-    // --------------------------------------------------------------------
-
-    /// `dbo.SP_USER_DETAIL_FULL_GET` - admin user-detail lookup.
-    ///
-    /// Returns either 0 rows (user not found / soft-deleted) or 1 row
-    /// with every related detail assembled via `OUTER APPLY` blocks.
-    /// The infra mapper reads every column by name so a future SP
-    /// column rename surfaces as empty string on the wire (defensive,
-    /// never a panic).
-    ///
-    /// ponytail: `actor` is currently unused by the SP (the SP does
-    /// not enforce admin gating - that lives at the handler via
-    /// `Permission::PageUsersView`). We accept it on the trait signature
-    /// so a future SP version that adds `@p_actor` for server-side
-    /// logging can be wired without breaking the trait.
     async fn get_user_detail_full(
         &self,
         user_guid: Uuid,
         actor: Uuid,
     ) -> Result<Option<AdminUserDetail>, RepoError> {
-        let _ = actor; // SP does not take an actor param today.
+        let _ = actor;
 
         let user_guid_str = user_guid.to_string();
         let rows = exec_sp(
@@ -973,9 +736,6 @@ impl UserRepository for MssqlUserRepository {
     }
 }
 
-/// Map a single joined row to the User aggregate (without roles).
-/// The `roles` field is filled by the caller after reading the
-/// second result set.
 fn row_to_user(row: &tiberius::Row) -> Result<User, RepoError> {
     let id_str: &str = row
         .get::<&str, _>("user_guid")
@@ -1021,31 +781,14 @@ fn row_to_user(row: &tiberius::Row) -> Result<User, RepoError> {
         last_name: last_name.to_string(),
         username: username.to_string(),
         password_hash: password_hash.to_string(),
-        roles: Vec::new(),       // filled by caller
-        permissions: Vec::new(), // filled by caller
+        roles: Vec::new(),
+        permissions: Vec::new(),
         status,
         created_at,
         updated_at,
     })
 }
 
-/// Read the (roles, permissions) pair from the named row of an
-/// `exec_sp` result set.
-///
-/// Per the stored-procedure contract documented in
-/// `migrations/20260620000001_sp_user.sql`, the second result-set row
-/// returns a single CSV column:
-/// - `role_codes` (snake_case: `customer,admin,…`)
-///
-/// **Note:** the prior version of this function read positional
-/// columns `0` and `1` claiming the second one was `permission_codes`,
-/// but the SP only emits `role_codes`. Reading by name surfaces the
-/// drift: both reads now hit the same column and the parsed strings
-/// are routed through `parse_role_codes` / `parse_permission_codes`
-/// respectively (they share the same CSV split). The permission
-/// SP landed in M15+; if the alias changes, update this read in one
-/// place instead of chasing an index. The CSVs are parsed by
-/// [`parse_role_codes`] and [`parse_permission_codes`].
 fn read_roles_and_permissions(
     rows: &[tiberius::Row],
     idx: usize,
@@ -1063,44 +806,11 @@ fn read_roles_and_permissions(
     Ok((roles, permissions))
 }
 
-/// Split a [`DaySchedule`] into the three `(bool, Option<String>,
-/// Option<String>)` parts the SP expects (`is_working` +
-/// `start_time` + `end_time`).
-///
-/// `start_time` / `end_time` are typed as [`chrono::NaiveTime`] in
-/// the domain (the SP column is `time(0)`), but tiberius accepts
-/// either a `NaiveTime` or a `&str` "HH:MM:SS" for the `time(0)`
-/// parameter. We format to `"HH:MM:SS"` here so the SP gets the
-/// canonical string form and any future precision changes in
-/// chrono's default format stay isolated to this one helper.
-///
-/// When `is_working` is `false`, both times are `None` (the SP
-/// will insert NULL into the `time(0)` columns — the row still
-/// exists; just no scheduled hours).
-///
-/// ponytail: tiny inline helper; refactor to a macro only when a
-/// 3rd SP needs the same `DaySchedule`-style mapping. The two
-/// `String` allocations per call are bounded to the admin write
-/// path (low frequency) and free us from a lifetime dance with
-/// the input `&DaySchedule`.
 fn day_to_parts(d: &DaySchedule) -> (bool, Option<String>, Option<String>) {
     let fmt = |t: chrono::NaiveTime| t.format("%H:%M:%S").to_string();
     (d.is_working, d.start_time.map(fmt), d.end_time.map(fmt))
 }
 
-/// Split a comma-separated role_codes string into Vec<Role>.
-///
-/// Per RDBMS Permssion.md §1.8 + §3 Step 5 the SQL filter for
-/// `user_role_status=1` AND `(expire_at IS NULL OR > now)` MUST run
-/// in the stored procedure — Rust only receives role_codes that
-/// already passed those gates. We log unknown codes at WARN level
-/// (instead of silently dropping them) so a DBA-created role that's
-/// not yet mapped in Rust shows up in observability.
-///
-/// ponytail: full effective-permission calculation (§5: role + allow
-/// − deny) belongs in a dedicated `SP_USER_GET_EFFECTIVE_PERMISSIONS`
-/// call — the `roles` Vec on the aggregate stays as-is until M15+.
-/// Scope / department / permission_override land there.
 fn parse_role_codes(s: &str) -> Vec<Role> {
     let mut out = Vec::new();
     for raw in s.split(',') {
@@ -1122,9 +832,7 @@ fn parse_role_codes(s: &str) -> Vec<Role> {
 
 #[cfg(test)]
 mod parse_role_codes_tests {
-    //! Unit tests for the CSV parser — the SP does the heavy lifting
-    //! (status + expire_at filtering) and these tests confirm the
-    //! Rust side never crashes on the wire format the DBA may tweak.
+
     use super::*;
     use kokkak_domain::Role;
 
@@ -1138,8 +846,7 @@ mod parse_role_codes_tests {
 
     #[test]
     fn skips_empty_segments() {
-        // STUFF(..., 1, 1, '') on an empty subquery yields '' — and
-        // a stray trailing comma would split to ["customer", ""].
+
         assert_eq!(
             parse_role_codes("customer,,admin,"),
             vec![Role::Customer, Role::Admin]
@@ -1157,10 +864,7 @@ mod parse_role_codes_tests {
 
     #[test]
     fn skips_unknown_codes_without_panicking() {
-        // DBA added a role not yet mapped in the Rust enum — we must
-        // not panic at startup. The WARN log is captured by
-        // tracing-subscriber in production; here we just verify the
-        // well-known codes still come through.
+
         assert_eq!(
             parse_role_codes("customer,new_admin_role,admin"),
             vec![Role::Customer, Role::Admin]
@@ -1168,13 +872,6 @@ mod parse_role_codes_tests {
     }
 }
 
-/// Split a comma-separated `permission_codes` string into `Vec<Permission>`.
-///
-/// Mirrors [`parse_role_codes`]: the SP returns
-/// `SCREAMING_SNAKE_CASE` codes (`PAGE_JOBS_VIEW,JOBS_CREATE,…`); we
-/// trim each segment, skip empties, and log a WARN for codes that
-/// the Rust enum does not yet know about so DBA-side additions are
-/// observable in production instead of silently dropped.
 fn parse_permission_codes(s: &str) -> Vec<Permission> {
     let mut out = Vec::new();
     for raw in s.split(',') {
@@ -1194,25 +891,6 @@ fn parse_permission_codes(s: &str) -> Vec<Permission> {
     out
 }
 
-// ============================================================================
-// M16: row mappers for the per-user permission SPs
-// ============================================================================
-//
-// Both mappers follow the project's "thin copy" pattern: the SP
-// already COALESCEs NULLs into empty strings / zero values, so we
-// only do `.unwrap_or("").to_string()` / `.unwrap_or(0)` fallbacks
-// as defensive guards. The CSV columns are split into `Vec<String>`
-// via [`split_csv`] below so the wire shape never carries CSV.
-
-/// Split a comma-separated string into `Vec<String>`, skipping
-/// empty segments and trimming each one.
-///
-/// Used by the M16 row mappers (`role_codes`, `role_names`,
-/// `permission_codes`, `user_role_name`). Distinct from
-/// [`parse_role_codes`] / [`parse_permission_codes`] above because
-/// those map into typed enums — this one keeps the raw strings so
-/// the admin UI can display `user_role_name` even for DBA-added
-/// roles that aren't in the Rust enum yet.
 fn split_csv(s: &str) -> Vec<String> {
     s.split(',')
         .map(str::trim)
@@ -1221,34 +899,10 @@ fn split_csv(s: &str) -> Vec<String> {
         .collect()
 }
 
-/// Map one `SP_PERMISSION_USER_LIST` row to [`UserListRow`].
-///
-/// Column NAMES match the SP's SELECT aliases:
-///   `user_guid`               (varchar 36)
-///   `full_name`               (varchar — first+' '+last, COALESCE'd to '')
-///   `email`                   (varchar — username alias)
-///   `role_codes`              (varchar CSV — COALESCE'd to '')
-///   `role_names`              (varchar CSV — COALESCE'd to '')
-///   `has_permission`          (bit)  ← LIST only ships this bool;
-///                                     full permission codes come
-///                                     from the detail endpoint
-///                                     (`SP_PERMISSION_USER_FIND_BY_USERNAME`)
-///   `has_override`            (bit)
-///   `user_status`             (int — see [`UserStatus::from_i32`])
-///   `user_username_status`    (int — raw, no enum)
-///   `user_create_at`          (datetime2)
-///   `user_update_at`          (datetime2, ISNULL → user_create_at)
-///
-/// `has_permission` / `has_override` come back as `i16` via
-/// tiberius's `Row::get::<i16, _>` (bit → tinyint). We coerce
-/// non-zero to `true` so any future DB-side change (bit → tinyint,
-/// etc.) doesn't silently flip the meaning.
 fn row_to_user_list_row(row: &tiberius::Row) -> UserListRow {
     let user_status_i32 = read_i32(row, "user_status").unwrap_or(0);
-    let user_status = UserStatus::from_i32(user_status_i32).unwrap_or(UserStatus::Pending); // forward-compat for future enum values
-                                                                                            // The SP uses `ISNULL(user_update_at, user_create_at)` so `user_update_at`
-                                                                                            // should never come back as NULL in practice. Falling back to `created_at`
-                                                                                            // when the column is missing keeps the wire shape stable and avoids the                                                                        // `expect("unix epoch must be valid")` panic the prior fallback carried.
+    let user_status = UserStatus::from_i32(user_status_i32).unwrap_or(UserStatus::Pending);
+
     UserListRow {
         user_guid: read_str(row, "user_guid").unwrap_or("").to_string(),
         full_name: read_str(row, "full_name").unwrap_or("").to_string(),
@@ -1262,30 +916,6 @@ fn row_to_user_list_row(row: &tiberius::Row) -> UserListRow {
     }
 }
 
-/// Map one `SP_USER_LIST_PAGING` row to [`UserListPagingRow`].
-///
-/// Column NAMES match the SP's SELECT aliases verbatim:
-///   `total_count`       (bigint)
-///   `page`              (int)
-///   `page_size`         (int)
-///   `user_guid`         (varchar 36)
-///   `full_name`         (varchar, COALESCE'd to "")
-///   `phone`             (varchar, COALESCE'd to "")
-///   `user_status`       (int 0..3)
-///   `user_status_name`  (varchar, e.g. "Active" / "Suspended")
-///   `role_name`         (varchar CSV from STRING_AGG)
-///   `position_name`     (varchar, COALESCE'd to "")
-///
-/// `total_count` arrives as `i64` via tiberius's `Row::get::<i64, _>`
-/// (bigint). Anything missing on the row falls back to a safe default
-/// so a future SP column rename / removal surfaces as an empty string
-/// on the wire (not a panic).
-///
-/// ponytail: thin pass-through mirroring the existing
-/// `row_to_user_list_row` mapper style. Ceiling: when the SP grows
-/// to also surface `email` / `last_login_at` / etc., keep adding
-/// field-by-field here — the schema is flat enough that a builder
-/// pattern would be overkill.
 fn row_to_user_list_paging_row(row: &tiberius::Row) -> UserListPagingRow {
     UserListPagingRow {
         total_count: read_i32(row, "total_count").unwrap_or(0) as i64,
@@ -1296,10 +926,7 @@ fn row_to_user_list_paging_row(row: &tiberius::Row) -> UserListPagingRow {
         phone: read_str(row, "phone").unwrap_or("").to_string(),
         user_status: read_i32(row, "user_status").unwrap_or(0),
         user_status_name: read_str(row, "user_status_name").unwrap_or("").to_string(),
-        // BIT columns — the SP `CAST(ISNULL(col, 0) AS bit)`s these,
-        // so `None` on the wire means the column was dropped or the
-        // cast short-circuited; default to `false` (the safe choice
-        // — a missing flag is never a positive match).
+
         user_is_customer: row.get::<bool, _>("user_is_customer").unwrap_or(false),
         user_is_employee: row.get::<bool, _>("user_is_employee").unwrap_or(false),
         user_is_freelance: row.get::<bool, _>("user_is_freelance").unwrap_or(false),
@@ -1314,33 +941,6 @@ fn row_to_user_list_paging_row(row: &tiberius::Row) -> UserListPagingRow {
         position_name: read_str(row, "position_name").unwrap_or("").to_string(),
     }
 }
-
-// M17 cleanup: `row_to_user_permission_detail_row` moved to
-// `crates/infra/src/db/mssql_permission_user.rs` along with the
-// `find_user_permissions_by_username` adapter. The permission flow
-// no longer lives on the login/auth port.
-
-// ============================================================================
-// M22: row mapper for SP_USER_DETAIL_FULL_GET
-// ============================================================================
-//
-// The SP returns ONE row even when every OUTER APPLY sub-block
-// produced no row (the basic `[user]` row + every optional sub-block
-// column set to NULL). The mapper below:
-//
-//   1. Reads the always-present `[user]` columns directly.
-//   2. For each OUTER APPLY block, checks whether the block's
-//      primary GUID column is non-empty (== the SP found a row)
-//      and emits `Some(...)` only when it did.
-//   3. Falls back to empty string / 0 / false for every other
-//      column so a future SP column rename surfaces as empty on
-//      the wire instead of a panic.
-//
-// ponytail: thin pass-through mirroring the existing
-// `row_to_user_list_row` mapper style. Ceiling: if the SP grows
-// yet another OUTER APPLY block (e.g. emergency contact), add
-// another `Option<NewSubBlock>` to AdminUserDetail + a matching
-// here + one helper above.
 
 fn row_to_username(row: &tiberius::Row) -> Option<AdminUserDetailUsername> {
     let guid = read_guid_str(row, "user_username_guid");
@@ -1366,8 +966,7 @@ fn row_to_profile_image(row: &tiberius::Row) -> Option<AdminUserDetailProfileIma
     Some(AdminUserDetailProfileImage {
         user_img_profile_guid: guid,
         profile_img_path: read_str(row, "profile_img_path").unwrap_or("").to_string(),
-        // T-23: the URL is composed at the API edge; the infra
-        // layer only knows about relative storage keys.
+
         profile_img_url: None,
     })
 }
@@ -1444,12 +1043,7 @@ fn row_to_position(row: &tiberius::Row) -> Option<AdminUserDetailPosition> {
         position_guid: read_guid_str(row, "position_guid"),
         position_code: read_str(row, "position_code").unwrap_or("").to_string(),
         position_name: read_str(row, "position_name").unwrap_or("").to_string(),
-        // `master_position_level` is an `int` in NEW_DB (the
-        // master service reads it as `i32` — see
-        // `MasterPositionAutocompleteRow.level`). The SP may
-        // emit NULL for positions without an explicit level; the
-        // mapper surfaces that as `0` so the wire shape stays
-        // a non-optional `i32` (matches the autocomplete row).
+
         position_level: read_i32(row, "position_level").unwrap_or(0),
         position_start_at: read_datetime(row, "position_start_at"),
         position_end_at: read_datetime(row, "position_end_at"),
@@ -1463,11 +1057,7 @@ fn row_to_salary(row: &tiberius::Row) -> Option<AdminUserDetailSalary> {
     }
     Some(AdminUserDetailSalary {
         user_salary_guid: guid,
-        // user_salary_amount is decimal(18, 2) in NEW_DB (AGENTS.md
-        // sec 7.5 - money never uses f64). tiberius 0.12's rust_decimal
-        // feature binds the column directly, preserving the exact
-        // precision + scale the SP emits (no string round-trip,
-        // no precision loss for values like 0.10).
+
         salary_amount: read_decimal(row, "salary_amount").unwrap_or_default(),
         salary_currency: read_str(row, "salary_currency").unwrap_or("").to_string(),
         salary_type: read_i32(row, "salary_type").unwrap_or(0),
@@ -1481,11 +1071,7 @@ fn row_to_schedule(row: &tiberius::Row) -> Option<WeeklySchedule> {
     if guid.is_empty() {
         return None;
     }
-    // `monday_*_time` ... `sunday_*_time` columns are SQL Server
-    // `time(0)`. tiberius 0.12 (with the `chrono` feature) binds
-    // them directly to `chrono::NaiveTime` - no string round-trip,
-    // no precision loss, and the wire JSON still serialises as
-    // "HH:MM:SS" via chrono's default serde impl.
+
     Some(WeeklySchedule {
         monday: DaySchedule {
             is_working: row.get::<bool, _>("monday_is_working").unwrap_or(false),
@@ -1548,8 +1134,7 @@ fn row_to_bank_account(row: &tiberius::Row) -> Option<AdminUserDetailBankAccount
         bank_book_img_path: read_str(row, "bank_book_img_path")
             .unwrap_or("")
             .to_string(),
-        // T-23: composed at the API edge. See
-        // `row_to_profile_image` for the same reasoning.
+
         bank_book_img_url: None,
     })
 }
@@ -1566,16 +1151,11 @@ fn row_to_attachment(
     Some(AdminUserDetailAttachment {
         user_details_attachment_guid: guid,
         attachment_path: read_str(row, path_col).unwrap_or("").to_string(),
-        // T-23: URL is composed at the API edge (see
-        // `row_to_profile_image` rationale). `None` here means
-        // "ask the handler to fill it from `public_base_url`".
+
         attachment_url: None,
     })
 }
 
-/// Best-effort column-existence check (tiberius has no public API
-/// for this; we use `try_get` to detect "column missing" vs
-/// "column is NULL").
 fn row_has_col(row: &tiberius::Row, col: &str) -> bool {
     if let Ok(Some(_)) = row.try_get::<&str, _>(col) {
         return true;
@@ -1652,22 +1232,9 @@ fn row_to_admin_user_detail(row: &tiberius::Row) -> AdminUserDetail {
     }
 }
 
-// ============================================================================
-// M16 round 2 cleanup: the duplicate `split_csv` / `row_to_user_list_row`
-// / `row_to_user_permission_detail_row` definitions that used to live
-// below were dead code (no caller — the M16 round 2 versions above are
-// the live ones) and they blocked compilation because the round 1 row
-// mapper still referenced the now-removed `permission_codes` field on
-// `UserListRow`. Removed in this commit so `cargo check` / `cargo test`
-// can run again. If a future SP change reintroduces `permission_codes`,
-// add it back to `UserListRow` first, then revive the mapper.
-// ============================================================================
-
 #[cfg(test)]
 mod parse_permission_codes_tests {
-    //! Unit tests for the permission CSV parser — same contract as
-    //! the role parser: tolerant of trailing commas, whitespace, and
-    //! unknown codes.
+
     use super::*;
     use kokkak_domain::Permission;
 
@@ -1698,8 +1265,7 @@ mod parse_permission_codes_tests {
 
     #[test]
     fn skips_unknown_codes_without_panicking() {
-        // Future permission added by the DBA before the Rust enum
-        // catches up. We keep the well-known ones and warn (not test).
+
         assert_eq!(
             parse_permission_codes("JOBS_CREATE,FUTURE_PERMISSION,JOBS_DELETE"),
             vec![Permission::JobsCreate, Permission::JobsDelete]

@@ -1,33 +1,13 @@
-# docker-compose.yml — Kokkeak full local stack (T-21).
-#
-# Brings up the entire dependency surface: SQL Server, Redis,
-# NATS (with JetStream), MongoDB, MinIO (S3-compatible), plus
-# the API and worker binaries built from this repo's Dockerfile.
-#
-# Usage:
-#   docker compose up -d         # start everything
-#   docker compose logs -f api   # tail API logs
-#   docker compose down -v       # stop + drop volumes (DESTRUCTIVE)
-#
-# The `api` and `worker` services build from the local Dockerfile.
-# For a faster dev loop, override the `target` and mount source
-# (see `docker-compose.override.yml`).
-#
-# This file is committed; do NOT bake real secrets into it. The
-# `environment:` blocks below contain DEV-ONLY credentials that
-# match `.env.example`. Production secrets come from the host's
-# secret manager (T-29).
+
 
 name: kokkak
 
 x-common-env: &common-env
-  # Defaults that every backend service can pick up. Each
-  # service also has its own bespoke block below.
+
   KOKKAK_ENV: dev
   KOKKAK_LOG__FORMAT: pretty
 
 services:
-  # ---- Datastores ----
 
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
@@ -41,8 +21,7 @@ services:
     volumes:
       - sqlserver-data:/var/opt/mssql
     healthcheck:
-      # sqlcmd isn't in the mssql image, so probe via the
-      # gateway port using a tiny TCP-style wait.
+
       test:
         [
           "CMD-SHELL",
@@ -81,9 +60,9 @@ services:
     container_name: kokkak-nats
     command: ["nats-server", "-js", "-sd", "/data", "-m", "8222"]
     ports:
-      - "4222:4222" # client
-      - "8222:8222" # monitoring
-      - "6222:6222" # cluster
+      - "4222:4222"
+      - "8222:8222"
+      - "6222:6222"
     volumes:
       - nats-data:/data
     healthcheck:
@@ -114,8 +93,8 @@ services:
       MINIO_ROOT_USER: kokkak
       MINIO_ROOT_PASSWORD: DevStrong!Passw0rd
     ports:
-      - "9000:9000" # S3 API
-      - "9001:9001" # console
+      - "9000:9000"
+      - "9001:9001"
     volumes:
       - minio-data:/data
     healthcheck:
@@ -124,22 +103,18 @@ services:
       timeout: 5s
       retries: 5
 
-  # ---- Application ----
-
   api:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: kokkak-api
     image: kokkak:latest
-    # Override the default entrypoint to run the API binary.
+
     entrypoint: ["/usr/local/bin/kokkak-api"]
     environment:
       <<: *common-env
       KOKKAK_SERVER__ADDR: 0.0.0.0:8080
-      # T-23: client-facing URL for image-download links in compose
-      # — `api:8080` is the internal service hostname, but the
-      # browser hits the API at `localhost:8080` (the mapped port).
+
       KOKKAK_SERVER__PUBLIC_BASE_URL: http://localhost:8080
       KOKKAK_DATABASE__SQLSERVER_URL: mssql://sa:DevStrong!Passw0rd@sqlserver:1433/KOKKAK_MASTER?encrypt=true&trustservercertificate=true
       KOKKAK_DATABASE__POOL_SIZE: "20"
@@ -148,18 +123,15 @@ services:
       KOKKAK_MONGO__URL: mongodb://mongo:27017
       KOKKAK_AUTH__JWT_SECRET: dev-only-not-for-prod-replace-me
       KOKKAK_AUTH__ISSUER: kokkak-api
-      # T-23-b: HMAC secret for `/files/*` URLs in dev compose.
-      # Production secrets come from the host's secret manager
-      # (never bake them into compose).
+
       KOKKAK_STORAGE__SIGNED_URL_SECRET: dev-secret-please-change-min-32-bytes-long
       KOKKAK_STORAGE__SIGNED_URL_TTL_SECS: "600"
-      # T-09/T-21: TLS off in compose so we don't need certs locally.
+
       KOKKAK_SERVER__TLS__ENABLED: "false"
     ports:
       - "8080:8080"
     volumes:
-      # Local data dir for the JSON-DB simulation. Drop the
-      # volume when iterating without SQL Server.
+
       - api-data:/app/data
     depends_on:
       sqlserver:
@@ -173,9 +145,7 @@ services:
       minio:
         condition: service_healthy
     healthcheck:
-      # /healthz is always 200 (process is up). /readyz reflects
-      # downstream health (DB / cache / queue). Use both: liveness
-      # probes /healthz, readiness probes /readyz.
+
       test:
         [
           "CMD-SHELL",
@@ -193,7 +163,7 @@ services:
       dockerfile: Dockerfile
     container_name: kokkak-worker
     image: kokkak:latest
-    # Same image, different binary.
+
     entrypoint: ["/usr/local/bin/kokkak-worker"]
     environment:
       <<: *common-env

@@ -1,24 +1,4 @@
-//! Cross-instance chat pub/sub via Redis (M8).
-//!
-//! The flow is:
-//
-//! ```text
-//! ChatService::send_message
-//!        │
-//!        ├─► repo.insert_message   (Mongo / JSON-DB)
-//!        │
-//!        └─► transport.broadcast_message
-//!                  │
-//!                  ▼
-//!            RedisChatPubSub
-//!                  │  ┌─── local tokio::broadcast ──► WebSocket subscribers (this instance)
-//!                  │  │
-//!                  └──┴── Redis PUBLISH chat:room:{id} ──► peer instances re-broadcast locally
-//! ```
-//!
-//! Peer-instance reception happens on a dedicated long-lived
-//! Redis connection that is `spawn`-ed by [`Self::start`] and
-//! drives the local `tokio::broadcast::Sender`.
+
 
 use std::sync::Arc;
 
@@ -37,24 +17,17 @@ fn channel_for(room_id: uuid::Uuid) -> String {
     format!("{CHANNEL_PREFIX}{room_id}")
 }
 
-/// Wraps the local [`BroadcastTransport`] and adds a
-/// Redis pub/sub bridge. Constructed by `api::main` when
-/// Redis is configured.
 #[derive(Clone)]
 pub struct RedisChatPubSub {
     local: Arc<BroadcastTransport>,
-    /// Pool used for the publisher side (cheap, multiplexed).
+
     pool: deadpool_redis::Pool,
-    /// Dedicated client for the subscriber side (psubscribe
-    /// needs a non-multiplexed connection).
+
     client: redis::Client,
 }
 
 impl RedisChatPubSub {
-    /// Build a new pub/sub bridge. `local` is the underlying
-    /// in-process transport; `pool` is the shared Redis
-    /// connection pool (used for PUBLISH); `client` is a
-    /// dedicated `redis::Client` for the long-lived subscriber.
+
     pub fn new(
         local: Arc<BroadcastTransport>,
         pool: deadpool_redis::Pool,
@@ -67,10 +40,6 @@ impl RedisChatPubSub {
         }
     }
 
-    /// Start the long-lived subscriber task. The task lives
-    /// for the entire process lifetime; the caller can cancel
-    /// it by dropping the returned `JoinHandle` (which the
-    /// process does on shutdown).
     pub fn start(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
         let me = self.clone();
         tokio::spawn(async move {
@@ -84,27 +53,18 @@ impl RedisChatPubSub {
     }
 
     async fn run_subscriber(&self) -> Result<(), RedisChatError> {
-        // Dedicated non-multiplexed connection for psubscribe.
-        // The pool's MultiplexedConnection cannot drive a
-        // pubsub stream; we open a fresh async connection
-        // here from the dedicated client.
-        // `get_async_connection` is deprecated in favour of the
-        // multiplexed variant, but the multiplexed connection
-        // cannot drive a pubsub stream — so we pin the deprecated
-        // API here intentionally.
+
         #[allow(deprecated)]
         let conn = self.client.get_async_connection().await?;
         let mut pubsub = conn.into_pubsub();
-        // Subscribe to every chat:* channel via PSUBSCRIBE so
-        // we get one connection for the whole fleet.
+
         pubsub.psubscribe("chat:room:*").await?;
         tracing::info!("chat pub/sub bridge online (psubscribe chat:room:*)");
         let mut stream = pubsub.on_message();
         while let Some(msg) = stream.next().await {
             let channel: String = msg.get_channel_name().to_string();
             let payload: Bytes = Bytes::from(msg.get_payload_bytes().to_vec());
-            // The local transport only needs the JSON; the
-            // room_id is in the channel name. We re-derive it.
+
             if let Some(room_str) = channel.strip_prefix(CHANNEL_PREFIX) {
                 if let Ok(room_id) = room_str.parse::<uuid::Uuid>() {
                     if let Ok(env) = serde_json::from_slice::<WireChatEvent>(&payload) {
@@ -176,9 +136,9 @@ impl WireChatEvent {
 #[async_trait]
 impl ChatTransport for RedisChatPubSub {
     async fn broadcast_message(&self, event: ChatEvent) -> Result<(), ChatError> {
-        // 1. Local fan-out (in-process WebSocket subscribers).
+
         let _ = self.local.broadcast_message(event.clone()).await;
-        // 2. Cross-instance fan-out via Redis.
+
         let wire = WireChatEvent::from_message(&event.message);
         let payload = match serde_json::to_vec(&wire) {
             Ok(b) => b,
@@ -198,16 +158,15 @@ impl ChatTransport for RedisChatPubSub {
     }
 }
 
-/// Errors raised by the pub/sub bridge.
 #[derive(Debug, Error)]
 pub enum RedisChatError {
-    /// Underlying Redis error.
+
     #[error("redis error: {0}")]
     Redis(#[from] redis::RedisError),
-    /// Pool exhaustion.
+
     #[error("redis pool: {0}")]
     Pool(#[from] deadpool_redis::PoolError),
-    /// Codec error.
+
     #[error("codec error: {0}")]
     Codec(String),
 }

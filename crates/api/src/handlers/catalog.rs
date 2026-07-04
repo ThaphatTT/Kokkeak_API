@@ -1,6 +1,4 @@
-//! Catalog HTTP handlers (M3 + M11 i18n).
-//!
-//! - GET /api/v1/catalog/services
+
 
 use axum::{
     extract::{Query, State},
@@ -17,9 +15,9 @@ use crate::state::AppState;
 
 #[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListQuery {
-    /// Cursor returned by the previous page (omit for first page).
+
     pub after: Option<String>,
-    /// Page size (default 20, max 200).
+
     pub limit: Option<u32>,
 }
 
@@ -44,7 +42,6 @@ impl From<kokkak_domain::ServiceCategory> for ServiceItem {
     }
 }
 
-/// GET /api/v1/catalog/services
 #[utoipa::path(
     get,
     path = "/api/v1/catalog/services",

@@ -17,164 +17,164 @@ license = "Proprietary"
 authors = ["Kokkeak Team"]
 description = "Kokkeak Backend API — handyman/technician marketplace (Laos)"
 
-# ---- Shared workspace dependencies ----
+
 [workspace.dependencies]
-# Async runtime
+
 tokio = { version = "1.40", features = ["full"] }
 async-trait = "0.1"
 futures = "0.3"
 
-# Web (axum)
+
 axum = { version = "0.7", features = ["macros", "ws"] }
-# T-16: `limit` feature enables `tower_http::RequestBodyLimitLayer`.
-# (Concurrency cap uses `tokio::sync::Semaphore` directly — no
-# tower feature needed for that; `LoadShedLayer` was rejected
-# because its `BoxError` doesn't compose with axum's router.)
+
+
+
+
 tower = { version = "0.5", features = ["util"] }
-# T-23: `fs` feature unlocks `tower_http::services::ServeDir` for
-# the `/files/*` static route when LocalStorage is wired.
-# T-16: `limit` feature enables `tower_http::RequestBodyLimitLayer`.
-# (Concurrency cap uses `tokio::sync::Semaphore` directly — no
-# tower feature needed for that; `LoadShedLayer` was rejected
-# because its `BoxError` doesn't compose with axum's router.)
+
+
+
+
+
+
 tower-http = { version = "0.6", features = ["trace", "cors", "compression-br", "compression-deflate", "compression-gzip", "timeout", "set-header", "limit", "fs"] }
 hyper = "1"
 
-# Serialization
+
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# Errors
+
 thiserror = "1"
 anyhow = "1"
 
-# Logging / tracing
+
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
-# T-24: OpenTelemetry (OTLP trace + metrics export). Behind the
-# `otel` feature flag on `kokkak-common` so the default build
-# stays fast — operators opt in via `--features kokkak-common/otel`.
+
+
+
 opentelemetry = "0.27"
 opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.27", default-features = false, features = ["grpc-tonic", "trace", "metrics"] }
 tracing-opentelemetry = "0.28"
 
-# Metrics
+
 metrics = "0.23"
 metrics-exporter-prometheus = { version = "0.15", default-features = false }
 
-# Config
+
 figment = { version = "0.10", features = ["env", "toml"] }
 
-# Time / UUID
+
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.10", features = ["v4", "v7", "serde"] }
 
-# Decimal (เงิน)
+
 rust_decimal = { version = "1.36", features = ["serde-with-str"] }
 rust_decimal_macros = "1.36"
 
-# Validation
+
 validator = { version = "0.18", features = ["derive"] }
 
-# ---- M9 / T-16 extra: image processing (JPEG / PNG decode, WebP encode) ----
-# `image` v0.25 has its bundled `image-webp` decoder (pure-Rust,
-# no libwebp system dep) but the encoder is lossless-only. We
-# pair `image` (decode) with the `webp` crate by `nicd` (lossy
-# encode) to get a full pipeline without C deps.
+
+
+
+
+
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 webp   = "0.3"
 
-# Base64 decoder for `*_img_b64` fields on /admin/users/full.
-# Used by the admin handler when a caller sends raw image bytes
-# alongside the JSON DTO (the alternative — multipart — is
-# explicitly NOT used per project rules).
+
+
+
+
 base64 = "0.22"
 
-# T-23-b: HMAC-SHA256 signing for `/files/*` URLs (KYC
-# documents, see AGENTS.md §21.7 — NIST 800-175B acceptable
-# primitives). The RustCrypto crate family is already in the
-# dep graph via `sha2` (LocalStorage digest) + `subtle`
-# (argon2id constant-time compare); adding `hmac` keeps us in
-# the same tree so no new crypto vendors land.
+
+
+
+
+
+
 hmac = "0.12"
 sha2 = "0.10"
 
-# ---- M2: Auth (argon2 + JWT) ----
+
 argon2 = { version = "0.5", default-features = false, features = ["std"] }
 jsonwebtoken = "9"
 
-# ---- M1.5 / M2: JSON DB simulation ----
-# (no extra crate needed — uses tokio::fs + serde_json)
 
-# ---- M2: async helpers for single-flight + dedup ----
+
+
+
 once_cell = "1"
 
-# ---- M1: Infrastructure clients ----
-# SQL Server (deferred to M1.5 — see crates/infra/src/db/mssql.rs)
-# tiberius = { version = "0.12", default-features = false, features = ["chrono", "rust_decimal", "tokio", "tokio-rustls", "rustls"] }
-# bb8 = "0.8"
-# bb8-tiberius = "0.14"
-# (sql server adapters in the api worker use these directly via
-# the infra crate, not through the workspace deps above)
 
-# ---- T-09: TLS (HTTPS) server — axum-server + rustls ----
-# Pinned to the same rustls 0.23 the rest of the workspace uses
-# (tiberius pulls 0.23, rust-s3 pulls 0.23 via tokio-rustls-tls),
-# so no extra rustls version lands in the dep graph.
+
+
+
+
+
+
+
+
+
+
+
 axum-server = { version = "0.7", features = ["tls-rustls"] }
-# rustls 0.23 has no default crypto provider — we must pick one.
-# `ring` is what tiberius + rust-s3 already pull in transitively, so
-# adding it explicitly here costs nothing and stops the release build
-# from panicking with "Could not automatically determine the
-# process-level CryptoProvider".
+
+
+
+
+
 rustls = { version = "0.23", default-features = false, features = ["logging", "std", "ring"] }
 rustls-pemfile = "2"
 
-# ---- T-07: per-IP rate limiting ----
-# Backed by the `governor` crate (GCRA algorithm). 0.4.x is the
-# release line compatible with axum 0.7 + tower 0.5; the 0.8.x
-# line bumps the internal axum dep to 0.8 and is a hard conflict
-# for us.
+
+
+
+
+
 tower_governor = "0.4"
 
-# ---- T-12: cert file watcher (LE 90-day rotation) ----
-# `notify` watches cert + key paths for modification and triggers
-# a graceful reload (the service then restarts under systemd /
-# k8s to pick up the new chain). v6.x is the widely-deployed
-# stable line on crates.io.
+
+
+
+
+
 notify = "6"
 
-# ---- T-16: OpenAPI / Swagger UI ----
-# Pinned to utoipa 4.x because utoipa 5.x dropped axum 0.7
-# support (5.x requires axum 0.8). utoipa-swagger-ui 7.x is the
-# matching version line (8.x pulls in utoipa 5 and creates a
-# duplicate crate in the dependency graph).
+
+
+
+
+
 utoipa = "4"
 utoipa-swagger-ui = "7"
 
-# Redis
+
 redis = { version = "0.27", default-features = false, features = ["tokio-comp", "aio", "script"] }
 deadpool-redis = "0.18"
 
-# In-process L1 cache
+
 moka = { version = "0.12", features = ["future"] }
 
-# NATS JetStream
+
 async-nats = "0.42"
 
-# MongoDB
+
 mongodb = "3.2"
 bson = { version = "2.13", features = ["chrono-0_4"] }
 
-# ---- M2/M3: Password verification needs a constant-time compare ----
+
 subtle = "2"
 
-# ---- T-27: Micro-benchmarks via Criterion ----
+
 criterion = { version = "0.5", features = ["html_reports"] }
 
-# ---- Profile-specific ----
+
 [profile.dev]
 opt-level = 0
 debug = true
@@ -186,8 +186,8 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 strip = true
-# T-20: abort on panic to shrink the binary and skip unwind
-# tables. The Dockerfile runtime image is distroless/static,
-# so there's no debugger to attach anyway. Backtraces from
-# `RUST_BACKTRACE=full` still print the active frames.
+
+
+
+
 panic = "abort"

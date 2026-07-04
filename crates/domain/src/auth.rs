@@ -1,11 +1,4 @@
-//! Auth domain types (โดเมนยืนยันตัวตน — M2 + M14).
-//!
-//! Defines the typed errors and the **claims** the application / API
-//! layers exchange. Concrete JWT issue / verify lives in `infra::auth::jwt`
-//! so the domain stays free of `jsonwebtoken`.
-//!
-//! M14 renamed `EmailTaken` → `UsernameTaken` to match the NEW_DB
-//! schema where login is `user_username_username` (not email).
+
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -14,82 +7,63 @@ use uuid::Uuid;
 
 use crate::user::{Permission, Role};
 
-/// Typed auth errors (mapped to HTTP statuses by the API layer).
 #[derive(Debug, Clone, Error)]
 pub enum AuthError {
-    /// 401 — credentials missing or invalid.
+
     #[error("invalid credentials")]
     InvalidCredentials,
 
-    /// 401 — token expired.
     #[error("token expired")]
     TokenExpired,
 
-    /// 401 — token signature / format invalid.
     #[error("invalid token: {0}")]
     InvalidToken(String),
 
-    /// 403 — authenticated but not allowed.
     #[error("forbidden: {0}")]
     Forbidden(String),
 
-    /// 409 — username already in use. Was `EmailTaken` in the legacy
-    /// code; renamed to match NEW_DB which stores login in
-    /// `user_username_username`.
     #[error("username already in use")]
     UsernameTaken,
 
-    /// 422 — input validation failure.
     #[error("validation: {0}")]
     Validation(String),
 
-    /// 500 — backend (argon2 / repo) failure.
     #[error("auth backend error: {0}")]
     Backend(String),
 
-    /// 429 — too many failed login attempts for this (username, IP)
-    /// pair within the rate-limit window. Carries the seconds
-    /// until the client may retry (driven by the rate limiter's
-    /// oldest failure timestamp).
     #[error("rate limited (retry after {0}s)")]
     RateLimited(u64),
 }
 
-/// JWT claims (the body of every access / refresh token).
-///
-/// The `sub` is the user UUID, `roles` is duplicated into the token
-/// to avoid a DB lookup on every request (revocation is handled by
-/// the access-token TTL + the refresh-token blacklist in Redis).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
-    /// Subject (user UUID).
+
     pub sub: Uuid,
-    /// Issuer.
+
     pub iss: String,
-    /// Issued-at (unix seconds).
+
     pub iat: i64,
-    /// Expiry (unix seconds).
+
     pub exp: i64,
-    /// Token kind (`"access"` or `"refresh"`).
+
     pub kind: TokenKind,
-    /// Roles embedded for fast RBAC checks.
+
     pub roles: Vec<Role>,
-    /// Token type scope (e.g. `mobile`, `web`, `admin`).
+
     pub scope: String,
 }
 
-/// Distinguishes access tokens from refresh tokens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TokenKind {
-    /// Short-lived API access token.
+
     Access,
-    /// Long-lived refresh token (used to mint access tokens).
+
     Refresh,
 }
 
 impl TokenKind {
-    /// Snake-case identifier.
+
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Access => "access",
@@ -98,27 +72,24 @@ impl TokenKind {
     }
 }
 
-/// The authenticated session that handlers receive via the
-/// `AuthnUser` extractor.
 #[derive(Debug, Clone)]
 pub struct AuthSession {
-    /// User id from the JWT.
+
     pub user_id: Uuid,
-    /// Roles copied from the JWT.
+
     pub roles: Vec<Role>,
-    /// Expiry of the underlying access token.
+
     pub expires_at: DateTime<Utc>,
-    /// Token scope (`mobile` / `web` / `admin`).
+
     pub scope: String,
 }
 
 impl AuthSession {
-    /// `true` iff the user has the given role.
+
     pub fn has_role(&self, role: Role) -> bool {
         self.roles.contains(&role)
     }
 
-    /// `true` iff the user is admin-level.
     pub fn is_admin(&self) -> bool {
         self.roles
             .iter()
@@ -126,38 +97,24 @@ impl AuthSession {
     }
 }
 
-/// Public-safe user view (no password hash).
-///
-/// M14 fields match the NEW_DB-aligned `User` aggregate:
-/// - `username` (was `email`)
-/// - `first_name` + `last_name` (was `display_name`)
-/// - no `locale` (locale comes from JWT / Accept-Language per M11)
-///
-/// The `permissions` vector is the effective set returned by the
-/// stored procedure (role grants + explicit allow − deny). The
-/// frontend matches these codes to decide which pages / buttons to
-/// render — keeping the policy on the backend and the rendering on
-/// the client.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct PublicUser {
-    /// Stable user id (GUID v4).
+
     pub id: Uuid,
-    /// Unique login name (NEW_DB schema; was `email` pre-M14).
+
     pub username: String,
-    /// Given name (NEW_DB schema).
+
     pub first_name: String,
-    /// Family name (NEW_DB schema).
+
     pub last_name: String,
-    /// Roles assigned via `[user_user_role]` join (M14).
+
     pub roles: Vec<Role>,
-    /// Effective permissions (SCREAMING_SNAKE_CASE codes, e.g.
-    /// `"JOBS_VIEW"`, `"JOBS_CREATE"`). Empty vec means the
-    /// SP returned no rows or all codes were unknown to Rust.
+
     pub permissions: Vec<Permission>,
-    /// Account lifecycle status (0=Active, 1=Suspended, 2=Locked, 3=Disabled).
+
     pub status: crate::user::UserStatus,
-    /// UTC timestamp the user record was first persisted.
+
     pub created_at: DateTime<Utc>,
 }
 
@@ -176,18 +133,17 @@ impl From<&crate::user::User> for PublicUser {
     }
 }
 
-/// Result of a successful login / refresh.
 #[derive(Debug, Clone, Serialize)]
 pub struct TokenPair {
-    /// Short-lived access token.
+
     pub access_token: String,
-    /// Long-lived refresh token.
+
     pub refresh_token: String,
-    /// Access token TTL in seconds.
+
     pub access_ttl_secs: i64,
-    /// Refresh token TTL in seconds.
+
     pub refresh_ttl_secs: i64,
-    /// Token type (`"Bearer"`).
+
     pub token_type: &'static str,
 }
 
@@ -260,14 +216,7 @@ mod tests {
 
     #[test]
     fn public_user_exposes_permissions_as_codes() {
-        // The frontend matches these exact strings, so the
-        // serialization shape is part of the API contract.
-        //
-        // M21 cleanup: the `PAGE_*_VIEW` prefix was dropped from page
-        // permissions when `code()` was renamed (e.g.
-        // `PAGE_PERMISSIONS_VIEW` → `PERMISSIONS_VIEW`). This test
-        // had drifted to the old `PAGE_JOBS_VIEW` expectation; updated
-        // to match the current code() output.
+
         let now = Utc::now();
         let u = crate::user::User {
             id: Uuid::new_v4(),

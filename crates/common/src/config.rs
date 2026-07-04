@@ -1,34 +1,10 @@
-//! Configuration loader (ตัวโหลดค่าตั้งค่า).
-//!
-//! Loads [`Settings`] from environment variables (prefix `KOKKAK_`,
-//! separator `__`) and validates them at startup. Process exits
-//! fast on misconfiguration (fail-fast principle).
-//!
-//! ## Environment variable convention
-//!
-//! ```text
-//! KOKKAK_<SECTION>__<KEY>=value
-//! ```
-//!
-//! Examples:
-//! - `KOKKAK_SERVER__ADDR=0.0.0.0:3000`
-//! - `KOKKAK_SERVER__WORKERS=4`
-//! - `KOKKAK_LOG__FORMAT=json`  (or `pretty`)
-//! - `KOKKAK_DATABASE__SQLSERVER_URL=sqlserver://...`
-//! - `KOKKAK_REDIS__URL=redis://host:6379`
-//! - `KOKKAK_NATS__URL=nats://host:4222`
-//! - `KOKKAK_MONGO__URL=mongodb://host:27017`
-//! - `KOKKAK_MONGO__DATABASE=kokkak`
-//! - `KOKKAK_DATA_DIR__PATH=./data/json_db`
-//! - `KOKKAK_AUTH__JWT_SECRET=...`
+
 
 use figment::providers::{Env, Format, Toml};
 use figment::Figment;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Read `.env.production` or `.env.dev` from the current directory and set
-/// any key=value pairs as environment variables (skips keys already set).
 fn load_env_file() {
     let candidates = [".env.production", ".env.dev"];
     for path in &candidates {
@@ -47,24 +23,23 @@ fn load_env_file() {
                     }
                 }
             }
-            return; // หยุดที่ไฟล์แรกที่เจอ
+            return;
         }
     }
 }
 
-/// Errors when loading or validating configuration.
 #[derive(Debug, Error)]
 pub enum ConfigError {
-    /// Underlying figment provider error (missing/invalid env, parse error, etc.).
+
     #[error("config provider error: {0}")]
     Figment(#[from] Box<figment::Error>),
 
-    /// Semantically invalid value: a specific setting failed a post-load check.
+
     #[error("invalid config: key={key}, {message}")]
     Invalid {
-        /// Config key that failed validation (e.g. `"server.addr"`).
+
         key: String,
-        /// Human-readable reason (used in error messages + logs).
+
         message: String,
     },
 }
@@ -75,154 +50,131 @@ impl From<figment::Error> for ConfigError {
     }
 }
 
-/// Top-level settings struct (โครงสร้างตั้งค่าระดับบนสุด).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct Settings {
-    /// HTTP server settings (การตั้งค่า HTTP server).
+
     #[serde(default)]
     pub server: ServerSettings,
 
-    /// Logging settings (การตั้งค่า log).
+
     #[serde(default)]
     pub log: LogSettings,
 
-    /// SQL Server database settings (T06).
-    /// Empty by default; production MUST set `KOKKAK_DATABASE__SQLSERVER_URL`.
-    /// Acts as the **catch-all** for [`Settings::database_topology`].
+
+
+
     #[serde(default)]
     pub database: DatabaseSettings,
 
-    /// Multi-DB connection topology (M12). One pool per
-    /// [`DbRole`]. When a role's URL is empty it inherits from
-    /// the legacy [`Self::database`] field. See module-level
-    /// docs for the env-var contract.
+
+
+
+
     #[serde(default)]
     pub database_topology: DatabaseTopologySettings,
 
-    /// Redis cache + pub/sub settings (T07, T07A).
+
     #[serde(default)]
     pub redis: RedisSettings,
 
-    /// Permission-cache TTL (M15-prep). The cache stores per-user
-    /// `(user_guid, code) -> bool` results keyed at
-    /// `kokkak:v1:perm:{user_guid}:{code}` (AGENTS.md §9.2).
+
+
+
     #[serde(default)]
     pub permission_cache: PermissionCacheSettings,
 
-    /// NATS JetStream queue settings (T08).
+
     #[serde(default)]
     pub nats: NatsSettings,
 
-    /// MongoDB settings (T09).
+
     #[serde(default)]
     pub mongo: MongoSettings,
 
-    /// JSON-DB simulation directory (M1.5 / M2 / M3).
+
     #[serde(default)]
     pub data_dir: DataDirSettings,
 
-    /// Auth / JWT settings (M2).
+
     #[serde(default)]
     pub auth: AuthSettings,
 
-    /// Deployment environment (T-11). Defaults to `development`;
-    /// `production` enables the strict validation path
-    /// (TLS must be enabled, etc.).
+
+
+
     #[serde(default)]
     pub environment: Environment,
 
-    /// TLS / HTTPS settings (T-08). Disabled by default so dev
-    /// runs can use plain HTTP on `server.addr`. Production
-    /// deployments enable TLS and supply cert + key paths.
+
+
+
     #[serde(default)]
     pub tls: TlsSettings,
 
-    /// HTTP middleware stack (T-06): CORS allowlist, request
-    /// timeout, response compression. Defaults are production-safe
-    /// (deny CORS, 30 s timeout, compression on).
+
+
+
     #[serde(default)]
     pub middleware: MiddlewareSettings,
 
-    /// Object-storage settings (M9). Selects the `Storage` adapter
-    /// at startup. Precedence: `s3_bucket` wins → `local_path` →
-    /// in-memory fallback. See [`StorageSettings::build`] for the
-    /// wiring rules.
+
+
+
+
     #[serde(default)]
     pub storage: StorageSettings,
 
-    /// Image-processor settings (M9-extra). Controls the
-    /// `image_processor` module in `kokkak-infra` — input size
-    /// cap, resize ceiling, WebP quality.
+
+
+
     #[serde(default)]
     pub image: ImageProcessorSettings,
 }
 
-/// Object-storage adapter selection (M9 / T-16 variant).
-///
-/// The `Storage` port lives in `kokkak_domain::storage`; this
-/// struct only picks the concrete adapter at startup.
-///
-/// Env contract:
-/// - `KOKKAK_STORAGE__S3_BUCKET` — when set, build [`S3Storage`]
-///   (production default). Other S3 knobs live alongside it
-///   (`KOKKAK_STORAGE__S3_ENDPOINT`, `S3_REGION`, `S3_ACCESS_KEY`,
-///   `S3_SECRET_KEY`, `S3_PATH_STYLE`).
-/// - `KOKKAK_STORAGE__LOCAL_PATH` — when `S3_BUCKET` is unset but
-///   this is set, build [`LocalStorage`] with the given root.
-///   Useful for the Strangler transition (legacy ASP.NET files on
-///   a shared mount) and for dev runs without MinIO.
-/// - When both are unset, fall back to [`MemoryStorage`] (in-process
-///   `HashMap`; non-persistent — fine for unit tests only).
-///
-/// ponytail: the env-driven precedence (`s3 > local > memory`)
-/// matches the project's "S3 in prod, local in dev" reality
-/// without forcing a code change between the two. The factory
-/// returns `Arc<dyn Storage>` so call sites never branch on the
-/// concrete adapter.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StorageSettings {
-    /// S3 bucket name. Empty = S3 disabled.
+
     #[serde(default)]
     pub s3_bucket: String,
 
-    /// S3 endpoint (e.g. `https://s3.amazonaws.com`,
-    /// `http://minio.local:9000`). Empty = AWS default.
+
+
     #[serde(default)]
     pub s3_endpoint: String,
 
-    /// S3 region (e.g. `us-east-1` for MinIO).
+
     #[serde(default = "default_storage_s3_region")]
     pub s3_region: String,
 
-    /// S3 access key id. Empty = rely on the AWS SDK chain.
+
     #[serde(default)]
     pub s3_access_key: String,
 
-    /// S3 secret key. Empty = rely on the AWS SDK chain.
+
     #[serde(default)]
     pub s3_secret_key: String,
 
-    /// `true` for MinIO / non-AWS endpoints (path-style URLs).
+
     #[serde(default)]
     pub s3_path_style: bool,
 
-    /// Local-filesystem root directory. Empty = local disabled.
-    /// The `LocalStorage` adapter creates the directory on demand.
+
+
     #[serde(default)]
     pub local_path: String,
 
-    /// T-23-b: HMAC-SHA256 secret for signing `/files/*` URLs.
-    /// Min 32 bytes (same threshold as JWT per AGENTS.md §21.11).
-    /// Rotating invalidates every URL the API has ever handed
-    /// out (clients re-fetch on next page load).
+
+
+
+
     #[serde(default)]
     pub signed_url_secret: String,
 
-    /// T-23-b: TTL (seconds) for signed `/files/*` URLs.
-    /// Default 600 = 10 min — long enough to scroll through one
-    /// user's six KYC attachments, short enough to limit the
-    /// blast radius of a leaked URL in browser history /
-    /// access logs. Range enforced in `StorageSettings::validate`.
+
+
+
+
+
     #[serde(default = "default_signed_url_ttl_secs")]
     pub signed_url_ttl_secs: u32,
 }
@@ -248,10 +200,10 @@ impl Default for StorageSettings {
 }
 
 impl StorageSettings {
-    /// Validate sign + TTL knobs. Production requires a non-empty
-    /// secret (in any storage mode — even S3 benefits from the
-    /// API proxying through `/files/*` so the same signed URL
-    /// contract covers both adapters).
+
+
+
+
     pub fn signed_url_knobs_valid(&self) -> Result<(), ConfigError> {
         if self.signed_url_secret.trim().is_empty() {
             return Err(ConfigError::Invalid {
@@ -282,15 +234,15 @@ impl StorageSettings {
 }
 
 impl StorageSettings {
-    /// Pick the concrete adapter based on which env knobs are set.
-    ///
-    /// Precedence: **S3** (prod) → **Local** (transition / dev) →
-    /// **Memory** (unit tests). The fallback to memory is a
-    /// deliberate ponytail simplification — `cargo test` then
-    /// doesn't need MinIO running. Production deployments MUST set
-    /// `KOKKAK_STORAGE__S3_BUCKET` (or `KOKKAK_STORAGE__LOCAL_PATH`
-    /// for the Strangler transition) so the API doesn't run on a
-    /// non-persistent store.
+
+
+
+
+
+
+
+
+
     pub fn adapter_kind(&self) -> StorageAdapterKind {
         if !self.s3_bucket.trim().is_empty() {
             StorageAdapterKind::S3
@@ -302,21 +254,19 @@ impl StorageSettings {
     }
 }
 
-/// Which concrete `Storage` adapter `StorageSettings::adapter_kind`
-/// resolved to. Useful for `tracing::info!` boot logs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum StorageAdapterKind {
-    /// S3 / S3-compatible (MinIO). Production default.
+
     S3,
-    /// Local filesystem. Strangler transition + dev without MinIO.
+
     Local,
-    /// In-process `HashMap`. Unit tests only.
+
     Memory,
 }
 
 impl StorageAdapterKind {
-    /// Short lowercase string for boot logs.
+
     pub fn as_str(self) -> &'static str {
         match self {
             StorageAdapterKind::S3 => "s3",
@@ -330,40 +280,22 @@ fn default_storage_s3_region() -> String {
     "us-east-1".into()
 }
 
-/// Image-processor settings (M9-extra).
-///
-/// Drives the `image_processor` module in `kokkak-infra` —
-/// any caller (handler / seeder / test) feeds raw image bytes
-/// in, the processor decodes the format, transcodes to lossy
-/// WebP, stores via `Storage`, and returns the new key.
-///
-/// Env contract:
-/// - `KOKKAK_IMAGE__MAX_INPUT_BYTES`     — cap on raw input (default 5 MiB)
-/// - `KOKKAK_IMAGE__MAX_DIMENSION_PX`    — cap on longest side after resize (default 2048)
-/// - `KOKKAK_IMAGE__WEBP_QUALITY`        — 1-100, lossy quality (default 80)
-///
-/// Ponytail: the defaults are tuned for **user profile / ID /
-/// bank-book** uploads — i.e. documents + portraits, not high-res
-/// photography. A photographer-grade setting would push
-/// `max_dimension_px` to 4096 and `webp_quality` to 90, but that
-/// doubles the storage footprint for no benefit on a handyman
-/// marketplace.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ImageProcessorSettings {
-    /// Maximum raw input size in bytes. Anything bigger is
-    /// rejected before decode so a single malicious upload
-    /// can't blow up memory.
+
+
+
     #[serde(default = "default_image_max_input_bytes")]
     pub max_input_bytes: usize,
 
-    /// Longest-side cap after the resize step. Set to `0` to
-    /// disable resizing (original dimensions preserved).
+
+
     #[serde(default = "default_image_max_dimension_px")]
     pub max_dimension_px: u32,
 
-    /// WebP lossy quality, 1..=100. Higher = better quality,
-    /// bigger file. Default `80` (Google's recommended
-    /// sweet-spot for on-screen images).
+
+
+
     #[serde(default = "default_image_webp_quality")]
     pub webp_quality: u8,
 }
@@ -379,11 +311,11 @@ impl Default for ImageProcessorSettings {
 }
 
 fn default_image_max_input_bytes() -> usize {
-    // 1 MiB — fits comfortably in the 16 MiB global body limit
-    // when the admin/users/full payload includes up to 6
-    // base64-encoded images. Larger images should be downscaled
-    // client-side before upload; the processor also caps
-    // dimensions at 2048 px.
+
+
+
+
+
     1024 * 1024
 }
 fn default_image_max_dimension_px() -> u32 {
@@ -393,48 +325,47 @@ fn default_image_webp_quality() -> u8 {
     80
 }
 
-/// HTTP server settings.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ServerSettings {
-    /// Bind address (e.g. `0.0.0.0:3000`).
+
     #[serde(default = "default_addr")]
     pub addr: String,
 
-    /// Number of Tokio worker threads the API runtime spawns.
-    /// T-19: wired into the runtime by `crates/api/src/main.rs` via
-    /// `tokio::runtime::Builder::new_multi_thread().worker_threads(...)`.
-    /// Default `4`. Raise it on boxes with more CPU headroom; on
-    /// containerised deploys match the pod's CPU limit.
+
+
+
+
+
     #[serde(default = "default_workers")]
     pub workers: usize,
 
-    /// Trust the `X-Forwarded-For` request header when extracting
-    /// the client IP. **MUST be `true` whenever the service runs
-    /// behind a reverse proxy** (IIS / nginx / envoy / ALB / CF)
-    /// — the proxy strips any client-supplied header and appends
-    /// the real peer IP. Set to `false` when the service is hit
-    /// directly from the internet (no proxy in front), where
-    /// trusting `X-Forwarded-For` would let any client spoof the
-    /// audit-log + per-(username, IP) rate-limit IP. Default `true`
-    /// because every Kokkeak deployment ships behind IIS.
+
+
+
+
+
+
+
+
+
     #[serde(default = "default_trust_forwarded_for")]
     pub trust_forwarded_for: bool,
 
-    /// T-23 / image-serving: public-facing base URL that the API
-    /// uses to build download links for stored blobs
-    /// (`<base>/files/<storage_key>` on local FS, or as a prefix
-    /// for S3 presigned URLs). This MUST be the URL the **client**
-    /// sees, not the bind address — production runs the API on a
-    /// loopback behind IIS / nginx / ALB which terminates TLS and
-    /// rewrites the path. Reusing `addr` here would emit
-    /// `http://127.0.0.1:18080/...` URLs the mobile app can't
-    /// resolve.
-    ///
-    /// Empty string = "URL unknown" — response handlers emit
-    /// `Option::None` for every `*_img_url` field so clients can
-    /// distinguish "no URL wired yet" from "image missing".
-    /// Validation below rejects empty in production when a
-    /// storage adapter is wired.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     #[serde(default)]
     pub public_base_url: String,
 }
@@ -450,10 +381,9 @@ impl Default for ServerSettings {
     }
 }
 
-/// Logging settings.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LogSettings {
-    /// Output format for the structured logger.
+
     #[serde(default = "default_log_format")]
     pub format: LogFormat,
 }
@@ -466,35 +396,26 @@ impl Default for LogSettings {
     }
 }
 
-/// One slot in the multi-DB topology (M12).
-///
-/// Each role corresponds to a physical SQL Server database
-/// (`KOKKAK_MASTER`, `KOKKAK_CATALOG`, ...). Lives in the
-/// `config` module so the topology struct (which needs it)
-/// can live above `infra`. Adding a new role is a deliberate
-/// change: the compiler will guide every repository that needs
-/// updating via [`DatabaseTopologySettings::for_role`] / the
-/// matching `Mssql*Repository::new` calls.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum DbRole {
-    /// `KOKKAK_MASTER` — auth, user, RBAC, geo, config, bank, vat, commission, transport.
+
     Master,
-    /// `KOKKAK_CATALOG` — services, categories, fees, warranties.
+
     Catalog,
-    /// `KOKKAK_ORDER` — orders, bodies, stages, assignments, reviews, addons.
+
     Order,
-    /// `KOKKAK_PAYMENT` — payments, statements, payouts.
+
     Payment,
-    /// `KOKKAK_LOG` — audit, error log, login history.
+
     Log,
-    /// `KOKKAK_REPORT` — read-only views for reports.
+
     Report,
-    /// `KOKKAK_TEMP` — migration staging.
+
     Temp,
 }
 
 impl DbRole {
-    /// Canonical env-var suffix: `KOKKAK_DATABASE__MASTER_URL`, etc.
+
     pub const fn env_suffix(self) -> &'static str {
         match self {
             Self::Master => "MASTER_URL",
@@ -507,7 +428,7 @@ impl DbRole {
         }
     }
 
-    /// Stable string id (used in logs + health checks).
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Master => "master",
@@ -520,7 +441,7 @@ impl DbRole {
         }
     }
 
-    /// All roles, in stable iteration order.
+
     pub const ALL: [DbRole; 7] = [
         Self::Master,
         Self::Catalog,
@@ -538,28 +459,27 @@ impl std::fmt::Display for DbRole {
     }
 }
 
-/// SQL Server database settings (T06).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DatabaseSettings {
-    /// Tiberius connection URL.
+
     #[serde(default)]
     pub sqlserver_url: String,
 
-    /// bb8 connection-pool max size (per instance). See AGENTS.md § 7.2.
+
     #[serde(default = "default_db_pool_size")]
     pub pool_size: u32,
 
-    /// Connection-acquisition timeout in seconds.
+
     #[serde(default = "default_db_connect_timeout_secs")]
     pub connect_timeout_secs: u64,
 
-    /// Path to SQL migration files (T09). Read by the migration runner.
+
     #[serde(default = "default_migrations_dir")]
     pub migrations_dir: String,
 }
 
 impl DatabaseSettings {
-    /// `true` when a real SQL Server URL has been configured.
+
     pub fn is_configured(&self) -> bool {
         !self.sqlserver_url.trim().is_empty() && self.sqlserver_url != "disabled"
     }
@@ -576,19 +496,15 @@ impl Default for DatabaseSettings {
     }
 }
 
-/// Convenience constructor used by tests and by
-/// [`crate::config::DatabaseTopologySettings::from_settings`].
-/// Lets the caller write `DatabaseSettings::from_url("Server=...")`
-/// without juggling four `Default` fields.
 impl DatabaseSettings {
-    /// Build a `DatabaseSettings` from a single connection URL,
-    /// using the default pool size / timeout / migrations dir.
-    ///
-    /// Recognised URL forms (forwarded verbatim to
-    /// `kokkak_infra::db::mssql::parse_connection_url`):
-    /// - ADO.NET: `Server=host;Database=db;User Id=u;Password=p`
-    /// - URL:     `mssql://user:pass@host:1433/db?encrypt=true`
-    /// - JDBC:    `jdbc:sqlserver://host:1433;database=db;...`
+
+
+
+
+
+
+
+
     pub fn from_url(url: impl Into<String>) -> Self {
         Self {
             sqlserver_url: url.into(),
@@ -597,72 +513,48 @@ impl DatabaseSettings {
     }
 }
 
-/// Multi-DB connection topology (M12).
-///
-/// Implements the per-role connection-strings defined in
-/// `AGENTS.md` § 7.1. Each role (`master`, `catalog`, `order`, ...)
-/// has its own [`DatabaseSettings`]. Roles whose URL is empty
-/// inherit from the `catch_all` slot, which itself is populated
-/// from the legacy [`Settings::database`] field at startup.
-///
-/// ## Env-var contract
-///
-/// ```text
-/// KOKKAK_DATABASE__SQLSERVER_URL          (legacy catch-all — still works)
-/// KOKKAK_DATABASE__CATCH_ALL_URL          (new — equivalent, takes precedence)
-/// KOKKAK_DATABASE__MASTER_URL             (per-role override)
-/// KOKKAK_DATABASE__CATALOG_URL            (per-role override)
-/// KOKKAK_DATABASE__ORDER_URL              (per-role override)
-/// KOKKAK_DATABASE__PAYMENT_URL            (per-role override)
-/// KOKKAK_DATABASE__LOG_URL                (per-role override)
-/// KOKKAK_DATABASE__REPORT_URL             (per-role override)
-/// KOKKAK_DATABASE__TEMP_URL               (per-role override)
-/// ```
-///
-/// The `Migrations` / `Pool size` / `Connect timeout` fields are
-/// per-role. If you set only the URL, defaults are used.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct DatabaseTopologySettings {
-    /// Fallback URL used by every role that has no per-role URL.
-    /// Mirrors the legacy `Settings.database.sqlserver_url` for
-    /// backward compat.
+
+
+
     #[serde(default)]
     pub catch_all: DatabaseSettings,
-    /// `KOKKAK_MASTER` — auth, user, RBAC, geo, config, bank, vat, commission, transport.
+
     #[serde(default)]
     pub master: DatabaseSettings,
-    /// `KOKKAK_CATALOG` — services, categories, fees, warranties.
+
     #[serde(default)]
     pub catalog: DatabaseSettings,
-    /// `KOKKAK_ORDER` — orders, bodies, stages, assignments, reviews, addons.
+
     #[serde(default)]
     pub order: DatabaseSettings,
-    /// `KOKKAK_PAYMENT` — payments, statements, payouts.
+
     #[serde(default)]
     pub payment: DatabaseSettings,
-    /// `KOKKAK_LOG` — audit, error log, login history.
+
     #[serde(default)]
     pub log: DatabaseSettings,
-    /// `KOKKAK_REPORT` — read-only views for reports.
+
     #[serde(default)]
     pub report: DatabaseSettings,
-    /// `KOKKAK_TEMP` — migration staging.
+
     #[serde(default)]
     pub temp: DatabaseSettings,
 }
 
 impl DatabaseTopologySettings {
-    /// Synthesise a topology from the top-level [`Settings`].
-    ///
-    /// For each role:
-    /// 1. If the per-role `sqlserver_url` is set, use it.
-    /// 2. Otherwise, if the top-level `database.sqlserver_url` is
-    ///    set, inherit it (preserving M10 behaviour).
-    /// 3. Otherwise, the role is unconfigured.
-    ///
-    /// Per-role `pool_size` / `connect_timeout_secs` /
-    /// `migrations_dir` follow the same precedence: per-role
-    /// > catch-all > default.
+
+
+
+
+
+
+
+
+
+
+
     pub fn from_settings(s: &Settings) -> Self {
         let mut out = DatabaseTopologySettings {
             catch_all: s.database.clone(),
@@ -676,10 +568,10 @@ impl DatabaseTopologySettings {
         out
     }
 
-    /// Borrow the settings for a role, with the catch-all fallback
-    /// applied. **Returns the slot itself, not the merged value** —
-    /// use this when the caller already knows the role is
-    /// configured and wants to inspect its own URL.
+
+
+
+
     pub fn slot(&self, role: crate::config::DbRole) -> &DatabaseSettings {
         match role {
             crate::config::DbRole::Master => &self.master,
@@ -692,7 +584,7 @@ impl DatabaseTopologySettings {
         }
     }
 
-    /// Mutable accessor — see [`Self::slot`].
+
     pub fn slot_mut(&mut self, role: crate::config::DbRole) -> &mut DatabaseSettings {
         match role {
             crate::config::DbRole::Master => &mut self.master,
@@ -705,19 +597,19 @@ impl DatabaseTopologySettings {
         }
     }
 
-    /// Effective `DatabaseSettings` for a role: per-role slot,
-    /// filled in with the catch-all values wherever the per-role
-    /// slot is empty. This is what the topology builder feeds to
-    /// `tiberius`.
+
+
+
+
     pub fn for_role(&self, role: crate::config::DbRole) -> DatabaseSettings {
         let slot = self.slot(role);
         if !slot.sqlserver_url.trim().is_empty() {
             return slot.clone();
         }
-        // Per-role URL empty: inherit the catch-all.
+
         if !self.catch_all.sqlserver_url.trim().is_empty() {
-            // Use the catch-all URL; keep the per-role pool size
-            // override if the operator set one.
+
+
             let mut out = self.catch_all.clone();
             if slot.pool_size != default_db_pool_size() {
                 out.pool_size = slot.pool_size;
@@ -733,16 +625,13 @@ impl DatabaseTopologySettings {
         slot.clone()
     }
 
-    /// Private helper for `from_settings`: read the per-role slot
-    /// from a `Settings.database_topology` instance.
+
+
     fn settings_for(&self, role: crate::config::DbRole) -> &DatabaseSettings {
         self.slot(role)
     }
 }
 
-/// Merge a per-role slot with the legacy catch-all. The per-role
-/// slot wins wherever it has been explicitly set. This is the
-/// serde-level version of [`DatabaseTopologySettings::for_role`].
 fn merge_with_fallback(
     per_role: &DatabaseSettings,
     catch_all: &DatabaseSettings,
@@ -763,22 +652,21 @@ fn merge_with_fallback(
     out
 }
 
-/// Redis cache + pub/sub settings (T07, T07A).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RedisSettings {
-    /// Redis connection URL.
+
     #[serde(default = "default_redis_url")]
     pub url: String,
 
-    /// deadpool-redis max pool size.
+
     #[serde(default = "default_redis_pool_size")]
     pub pool_size: usize,
 }
 
 impl RedisSettings {
-    /// `true` iff a real Redis URL is set (not the `redis://disabled` sentinel).
+
     pub fn is_configured(&self) -> bool {
-        !self.url.trim().is_empty() && self.url != "redis://disabled"
+        !self.url.trim().is_empty() && self.url != "redis:
     }
 }
 
@@ -791,11 +679,9 @@ impl Default for RedisSettings {
     }
 }
 
-/// M15-prep: TTL for the permission-check Redis cache (AGENTS.md §9.3
-/// group B — short-TTL because permission changes must propagate).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PermissionCacheSettings {
-    /// Cache TTL in seconds. Default: 300 (5 min).
+
     #[serde(default = "default_permission_cache_ttl_secs")]
     pub ttl_secs: u64,
 }
@@ -808,22 +694,20 @@ impl Default for PermissionCacheSettings {
     }
 }
 
-/// NATS JetStream settings (T08).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NatsSettings {
-    /// NATS connection URL.
+
     #[serde(default = "default_nats_url")]
     pub url: String,
 
-    /// Prefix prepended to every stream / subject name.
     #[serde(default = "default_nats_prefix")]
     pub stream_prefix: String,
 }
 
 impl NatsSettings {
-    /// `true` iff a real NATS URL is set (not the `nats://disabled` sentinel).
+
     pub fn is_configured(&self) -> bool {
-        !self.url.trim().is_empty() && self.url != "nats://disabled"
+        !self.url.trim().is_empty() && self.url != "nats:
     }
 }
 
@@ -836,20 +720,18 @@ impl Default for NatsSettings {
     }
 }
 
-/// MongoDB settings (T09).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MongoSettings {
-    /// MongoDB connection URL.
+
     #[serde(default = "default_mongo_url")]
     pub url: String,
 
-    /// Logical database name (e.g. `"kokkak"`).
     #[serde(default = "default_mongo_db")]
     pub database: String,
 }
 
 impl MongoSettings {
-    /// `true` iff a real MongoDB URL is set (not the `mongodb://disabled` sentinel).
+
     pub fn is_configured(&self) -> bool {
         !self.url.trim().is_empty() && self.url != "mongodb://disabled"
     }
@@ -864,13 +746,12 @@ impl Default for MongoSettings {
     }
 }
 
-/// JSON-DB simulation directory (M1.5 / M2 / M3).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DataDirSettings {
-    /// Directory where JSON-DB stores its files. Created if missing.
+
     #[serde(default = "default_data_dir_path")]
     pub path: String,
-    /// Delete the data dir on startup (dev convenience).
+
     #[serde(default)]
     pub reset_on_startup: bool,
 }
@@ -884,19 +765,18 @@ impl Default for DataDirSettings {
     }
 }
 
-/// Auth / JWT settings (M2).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AuthSettings {
-    /// HS256 secret. Required in prod; empty = dev / JSON-DB mode.
+
     #[serde(default)]
     pub jwt_secret: String,
-    /// Issuer claim (`iss`).
+
     #[serde(default = "default_auth_issuer")]
     pub issuer: String,
-    /// Access-token TTL in seconds.
+
     #[serde(default = "default_access_ttl")]
     pub access_ttl_secs: i64,
-    /// Refresh-token TTL in seconds.
+
     #[serde(default = "default_refresh_ttl")]
     pub refresh_ttl_secs: i64,
 }
@@ -913,91 +793,56 @@ impl Default for AuthSettings {
 }
 
 impl AuthSettings {
-    /// `true` iff a non-empty JWT secret is configured.
+
     pub fn is_configured(&self) -> bool {
         !self.jwt_secret.is_empty()
     }
 }
 
-/// Output format for the structured logger.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum LogFormat {
-    /// Newline-delimited JSON (for log aggregators).
+
     Json,
-    /// Human-readable pretty format (for local dev).
+
     Pretty,
 }
 
-/// Deployment environment (T-11 production enforcement builds on
-/// this). Set via `KOKKAK_ENVIRONMENT` (case-insensitive:
-/// `development` | `production`). Defaults to `development`.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Environment {
-    /// Local development: relaxed validation (TLS optional,
-    /// default secrets acceptable).
+
     #[default]
     Development,
-    /// Production deployment: stricter validation enforced in
-    /// [`Settings::validate`].
+
     Production,
 }
 
 impl Environment {
-    /// True when [`Self::Production`]. Convenience for the
-    /// production-only code paths.
+
     pub const fn is_production(self) -> bool {
         matches!(self, Self::Production)
     }
 }
 
-/// TLS / HTTPS settings (T-08).
-///
-/// Layered on top of [`ServerSettings`]: when
-/// [`TlsSettings::enabled`] is `false` the API still serves plain
-/// HTTP on `server.addr` (dev mode). When `true`, the
-/// [`crate::main`](kokkak_api) entry point must construct a
-/// `rustls` server config from `cert_path` + `key_path` and bind
-/// with `axum_server` (T-09); HSTS is added by middleware (T-10);
-/// production enforcement lives in [`Settings::validate`] (T-11).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TlsSettings {
-    /// Enable HTTPS. When `true`, `cert_path` and `key_path` must
-    /// point to readable PEM files (validated at startup, not by
-    /// `Settings::validate` — see T-09).
+
     #[serde(default)]
     pub enabled: bool,
 
-    /// Path to the PEM-encoded TLS certificate (full chain).
-    /// Required only when `enabled = true`.
     #[serde(default)]
     pub cert_path: Option<String>,
 
-    /// Path to the PEM-encoded TLS private key.
-    /// Required only when `enabled = true`.
     #[serde(default)]
     pub key_path: Option<String>,
 
-    /// Plain-HTTP listener port for the HTTPS redirect server
-    /// (T-10). Typical value: `80`. Set to `0` to disable.
-    /// Ignored when `enabled = false`.
     #[serde(default)]
     pub redirect_from_port: u16,
 
-    /// HSTS `max-age` in seconds. `0` = HSTS disabled.
-    /// Recommended for production: `31536000` (1 year).
-    /// Ignored when `enabled = false`.
     #[serde(default = "default_hsts_max_age_secs")]
     pub hsts_max_age_secs: u64,
 
-    /// Auto-reload on cert file change (T-12). When `true`, the
-    /// service watches `cert_path` + `key_path` for modifications
-    /// and triggers a graceful shutdown so systemd/k8s can restart
-    /// with the new chain (LE 90-day rotation). Defaults to `false`
-    /// because the restart causes a brief connection blip — operators
-    /// who can tolerate that opt in; everyone else can rely on the
-    /// periodic restart performed by their orchestrator.
     #[serde(default)]
     pub auto_reload: bool,
 }
@@ -1016,12 +861,11 @@ impl Default for TlsSettings {
 }
 
 impl TlsSettings {
-    /// Trimmed `cert_path` (empty when unset or blank).
+
     pub fn cert_path_or_empty(&self) -> &str {
         self.cert_path.as_deref().unwrap_or("").trim()
     }
 
-    /// Trimmed `key_path` (empty when unset or blank).
     pub fn key_path_or_empty(&self) -> &str {
         self.key_path.as_deref().unwrap_or("").trim()
     }
@@ -1034,9 +878,7 @@ fn default_workers() -> usize {
     4
 }
 fn default_trust_forwarded_for() -> bool {
-    // Default `true` so production behind IIS keeps working out of
-    // the box. Direct-internet deploys MUST set
-    // `KOKKAK_SERVER__TRUST_FORWARDED_FOR=false`.
+
     true
 }
 fn default_log_format() -> LogFormat {
@@ -1089,113 +931,49 @@ fn default_hsts_max_age_secs() -> u64 {
     0
 }
 
-/// HTTP middleware settings (T-06).
-///
-/// Loaded from env vars prefixed `KOKKAK_MIDDLEWARE__*`. Defaults
-/// are production-safe: deny all CORS origins, 30-second request
-/// timeout, compression on.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MiddlewareSettings {
-    /// Allowlist of CORS origins. Empty (default) means **deny all
-    /// cross-origin requests** — the browser will block the
-    /// request client-side. Operators MUST opt-in by setting
-    /// `KOKKAK_MIDDLEWARE__CORS_ALLOW_ORIGINS` to either a
-    /// comma-separated string (`https://app.example.com,https://admin.example.com`)
-    /// or a TOML array. The custom deserializer accepts both.
-    ///
-    /// Wildcard `*` is intentionally NOT supported because it
-    /// cannot be combined with `allow_credentials(true)`, and the
-    /// marketplace endpoints use cookies for the BFF.
+
     #[serde(default, deserialize_with = "deserialize_comma_list")]
     pub cors_allow_origins: Vec<String>,
 
-    /// Maximum request duration in seconds. `0` disables the
-    /// timeout entirely (NOT recommended for production — slow
-    /// handlers will tie up tokio workers forever).
     #[serde(default = "default_request_timeout_secs")]
     pub request_timeout_secs: u64,
 
-    /// Enable response compression (gzip/deflate/br based on the
-    /// client's `Accept-Encoding`). Defaults to `true` — the CPU
-    /// cost is negligible on modern hardware and saves bandwidth
-    /// for JSON-heavy mobile clients.
     #[serde(default = "default_compression_enabled")]
     pub compression_enabled: bool,
 
-    /// Per-IP rate limit (T-07). Disabled by default in dev so
-    /// hot-reload + integration tests don't trip the limiter;
-    /// production deployments should enable it (recommended 100
-    /// rps + burst 200, tuned per workload).
     #[serde(default)]
     pub rate_limit: RateLimitSettings,
 
-    /// T-16: maximum request body size in bytes. Requests larger
-    /// than this short-circuit with HTTP 413 (`Payload Too Large`)
-    /// before the handler is ever invoked. Default 2 MiB — plenty
-    /// for JSON DTOs (typical payload < 32 KiB) and small image
-    /// uploads; raise for routes that need to accept large files
-    /// (those routes should override per-route in the router).
     #[serde(default = "default_request_body_limit_bytes")]
     pub request_body_limit_bytes: usize,
 
-    /// T-16: maximum number of in-flight requests the server will
-    /// handle at once. When the cap is reached, new requests are
-    /// immediately shed with HTTP 503 (`Service Unavailable`) so
-    /// the operator / load balancer can back off. Default 512
-    /// (≈ 4× the default request_timeout of 30s at ~17 rps
-    /// sustained — sized for a small 2-vCPU pod).
     #[serde(default = "default_max_concurrency")]
     pub max_concurrency: usize,
 
-    /// HTTP idempotency cache (T-14). Disabled by default in dev
-    /// (no point caching test traffic); production deployments
-    /// should enable it so mobile retries on flaky networks don't
-    /// create duplicate orders/payments.
     #[serde(default)]
     pub idempotency: IdempotencySettings,
 
-    /// Feature flags for the Strangler migration (T-31).
-    /// Each flag corresponds to an endpoint group; flipping
-    /// `false` returns 404 from the Rust service and the
-    /// upstream proxy / BFF routes the request to the legacy
-    /// ASP.NET service. All flags default to `true` (Rust
-    /// serves traffic) — operators flip specific ones when
-    /// they're not ready to migrate a route group.
     #[serde(default)]
     pub features: FeatureFlagSettings,
 }
 
-/// Feature flag toggles for the Strangler migration (T-31).
-///
-/// Each flag is a switchable endpoint group. While migrating
-/// from ASP.NET, operators disable a flag to send a route
-/// group back to the legacy service — no Rust redeploy
-/// required (settings reload picks it up next request).
-///
-/// Per-flag notes:
-///   - `auth`        — login / register / refresh / logout
-///   - `orders`      — create / get / list / track
-///   - `payments`    — confirm / payout / statement
-///   - `chat`        — REST + WebSocket
-///   - `admin`       — RBAC, content mgmt, audit
-///
-/// Adding a new flag: add a field here, default `true`, then
-/// wrap the route(s) with [`crate::middleware::feature_gate`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FeatureFlagSettings {
-    /// `/api/v1/auth/*` — login / register / refresh / logout.
+
     #[serde(default = "default_flag_enabled")]
     pub auth: bool,
-    /// `/api/v1/orders/*` — create / get / list / track.
+
     #[serde(default = "default_flag_enabled")]
     pub orders: bool,
-    /// `/api/v1/payments/*` — confirm / payout / statement.
+
     #[serde(default = "default_flag_enabled")]
     pub payments: bool,
-    /// `/api/v1/chat/*` — REST + WebSocket.
+
     #[serde(default = "default_flag_enabled")]
     pub chat: bool,
-    /// `/api/v1/admin/*` — RBAC, content mgmt, audit.
+
     #[serde(default = "default_flag_enabled")]
     pub admin: bool,
 }
@@ -1216,26 +994,15 @@ fn default_flag_enabled() -> bool {
     true
 }
 
-/// HTTP idempotency settings (T-14). See
-/// [`crate::middleware::idempotency`] for the on-the-wire contract.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IdempotencySettings {
-    /// Master switch. `false` (default) means the middleware
-    /// short-circuits to a passthrough — no cache, no overhead.
+
     #[serde(default)]
     pub enabled: bool,
 
-    /// Time-to-live for cached responses. Matches the IETF
-    /// `Idempotency-Key` draft and Stripe's contract. Default
-    /// 24 hours — long enough to survive an overnight mobile
-    /// retry, short enough to bound the storage footprint.
     #[serde(default = "default_idempotency_ttl_secs")]
     pub ttl_secs: u64,
 
-    /// Soft cap on the number of cached entries. The in-memory
-    /// store evicts half the entries when the cap is hit
-    /// (Ponytail: half-flush is the cheapest correct policy;
-    /// swap for LRU when traffic demands).
     #[serde(default = "default_idempotency_max_entries")]
     pub max_entries: usize,
 }
@@ -1251,62 +1018,35 @@ impl Default for IdempotencySettings {
 }
 
 fn default_idempotency_ttl_secs() -> u64 {
-    86_400 // 24 hours
+    86_400
 }
 
 fn default_idempotency_max_entries() -> usize {
     10_000
 }
 
-/// R-02: backend for the per-IP rate limit.
-///
-/// `Memory` (default) preserves the per-instance `tower_governor`
-/// GCRA that T-07 wired — each replica counts its own traffic.
-/// This is correct for a single-pod deployment but **not** for
-/// HPA > 1, where a noisy client gets `limit × pod_count` total
-/// budget. `Redis` shares the counter across all replicas via
-/// an atomic `INCR + EXPIRE` Lua script — required before
-/// running more than one replica behind a load balancer.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum RateLimitBackend {
-    /// Per-instance in-memory GCRA via `tower_governor`.
-    /// Default — same behaviour as before R-02.
+
     #[default]
     Memory,
-    /// Shared counter in Redis. Fails open if Redis is down
-    /// (per AGENTS.md §9.3 group C: rate limit is volatile).
+
     Redis,
 }
 
-/// Per-IP rate limit (T-07 + R-02). Default OFF (dev mode) — the
-/// marketplace endpoints sit behind the BFF in production, so
-/// per-IP limiting at the Rust layer is a backstop rather than
-/// the primary defence.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RateLimitSettings {
-    /// Master switch. `false` (default) means no rate-limit layer
-    /// is wired — the request pipeline runs unmodified.
+
     #[serde(default)]
     pub enabled: bool,
 
-    /// R-02: counter backend. `memory` (default) keeps the
-    /// per-instance `tower_governor` behaviour; `redis` shares
-    /// the counter across all replicas. Ignored when
-    /// [`Self::enabled`] is false.
     #[serde(default)]
     pub backend: RateLimitBackend,
 
-    /// Sustained request rate per IP, in requests/second. Must be
-    /// >= 1 if [`Self::enabled`] is true.
     #[serde(default = "default_rate_per_second")]
     pub requests_per_second: u32,
 
-    /// Token-bucket burst capacity (memory backend) OR max
-    /// requests per window (redis backend). A burst above the
-    /// sustained rate is allowed as long as the bucket has
-    /// tokens (memory) or the window has not yet rolled over
-    /// (redis). Must be >= 1 if [`Self::enabled`] is true.
     #[serde(default = "default_rate_burst_size")]
     pub burst_size: u32,
 }
@@ -1345,10 +1085,6 @@ impl Default for MiddlewareSettings {
     }
 }
 
-/// Accept either a JSON/TOML array of strings or a single
-/// comma-separated string. figment's Env provider hands us the
-/// latter (env vars are scalars), so we split on `,` to keep the
-/// operator UX ergonomic without paying for a custom provider.
 fn deserialize_comma_list<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -1380,40 +1116,17 @@ fn default_compression_enabled() -> bool {
 }
 
 fn default_request_body_limit_bytes() -> usize {
-    // 16 MiB — accommodates the `POST /api/v1/admin/users/full`
-    // payload when the caller includes up to 6 base64-encoded
-    // user attachments (profile + bank book + 4 ID docs). Each
-    // raw image is capped at ~1 MiB by the image processor
-    // (KOKKAK_IMAGE__MAX_INPUT_BYTES); 6 images at 1 MiB raw
-    // become ~8 MiB base64 + JSON envelope ≈ 9 MiB total.
-    //
-    // ponytail: the global ceiling is widened to 16 MiB because
-    // the admin route legitimately needs that budget. The DoS
-    // risk is bounded by `admin_flag` (RBAC gate) — random
-    // internet callers can't reach the handler — so a 16 MiB
-    // per-request ceiling is acceptable for an authenticated
-    // admin web console. Lower this knob in
-    // `KOKKAK_MIDDLEWARE__REQUEST_BODY_LIMIT_BYTES` to harden
-    // non-admin deployments that may have removed the gate.
+
     16 * 1024 * 1024
 }
 
 fn default_max_concurrency() -> usize {
-    // 512 in-flight requests. Sized for a 2-vCPU pod: each in-flight
-    // request uses ~1 connection slot + a small heap allocation,
-    // so 512 ≈ 256 per vCPU which is comfortable headroom.
-    // ponytail: this is a global cap on the entire app (not per
-    // route). Upgrade path: per-route `ConcurrencyLimitLayer` if a
-    // single endpoint (e.g. a slow report) needs a different budget.
+
     512
 }
 
 impl Settings {
-    /// Load from environment variables. Fails fast on errors.
-    ///
-    /// Before reading env vars, looks for `.env.production` then `.env.dev`
-    /// in the current working directory and loads whichever is found first.
-    /// Variables already set in the environment take precedence.
+
     pub fn load() -> Result<Self, ConfigError> {
         load_env_file();
         let figment = Figment::new()
@@ -1424,7 +1137,6 @@ impl Settings {
         Ok(settings)
     }
 
-    /// Validate the loaded settings.
     pub fn validate(&self) -> Result<(), ConfigError> {
         if self.server.addr.trim().is_empty() {
             return Err(ConfigError::Invalid {
@@ -1450,10 +1162,7 @@ impl Settings {
                 message: "must be >= 1".into(),
             });
         }
-        // M12: also check the per-role slots in the topology.
-        // They use the same defaults as `database` so a zero
-        // here is a misconfiguration regardless of whether the
-        // URL itself is set.
+
         for role in DbRole::ALL {
             let s = self.database_topology.slot(role);
             if s.pool_size == 0 {
@@ -1496,12 +1205,7 @@ impl Settings {
                 message: "must not be empty".into(),
             });
         }
-        // T-08: when TLS is enabled, both paths must be present
-        // and non-empty. File existence + readability are checked
-        // at startup by the T-09 server bootstrap, not here, so a
-        // config-only validation pass stays fast and doesn't depend
-        // on the filesystem layout (k8s mounts the secret after
-        // process start in some deployment flows).
+
         if self.tls.enabled {
             if self.tls.cert_path_or_empty().is_empty() {
                 return Err(ConfigError::Invalid {
@@ -1516,17 +1220,7 @@ impl Settings {
                 });
             }
         }
-        // T-11 (post-IIS-front): production must bind to a
-        // **loopback** address so the only path to the API is the
-        // trusted upstream proxy (IIS / nginx / envoy / ALB) that
-        // terminates TLS and appends `X-Forwarded-For`. The Rust
-        // service itself no longer owns TLS — `KOKKAK_TLS__ENABLED`
-        // stays `false` in production; cert / private key live in
-        // the proxy's certificate store, not in this process.
-        // A non-loopback bind would expose plain HTTP directly to
-        // the internet, which is the #1 way to leak JWTs and PII
-        // through a misconfigured proxy. Dev is unaffected — the
-        // default `0.0.0.0:3000` is still valid for local runs.
+
         if self.environment.is_production() {
             match self.server.addr.parse::<std::net::SocketAddr>() {
                 Ok(addr) if addr.ip().is_loopback() => {}
@@ -1548,19 +1242,14 @@ impl Settings {
                 }
             }
         }
-        // T-06: middleware defaults are all-zero / safe, but a
-        // production deployment with CORS allowlist = [] means
-        // the BFF / mobile app cannot reach the API at all.
-        // Fail loudly so operators discover it during deploy, not
-        // when users start reporting 403s.
+
         if self.environment.is_production() && self.middleware.cors_allow_origins.is_empty() {
             return Err(ConfigError::Invalid {
                 key: "KOKKAK_MIDDLEWARE__CORS_ALLOW_ORIGINS".into(),
                 message: "must list at least one origin when KOKKAK_ENVIRONMENT=production".into(),
             });
         }
-        // T-07: production rate-limit knobs must be positive when
-        // enabled — a 0-rps limiter would block every request.
+
         if self.middleware.rate_limit.enabled {
             if self.middleware.rate_limit.requests_per_second == 0 {
                 return Err(ConfigError::Invalid {
@@ -1574,11 +1263,7 @@ impl Settings {
                     message: "must be >= 1 when rate limiting is enabled".into(),
                 });
             }
-            // R-02: `backend=redis` requires the Redis URL to be
-            // configured — otherwise the limiter cannot reach its
-            // counter. Fail loudly at startup so the operator
-            // discovers the gap during deploy, not at the first
-            // request that crosses the limit.
+
             if self.middleware.rate_limit.backend == RateLimitBackend::Redis
                 && !self.redis.is_configured()
             {
@@ -1589,8 +1274,7 @@ impl Settings {
                 });
             }
         }
-        // T-14: idempotency cache must have positive knobs when
-        // enabled — a 0-ttl cache would never replay anything.
+
         if self.middleware.idempotency.enabled {
             if self.middleware.idempotency.ttl_secs == 0 {
                 return Err(ConfigError::Invalid {
@@ -1605,9 +1289,7 @@ impl Settings {
                 });
             }
         }
-        // T-16: request body limit and concurrency cap must be
-        // positive — a 0-byte limit would reject every request, a
-        // 0-concurrency cap would also reject every request.
+
         if self.middleware.request_body_limit_bytes == 0 {
             return Err(ConfigError::Invalid {
                 key: "KOKKAK_MIDDLEWARE__REQUEST_BODY_LIMIT_BYTES".into(),
@@ -1620,14 +1302,7 @@ impl Settings {
                 message: "must be >= 1 (use usize::MAX to effectively disable)".into(),
             });
         }
-        // T-23: in production, when the storage adapter wired
-        // anything beyond the memory fallback (i.e. the API will
-        // serve or proxy actual blobs), the public base URL MUST
-        // be set — otherwise the wire response emits `null` URLs
-        // that the mobile / web clients cannot resolve. We allow
-        // an empty `public_base_url` in dev so `cargo test`
-        // (MemoryStorage, no real URLs) does not need a dummy
-        // value.
+
         if self.environment.is_production()
             && self.server.public_base_url.trim().is_empty()
             && self.storage.adapter_kind() != StorageAdapterKind::Memory
@@ -1639,10 +1314,7 @@ impl Settings {
                     .into(),
             });
         }
-        // T-23-b: in production, the HMAC sign secret + TTL must
-        // be wired. Empty secret lets an attacker forge any URL
-        // — fail loud at deploy time, not after the first leaked
-        // KYC document.
+
         if self.environment.is_production() {
             self.storage.signed_url_knobs_valid()?;
         }
@@ -1655,7 +1327,6 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    /// Tests that touch env vars must hold this lock.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn clear_kokkak_env() {
@@ -1922,8 +1593,6 @@ mod tests {
         assert_eq!(a.refresh_ttl_secs, 2_592_000);
     }
 
-    // ---- T-08: TLS settings ----
-
     #[test]
     fn tls_default_is_disabled() {
         let t = TlsSettings::default();
@@ -1932,8 +1601,7 @@ mod tests {
         assert_eq!(t.key_path, None);
         assert_eq!(t.redirect_from_port, 0);
         assert_eq!(t.hsts_max_age_secs, 0);
-        // T-12: auto_reload defaults to false to avoid surprise
-        // restarts; operators opt in via KOKKAK_TLS__AUTO_RELOAD=true.
+
         assert!(!t.auto_reload);
     }
 
@@ -1949,7 +1617,7 @@ mod tests {
 
     #[test]
     fn tls_default_settings_validate() {
-        // Plain-HTTP dev default: TLS off, no cert/key required.
+
         let s = Settings::default();
         assert!(!s.tls.enabled);
         assert!(s.validate().is_ok());
@@ -2024,8 +1692,7 @@ mod tests {
             },
             ..Settings::default()
         };
-        // File existence is NOT checked by validate() — that's the
-        // T-09 server bootstrap's job. The settings alone pass.
+
         assert!(s.validate().is_ok());
     }
 
@@ -2061,28 +1728,21 @@ mod tests {
     fn tls_load_from_env_overrides() {
         let _guard = ENV_LOCK.lock().expect("mutex poisoned");
         clear_kokkak_env();
-        // add the new TLS keys to the clear list (next test run sees
-        // the canonical list — for now this test relies on
-        // clear_kokkak_env removing everything it knows about and
-        // the new keys being absent).
+
         std::env::set_var("KOKKAK_TLS__ENABLED", "true");
         std::env::set_var("KOKKAK_TLS__CERT_PATH", "/etc/kokkak/cert.pem");
         std::env::set_var("KOKKAK_TLS__KEY_PATH", "/etc/kokkak/key.pem");
         std::env::set_var("KOKKAK_TLS__REDIRECT_FROM_PORT", "80");
         std::env::set_var("KOKKAK_TLS__HSTS_MAX_AGE_SECS", "31536000");
         std::env::set_var("KOKKAK_ENVIRONMENT", "production");
-        // T-11 (post-IIS-front): production must bind loopback. Override
-        // the default `0.0.0.0:3000` so validate() accepts the config —
-        // this test exercises the TLS env-loading path, not the bind
-        // rule (which has its own dedicated tests).
+
         std::env::set_var("KOKKAK_SERVER__ADDR", "127.0.0.1:8443");
-        // T-11: production requires a non-empty CORS allowlist; mirror a
-        // real deployment so validate() accepts the config.
+
         std::env::set_var(
             "KOKKAK_MIDDLEWARE__CORS_ALLOW_ORIGINS",
             "https://app.example.com",
         );
-        // T-23-b: production requires a non-empty signed-URL secret.
+
         std::env::set_var(
             "KOKKAK_STORAGE__SIGNED_URL_SECRET",
             "test-secret-with-at-least-32-bytes-yes",
@@ -2100,13 +1760,9 @@ mod tests {
         clear_kokkak_env();
     }
 
-    // ---- T-11 (post-IIS-front): production must bind loopback ----
-
     #[test]
     fn production_with_public_bind_addr_fails_validation() {
-        // T-11 inverted: production + non-loopback bind must be
-        // rejected so plain HTTP never escapes to the internet
-        // when the upstream TLS terminator (IIS) is misconfigured.
+
         let s = Settings {
             environment: Environment::Production,
             server: ServerSettings {
@@ -2130,10 +1786,7 @@ mod tests {
 
     #[test]
     fn production_with_loopback_bind_and_tls_off_validates() {
-        // New normal: production binds 127.0.0.1 and TLS is off
-        // because IIS terminates it upstream. cert / key paths
-        // stay empty. T-23-b: signed-URL secret must be wired in
-        // production so we set a 32-byte placeholder here.
+
         let s = Settings {
             environment: Environment::Production,
             server: ServerSettings {
@@ -2155,8 +1808,7 @@ mod tests {
 
     #[test]
     fn production_with_ipv6_loopback_bind_validates() {
-        // ::1 is the IPv6 loopback — accept it as well so the
-        // operator can choose.
+
         let s = Settings {
             environment: Environment::Production,
             server: ServerSettings {
@@ -2178,8 +1830,7 @@ mod tests {
 
     #[test]
     fn production_with_malformed_bind_addr_fails_validation() {
-        // T-11: a non-parseable bind address must fail loud at
-        // startup, not at the first `bind()` syscall.
+
         let s = Settings {
             environment: Environment::Production,
             server: ServerSettings {
@@ -2203,10 +1854,7 @@ mod tests {
 
     #[test]
     fn production_with_tls_enabled_but_missing_key_still_fails() {
-        // TLS sub-rule from T-08 stays in force: when an operator
-        // DOES enable Rust-side TLS (e.g. local prod-mode smoke
-        // test without IIS), the cert + key paths still have to
-        // be present.
+
         let s = Settings {
             environment: Environment::Production,
             server: ServerSettings {
@@ -2236,7 +1884,7 @@ mod tests {
 
     #[test]
     fn development_with_tls_disabled_still_validates() {
-        // The T-11 enforcement must not regress dev mode.
+
         let s = Settings::default();
         assert_eq!(s.environment, Environment::Development);
         assert!(!s.tls.enabled);
@@ -2245,29 +1893,22 @@ mod tests {
 
     #[test]
     fn trust_forwarded_for_defaults_to_true() {
-        // Default-on: every Kokkeak deploy ships behind IIS so the
-        // header is trusted unless an operator explicitly opts out.
+
         let s = Settings::default();
         assert!(s.server.trust_forwarded_for);
     }
 
-    // ---- T-06: middleware settings ----
-
-    // ---- T-23: public_base_url validation ----
-
     #[test]
     fn t23_public_base_url_empty_defaults_ok() {
         let s = Settings::default();
-        // Dev / unit-test defaults: empty public_base_url is fine
-        // (every *_img_url field returns null on the wire, the
-        // mobile app falls back to a placeholder image).
+
         assert_eq!(s.server.public_base_url, "");
         assert!(s.validate().is_ok());
     }
 
     #[test]
     fn t23_public_base_url_set_in_production_with_local_storage_validates() {
-        // Production + LocalStorage + a real base URL → all green.
+
         let s = Settings {
             environment: Environment::Production,
             server: ServerSettings {
@@ -2276,8 +1917,7 @@ mod tests {
                 ..ServerSettings::default()
             },
             storage: StorageSettings {
-                // LocalStorage is NOT the production default (S3 is),
-                // but it's allowed during the Strangler transition.
+
                 local_path: "/var/kokkak/uploads".into(),
                 signed_url_secret: "test-secret-with-at-least-32-bytes-yes".into(),
                 ..StorageSettings::default()
@@ -2321,7 +1961,7 @@ mod tests {
     fn t23b_signed_url_ttl_too_long_fails() {
         let mut s = StorageSettings::default();
         s.signed_url_secret = "this-is-a-thirty-two-byte-test-secret-x".into();
-        s.signed_url_ttl_secs = 86400; // 24h
+        s.signed_url_ttl_secs = 86400;
         let err = s.signed_url_knobs_valid().expect_err("ttl>1h fails");
         assert!(
             err.to_string().contains("between 60 and 3600"),
@@ -2344,7 +1984,7 @@ mod tests {
             environment: Environment::Production,
             server: ServerSettings {
                 addr: "127.0.0.1:18080".into(),
-                // public_base_url left blank on purpose
+
                 ..ServerSettings::default()
             },
             storage: StorageSettings {
@@ -2368,8 +2008,7 @@ mod tests {
 
     #[test]
     fn t23_public_base_url_empty_with_memory_storage_is_allowed() {
-        // MemoryStorage is unit-test only — no real URLs flow
-        // through, so the empty base URL is harmless.
+
         let s = Settings {
             environment: Environment::Production,
             server: ServerSettings {
@@ -2377,9 +2016,7 @@ mod tests {
                 ..ServerSettings::default()
             },
             storage: StorageSettings {
-                // Even with Memory adapter, T-23-b still requires
-                // a sign secret at the wire level (the API only
-                // mounts the route when the secret is non-empty).
+
                 signed_url_secret: "test-secret-with-at-least-32-bytes-yes".into(),
                 ..StorageSettings::default()
             },
@@ -2389,9 +2026,7 @@ mod tests {
             },
             ..Settings::default()
         };
-        // Also note the bind+TLS prod rules still apply — we
-        // can't reach the public_base_url check without first
-        // satisfying those, so we keep addr loopback.
+
         assert!(s.validate().is_ok());
     }
 
@@ -2404,20 +2039,15 @@ mod tests {
         );
         assert_eq!(s.middleware.request_timeout_secs, 30);
         assert!(s.middleware.compression_enabled);
-        // T-16: safety knobs have positive defaults. Default
-        // was bumped to 16 MiB (M9-extra: accommodate the
-        // base64-encoded image attachments on /admin/users/full).
+
         assert_eq!(s.middleware.request_body_limit_bytes, 16 * 1024 * 1024);
         assert_eq!(s.middleware.max_concurrency, 512);
         assert!(s.validate().is_ok());
     }
 
-    // ---- T-16: safety knob validation ----
-
     #[test]
     fn t16_safety_knobs_default_positive() {
-        // Defaults are sized for a 2-vCPU pod; production should
-        // be able to rely on the out-of-the-box values.
+
         let s = MiddlewareSettings::default();
         assert!(s.request_body_limit_bytes >= 1024);
         assert!(s.max_concurrency >= 1);
@@ -2476,9 +2106,7 @@ mod tests {
 
     #[test]
     fn middleware_zero_timeout_is_allowed() {
-        // `0` means "disabled" — useful for long-running handlers
-        // like chat WebSocket upgrades. Production deployments
-        // should leave the 30 s default; opt-in to disable.
+
         let s = Settings {
             middleware: MiddlewareSettings {
                 request_timeout_secs: 0,
@@ -2491,13 +2119,10 @@ mod tests {
 
     #[test]
     fn production_without_cors_allowlist_fails_validation() {
-        // Mirrors the post-IIS T-11 bind rule: a prod deployment
-        // with empty CORS allowlist means the BFF / mobile app
-        // cannot reach the API at all. Fail loudly at startup.
+
         let s = Settings {
             environment: Environment::Production,
-            // Loopback bind so we get past T-11 and reach the
-            // CORS check below.
+
             server: ServerSettings {
                 addr: "127.0.0.1:8443".into(),
                 ..ServerSettings::default()
@@ -2510,7 +2135,7 @@ mod tests {
                 hsts_max_age_secs: 31_536_000,
                 auto_reload: false,
             },
-            // cors_allow_origins: [] (default) — must fail.
+
             ..Settings::default()
         };
         let err = s
@@ -2528,14 +2153,12 @@ mod tests {
     fn production_with_cors_allowlist_validates() {
         let s = Settings {
             environment: Environment::Production,
-            // T-11 (post-IIS-front): production must bind loopback.
+
             server: ServerSettings {
                 addr: "127.0.0.1:8443".into(),
                 ..ServerSettings::default()
             },
-            // TLS can stay on for the local prod-mode smoke test path
-            // (Rust terminates TLS directly); cert + key paths are
-            // present, so the T-08 sub-rule is happy.
+
             tls: TlsSettings {
                 enabled: true,
                 cert_path: Some("/etc/kokkak/cert.pem".into()),
@@ -2557,13 +2180,9 @@ mod tests {
         assert!(s.validate().is_ok());
     }
 
-    // ---- T-07: rate-limit settings ----
-
     #[test]
     fn rate_limit_default_is_disabled() {
-        // Dev mode keeps the limiter off so hot-reload and
-        // integration tests can hammer endpoints without
-        // tripping 429s. Operators opt in via env.
+
         let s = Settings::default();
         assert!(!s.middleware.rate_limit.enabled);
         assert_eq!(s.middleware.rate_limit.requests_per_second, 100);
@@ -2637,9 +2256,7 @@ mod tests {
 
     #[test]
     fn rate_limit_disabled_with_zero_knobs_validates() {
-        // Zero knobs are fine when the limiter is OFF — operators
-        // sometimes leave defaults untouched. The validation rule
-        // only fires when `enabled = true`.
+
         let s = Settings {
             middleware: MiddlewareSettings {
                 rate_limit: RateLimitSettings {
@@ -2655,12 +2272,9 @@ mod tests {
         assert!(s.validate().is_ok());
     }
 
-    // ---- R-02: backend selection ----
-
     #[test]
     fn rate_limit_backend_redis_without_redis_url_fails() {
-        // backend=redis but the operator forgot to set
-        // KOKKAK_REDIS__URL — fail loudly at startup.
+
         let s = Settings {
             middleware: MiddlewareSettings {
                 rate_limit: RateLimitSettings {
@@ -2671,7 +2285,7 @@ mod tests {
                 },
                 ..MiddlewareSettings::default()
             },
-            // No redis.url set — default `RedisSettings::is_configured()` is false.
+
             ..Settings::default()
         };
         let err = s
@@ -2690,8 +2304,7 @@ mod tests {
 
     #[test]
     fn rate_limit_backend_redis_with_redis_url_validates() {
-        // backend=redis + a valid redis URL — the existing
-        // path check confirms the limiter can reach its counter.
+
         let mut s = Settings::default();
         s.redis.url = "redis://127.0.0.1:6379".into();
         s.middleware.rate_limit = RateLimitSettings {
@@ -2705,16 +2318,11 @@ mod tests {
 
     #[test]
     fn rate_limit_backend_default_is_memory() {
-        // Operators who don't set the knob must keep the
-        // single-instance `tower_governor` behaviour — changing
-        // the default would silently multiply effective limits
-        // for existing deployments.
+
         assert_eq!(RateLimitBackend::default(), RateLimitBackend::Memory);
         let s = Settings::default();
         assert_eq!(s.middleware.rate_limit.backend, RateLimitBackend::Memory);
     }
-
-    // ---- T-14: idempotency settings ----
 
     #[test]
     fn idempotency_default_is_disabled() {

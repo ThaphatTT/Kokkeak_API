@@ -1,10 +1,10 @@
--- ============================================================================
--- KOKKAK NEW DB v2 - Stored Procedures: Translation Override Store
--- ============================================================================
 
--- ----------------------------------------------------------------------------
--- Schema: translation_override (overrides the M11 JSON file catalog)
--- ----------------------------------------------------------------------------
+
+
+
+
+
+
 IF OBJECT_ID('dbo.translation_override', 'U') IS NULL
 CREATE TABLE [translation_override] (
     translation_override_guid    UNIQUEIDENTIFIER NOT NULL PRIMARY KEY,
@@ -22,9 +22,9 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'ix_translation_override_l
 CREATE INDEX ix_translation_override_locale ON [translation_override](translation_override_locale);
 GO
 
--- ----------------------------------------------------------------------------
--- API_TRANSLATION_GET
--- ----------------------------------------------------------------------------
+
+
+
 IF OBJECT_ID('dbo.API_TRANSLATION_GET', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.API_TRANSLATION_GET AS BEGIN SET NOCOUNT ON; END');
 GO
@@ -44,9 +44,9 @@ BEGIN
 END;
 GO
 
--- ----------------------------------------------------------------------------
--- API_TRANSLATION_PUT (upsert)
--- ----------------------------------------------------------------------------
+
+
+
 IF OBJECT_ID('dbo.API_TRANSLATION_PUT', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.API_TRANSLATION_PUT AS BEGIN SET NOCOUNT ON; END');
 GO
@@ -88,9 +88,9 @@ BEGIN
 END;
 GO
 
--- ----------------------------------------------------------------------------
--- API_TRANSLATION_LIST_BY_LOCALE
--- ----------------------------------------------------------------------------
+
+
+
 IF OBJECT_ID('dbo.API_TRANSLATION_LIST_BY_LOCALE', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.API_TRANSLATION_LIST_BY_LOCALE AS BEGIN SET NOCOUNT ON; END');
 GO

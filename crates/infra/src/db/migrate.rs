@@ -1,14 +1,4 @@
-//! Versioned SQL migration runner for SQL Server (M5).
-//!
-//! Each migration file is `migrations/YYYYMMDDHHMMSS_description.sql`.
-//! On startup, the runner:
-//! 1. Ensures the `schema_migrations(version, applied_at)` table exists.
-//! 2. Discovers all SQL files in the migrations dir.
-//! 3. Applies every file whose `version` is not in the table — in
-//!    version order, **one file per transaction**.
-//!
-//! The M0 stub kept the discovery logic and is reused here. The
-//! real `run()` executes the SQL via tiberius.
+
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -19,37 +9,34 @@ use tokio::fs;
 
 use crate::db::mssql::{MssqlError, MssqlPool};
 
-/// Errors raised by the migration runner.
 #[derive(Debug, Error)]
 pub enum MigrateError {
-    /// SQL Server pool error.
+
     #[error("sqlserver error: {0}")]
     Mssql(#[from] MssqlError),
-    /// Underlying tiberius / TDS error.
+
     #[error("tds error: {0}")]
     Tds(String),
-    /// Filesystem / read error.
+
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
-    /// The migration file is missing the expected prefix.
+
     #[error("invalid migration filename: {0:?} (expected YYYYMMDDHHMMSS_description.sql)")]
     InvalidFilename(PathBuf),
 }
 
 use thiserror::Error;
 
-/// One discovered migration (filename + raw SQL body).
 #[derive(Debug, Clone)]
 pub struct Migration {
-    /// `YYYYMMDDHHMMSS` prefix (sort key + applied-marker).
+
     pub version: String,
-    /// Absolute path to the `.sql` file on disk.
+
     pub path: PathBuf,
-    /// Raw SQL body (loaded once at startup).
+
     pub sql: String,
 }
 
-/// Discover all migration files in `dir`, sorted ascending by version.
 pub async fn discover(dir: &Path) -> Result<Vec<Migration>, MigrateError> {
     let mut entries = fs::read_dir(dir).await?;
     let mut migrations = Vec::new();
@@ -80,7 +67,6 @@ pub async fn discover(dir: &Path) -> Result<Vec<Migration>, MigrateError> {
     Ok(migrations)
 }
 
-/// Apply every migration in `dir` that has not yet been applied.
 pub async fn run(pool: &MssqlPool, dir: &Path) -> Result<usize, MigrateError> {
     if !dir.exists() {
         tracing::info!(dir = %dir.display(), "no migrations directory — skipping");
@@ -91,7 +77,6 @@ pub async fn run(pool: &MssqlPool, dir: &Path) -> Result<usize, MigrateError> {
         return Ok(0);
     }
 
-    // 1) Ensure the migrations table exists.
     let mut conn = pool
         .get()
         .await
@@ -110,7 +95,6 @@ pub async fn run(pool: &MssqlPool, dir: &Path) -> Result<usize, MigrateError> {
     .map_err(|e| MigrateError::Tds(format!("create schema_migrations: {e}")))?;
     drop(conn);
 
-    // 2) Read the applied set.
     let mut applied: std::collections::HashSet<String> = std::collections::HashSet::new();
     {
         let mut conn = pool
@@ -133,7 +117,6 @@ pub async fn run(pool: &MssqlPool, dir: &Path) -> Result<usize, MigrateError> {
         }
     }
 
-    // 3) Apply each missing migration in a fresh connection.
     let mut applied_count = 0usize;
     for m in migrations {
         if applied.contains(&m.version) {
@@ -145,10 +128,7 @@ pub async fn run(pool: &MssqlPool, dir: &Path) -> Result<usize, MigrateError> {
             .get()
             .await
             .map_err(|e| MigrateError::Tds(format!("acquire: {e}")))?;
-        // Split on GO batch separators (TDS does not accept multiple
-        // statements in one call without a `;` separator, and tiberius
-        // sends them as one batch). A simple split on a line
-        // containing only `GO` is enough for our migration files.
+
         for batch in split_go_batches(&m.sql) {
             let trimmed = batch.trim();
             if trimmed.is_empty() {
@@ -158,7 +138,7 @@ pub async fn run(pool: &MssqlPool, dir: &Path) -> Result<usize, MigrateError> {
                 .await
                 .map_err(|e| MigrateError::Tds(format!("migration {}: {e}", m.version)))?;
         }
-        // Mark as applied.
+
         conn.execute(
             "INSERT INTO schema_migrations(version) VALUES (@P1)",
             &[&m.version],
@@ -170,8 +150,6 @@ pub async fn run(pool: &MssqlPool, dir: &Path) -> Result<usize, MigrateError> {
     Ok(applied_count)
 }
 
-/// Split a SQL script on `GO` batch separators (case-insensitive,
-/// line-anchored).
 fn split_go_batches(sql: &str) -> Vec<String> {
     let mut batches = Vec::new();
     let mut current = String::new();
@@ -192,11 +170,9 @@ fn split_go_batches(sql: &str) -> Vec<String> {
     batches
 }
 
-/// A trivial wrapper for callers that just want the pool type.
 #[allow(dead_code)]
 pub type Pool = Arc<MssqlPool>;
 
-/// Convenience: max connection acquire timeout.
 pub const DEFAULT_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[cfg(test)]

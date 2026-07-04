@@ -1,18 +1,4 @@
-//! Authentication middleware + extractor (M2 + M11 i18n).
-//!
-//! `AuthnUser` is an axum `FromRequestParts` extractor: any handler
-//! that takes `AuthnUser` as a parameter requires a valid Bearer
-//! token. The extractor:
-//! 1. Reads `Authorization: Bearer <token>`.
-//! 2. Verifies the token via the configured `JwtService`.
-//! 3. Builds an `AuthSession` with user id, roles, and expiry.
-//!
-//! User-visible error strings are rendered via
-//! `kokkak_common::i18n::tr` against the file-based catalog (the
-//! extractor is sync and runs before the i18n middleware's
-//! translation repo wiring; per-tenant overrides are still
-//! picked up by `tr` because `rust_i18n::set_locale` has already
-//! run by the time the extractor is invoked).
+
 
 use axum::{
     extract::FromRequestParts,
@@ -30,43 +16,27 @@ use uuid::Uuid;
 
 use crate::state::AppState;
 
-/// Authenticated user injected into handlers.
 #[derive(Debug, Clone)]
 pub struct AuthnUser(pub AuthSession);
 
 impl AuthnUser {
-    /// Borrow the inner session.
+
     pub fn session(&self) -> &AuthSession {
         &self.0
     }
 
-    /// Convenience: user id.
     pub fn id(&self) -> Uuid {
         self.0.user_id
     }
 
-    /// Convenience: roles list.
     pub fn roles(&self) -> &[Role] {
         &self.0.roles
     }
 
-    /// Convenience: has the given role.
     pub fn has_role(&self, role: Role) -> bool {
         self.0.has_role(role)
     }
 
-    /// M15-prep: check whether this user has a given permission.
-    /// Async because the check may go through the permission cache
-    /// + SQL Server.
-    ///
-    /// Fail-secure: a DB or cache error logs WARN and returns
-    /// `false`. Handlers should map that to a 403 just like a
-    /// genuine `false` result.
-    ///
-    /// ponytail: thin pass-through to [`PermissionChecker`]. The
-    /// ceiling is a bulk `effective_permissions()` helper that
-    /// fetches the whole set in one round-trip; add when handlers
-    /// start checking 2+ permissions per request.
     pub async fn has_permission(&self, code: Permission, checker: &PermissionChecker) -> bool {
         match checker.has_permission(self.0.user_id, code).await {
             Ok(v) => v,
@@ -92,7 +62,7 @@ impl FromRequestParts<AppState> for AuthnUser {
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
         let locale = current_locale();
-        // Read the Authorization header.
+
         let auth_header = parts
             .headers
             .get(header::AUTHORIZATION)
@@ -106,7 +76,7 @@ impl FromRequestParts<AppState> for AuthnUser {
                 ));
             }
         };
-        // Verify via JWT service.
+
         let claims = state.jwt.verify(token).map_err(|e| match e {
             AuthError::TokenExpired => {
                 unauthorized(tr("err_auth.token_expired", &locale, &[]), "token_expired")
@@ -122,7 +92,7 @@ impl FromRequestParts<AppState> for AuthnUser {
                 "invalid_token",
             ));
         }
-        // Build AuthSession.
+
         let expires_at = DateTime::<Utc>::from_timestamp(claims.exp, 0).unwrap_or_else(Utc::now);
         let session = AuthSession {
             user_id: claims.sub,
@@ -134,9 +104,6 @@ impl FromRequestParts<AppState> for AuthnUser {
     }
 }
 
-/// 401 response in the standard envelope. `message` is the
-/// pre-resolved localized string; `code` is the stable
-/// snake-case identifier.
 fn unauthorized(message: String, code: &str) -> Response {
     let envelope: ApiResponse<()> = ApiResponse {
         success: false,
@@ -150,8 +117,6 @@ fn unauthorized(message: String, code: &str) -> Response {
     (StatusCode::UNAUTHORIZED, Json(envelope)).into_response()
 }
 
-/// Build a 403 response (for use in handlers that check roles).
-/// `message` is the pre-resolved localized string.
 pub fn forbidden(message: String) -> Response {
     let envelope: ApiResponse<()> = ApiResponse {
         success: false,
@@ -165,14 +130,6 @@ pub fn forbidden(message: String) -> Response {
     (StatusCode::FORBIDDEN, Json(envelope)).into_response()
 }
 
-/// RBAC helper: `assert_role` returns `Ok(())` if the user has the
-/// role, otherwise returns the 403 response built from a
-/// pre-resolved localized message (the caller resolves the
-/// message via `tr_with_repo` because `assert_role` is sync).
-///
-/// ponytail: `Response` is ~256 B (axum::body::Body), so boxing
-/// the error would save a few bytes per call but force every
-/// caller to unbox. We keep `Response` inline + allow the lint.
 #[allow(clippy::result_large_err)]
 pub fn assert_role(user: &AuthnUser, role: Role, message: String) -> Result<(), Response> {
     if user.has_role(role) {

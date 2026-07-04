@@ -1,24 +1,4 @@
-//! Object-storage adapters (M9).
-//!
-//! Three adapters satisfy [`kokkak_domain::Storage`]:
-//!
-//! - [`memory::MemoryStorage`] — in-process `HashMap`. Used in
-//!   dev / tests; no presigned URLs (returns `None`).
-//! - [`s3::S3Storage`] — S3 / S3-compatible (MinIO) via
-//!   `rust-s3`. Presigned `GetObject` URLs are generated
-//!   client-side (HMAC-SHA1 over the canonical request).
-//! - [`local::LocalStorage`] — local filesystem. Used during the
-//!   Strangler transition and for ad-hoc dev runs without
-//!   MinIO. `presigned_get_url` returns `None`; callers must
-//!   already have a path to read.
-//!
-//! The `Storage` port lives in `kokkak_domain::storage`; the
-//! application layer is oblivious to the concrete adapter. The
-//! factory [`build_from_settings`] picks the adapter from the
-//! [`StorageSettings`] env knobs (S3 wins, then local, then memory).
-//!
-//! [`build_from_settings`]: build_from_settings
-//! [`StorageSettings`]: kokkak_common::config::StorageSettings
+
 
 pub mod keys;
 pub mod local;
@@ -36,31 +16,16 @@ use kokkak_common::config::{StorageAdapterKind, StorageSettings};
 use kokkak_domain::Storage;
 use thiserror::Error;
 
-/// Errors raised by [`build_from_settings`].
 #[derive(Debug, Error)]
 pub enum BuildStorageError {
-    /// The local root was set but the directory could not be
-    /// created (permission denied, bad path, ...).
+
     #[error("local storage init failed: {0}")]
     Local(String),
-    /// S3 was selected but config is missing or invalid
-    /// (e.g. access key without secret, or vice versa).
+
     #[error("s3 storage init failed: {0}")]
     S3(String),
 }
 
-/// Build the `Storage` adapter the rest of the app sees.
-///
-/// Selection rule (matches `StorageSettings::adapter_kind`):
-/// 1. `KOKKAK_STORAGE__S3_BUCKET` set → `S3Storage` (production).
-/// 2. `KOKKAK_STORAGE__LOCAL_PATH` set → `LocalStorage` (Strangler
-///    transition + dev without MinIO).
-/// 3. Otherwise → `MemoryStorage` (non-persistent; tests only).
-///
-/// ponytail: the function is `async` because `LocalStorage::new`
-/// runs `create_dir_all`. S3's `S3Storage::new` is sync; memory
-/// is sync. Keeping the signature uniform avoids branch-on-result
-/// at the call site.
 pub async fn build_from_settings(
     cfg: &StorageSettings,
 ) -> Result<(Arc<dyn Storage>, StorageAdapterKind), BuildStorageError> {

@@ -1,13 +1,5 @@
-# English locale (default fallback).
-#
-# Conventions:
-#   - Top-level group = feature area (err, chat, order, ...)
-#   - Variant label uses {0}, {1}, ... positional placeholders
-#     that the runtime substitutes with `tr(key, args)` arguments.
-#   - All keys consumed by the API must appear in all three locale
-#     files; missing keys fall back to this English file at runtime.
 
-# -- generic error envelope --
+
 err:
   bad_request: "bad request: {0}"
   unauthorized: "unauthorized"
@@ -18,7 +10,6 @@ err:
   rate_limited: "rate limited"
   internal: "internal: {0}"
 
-# -- AuthError / auth handlers --
 err_auth:
   invalid_credentials: "invalid credentials"
   token_expired: "token expired"
@@ -35,13 +26,11 @@ err_auth:
   role_not_allowed: "role not allowed: {0}"
   user_not_found: "user not found: {0}"
 
-# -- RepoError (generic; used by all repos) --
 err_repo:
   not_found: "not found: {0}"
   conflict: "conflict: {0}"
   backend: "backend error: {0}"
 
-# -- ChatError + ChatRepoError --
 err_chat:
   not_participant: "not a participant of room {0}"
   room_not_found: "room {0} not found"
@@ -55,7 +44,6 @@ err_chat_repo:
   not_found: "not found: {0}"
   backend: "chat backend error: {0}"
 
-# -- PaymentError + PaymentRepoError --
 err_payment:
   order_not_payable: "order {0} is not payable (status mismatch)"
   not_found: "payment {0} not found"
@@ -70,15 +58,12 @@ err_payment_repo:
   not_found: "not found: {0}"
   backend: "payment backend error: {0}"
 
-# -- Order handlers --
 err_order:
   invalid_total: "invalid total"
 
-# -- Generic request validation --
 err_request:
   bad_timestamp: "after must be an RFC3339 timestamp"
 
-# -- Admin permissions (M15-prep: GET /api/v1/admin/permissions) --
 err_permission:
   mode_required: "query parameter `mode` is required"
   invalid_role_guid: "user_role_guid is not a valid UUID"
@@ -88,12 +73,6 @@ err_permission:
   invalid_override_effect: "effect must be 'allow' or 'deny'"
   invalid_override_status: "status must be 0 or 1"
 
-# -- M20-b: admin user creation (SP_USER_INSERT_FULL) --
-#
-# The SP returns English messages verbatim (admin operators work in
-# English), so these locale keys are only used for the localized
-# `error.message` field when the handler chooses to surface the
-# admin-facing version instead of the SP's debug string.
 err_admin_user:
   actor_required: "actor is required"
   actor_not_found: "actor user_username_guid not found or inactive"

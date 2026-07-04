@@ -1,4 +1,4 @@
-// TEMPORARY PROBE — remove after confirming wire format
+
 #[cfg(test)]
 mod probe {
     use crate::Permission;

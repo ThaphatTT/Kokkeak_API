@@ -1,6 +1,4 @@
-//! SQL Server-backed `OrderRepository` (M14.5 — stored procedures).
-//!
-//! See `migrations/20260620000003_sp_order.sql` for SP definitions.
+
 
 use async_trait::async_trait;
 use rust_decimal::Decimal;
@@ -12,14 +10,13 @@ use kokkak_domain::{Order, OrderRepository, RepoError};
 
 use crate::db::mssql::{exec_sp, read_i32, read_str, read_uuid, MssqlPool};
 
-/// SQL Server-backed `OrderRepository` (M14.5 — stored procedures).
 #[derive(Clone)]
 pub struct MssqlOrderRepository {
     pool: MssqlPool,
 }
 
 impl MssqlOrderRepository {
-    /// Construct the repository with a shared `MssqlPool`.
+
     pub fn new(pool: MssqlPool) -> Self {
         Self { pool }
     }
@@ -37,7 +34,7 @@ impl OrderRepository for MssqlOrderRepository {
         if rows.is_empty() {
             return Ok(None);
         }
-        // 3 result sets: header, body, assignment.
+
         let header = &rows[0];
         let customer_id = read_uuid(header, "customer_id").unwrap_or_else(Uuid::nil);
         let status = order_status_from_i32(read_i32(header, "status").unwrap_or(1));
@@ -162,7 +159,7 @@ fn order_status_from_i32(v: i32) -> kokkak_domain::OrderStatus {
     use kokkak_domain::OrderStatus::*;
     match v {
         1 => Active,
-        2 => Active, // alias
+        2 => Active,
         3 => Completed,
         4 => Closed,
         5 => Cancelled,

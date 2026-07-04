@@ -1,23 +1,8 @@
-//! `StorageKey` builders for the user-attachments flows (M9-extra).
-//!
-//! Every builder returns a relative key like
-//! `users/{user_guid}/profile/{uuid}.{ext}`. The `LocalStorage`
-//! adapter (and any future adapter) treats this as a path under
-//! the configured root, so the folder layout stays consistent
-//! across adapters and human-inspectable on disk.
-//!
-//! ponytail: the UUID v7 makes the filename time-sortable + unique
-//! without forcing the caller to thread a counter. The extension
-//! is preserved as-supplied (case-insensitive); the adapter does
-//! not validate it — that's the caller's job (the upload endpoint
-//! would sniff the magic bytes; this helper just builds the key).
+
 
 use kokkak_domain::StorageKey;
 use uuid::Uuid;
 
-/// Build the `StorageKey` for a user's primary profile image.
-///
-/// Layout: `users/{user_guid}/profile/{uuid}.{ext}`
 pub fn user_profile(user_guid: &str, ext: &str) -> StorageKey {
     StorageKey(format!(
         "users/{}/profile/{}.{}",
@@ -27,9 +12,6 @@ pub fn user_profile(user_guid: &str, ext: &str) -> StorageKey {
     ))
 }
 
-/// Build the `StorageKey` for a user's `bank_book_img_path`.
-///
-/// Layout: `users/{user_guid}/bank-book/{uuid}.{ext}`
 pub fn user_bank_book(user_guid: &str, ext: &str) -> StorageKey {
     StorageKey(format!(
         "users/{}/bank-book/{}.{}",
@@ -39,23 +21,20 @@ pub fn user_bank_book(user_guid: &str, ext: &str) -> StorageKey {
     ))
 }
 
-/// Attachment kinds for the four `*_path` fields on
-/// `admin/users/full` (id-card front / back, proof of address,
-/// source-of-funds statement).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UserAttachment {
-    /// `id_card_front_path`.
+
     IdCardFront,
-    /// `id_card_back_path`.
+
     IdCardBack,
-    /// `proof_of_address_path`.
+
     ProofOfAddress,
-    /// `source_of_funds_statement_path`.
+
     SourceOfFunds,
 }
 
 impl UserAttachment {
-    /// Folder segment for this kind (used in the key path).
+
     fn folder(self) -> &'static str {
         match self {
             UserAttachment::IdCardFront => "id-card-front",
@@ -66,9 +45,6 @@ impl UserAttachment {
     }
 }
 
-/// Build the `StorageKey` for a user attachment.
-///
-/// Layout: `users/{user_guid}/attachments/{kind}/{uuid}.{ext}`
 pub fn user_attachment(user_guid: &str, kind: UserAttachment, ext: &str) -> StorageKey {
     StorageKey(format!(
         "users/{}/attachments/{}/{}.{}",
@@ -79,9 +55,6 @@ pub fn user_attachment(user_guid: &str, kind: UserAttachment, ext: &str) -> Stor
     ))
 }
 
-/// Lowercase + strip a leading `.` so callers can pass either
-/// `jpg` or `.jpg`. Empty / unknown stays empty (caller's job
-/// to validate the upload MIME type).
 fn normalize_ext(ext: &str) -> String {
     ext.trim().trim_start_matches('.').to_ascii_lowercase()
 }
@@ -122,7 +95,7 @@ mod tests {
         .enumerate()
         {
             let k = user_attachment("u-1", kind, "jpg");
-            // Each kind lands in its own folder.
+
             assert!(k.as_str().contains(kind.folder()), "kind #{i}");
         }
     }

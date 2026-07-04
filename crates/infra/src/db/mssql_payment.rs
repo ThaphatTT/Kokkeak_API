@@ -1,8 +1,4 @@
-//! SQL Server-backed `PaymentRepository` (M14.5 — stored procedures).
-//!
-//! See `migrations/20260620000005_sp_payment.sql` for SP definitions.
-//! Methods without a matching SP return `PaymentRepoError::Backend` and
-//! are scheduled for M15+ (admin payouts / commission dashboard).
+
 
 use async_trait::async_trait;
 use tiberius::ToSql;
@@ -13,14 +9,13 @@ use kokkak_domain::traits::payment::{PaymentRepoError, PaymentRepository};
 
 use crate::db::mssql::{exec_sp, MssqlPool};
 
-/// SQL Server-backed `PaymentRepository` (M14.5 — stored procedures).
 #[derive(Clone)]
 pub struct MssqlPaymentRepository {
     pool: MssqlPool,
 }
 
 impl MssqlPaymentRepository {
-    /// Construct the repository with a shared `MssqlPool`.
+
     pub fn new(pool: MssqlPool) -> Self {
         Self { pool }
     }
@@ -30,8 +25,7 @@ impl MssqlPaymentRepository {
 impl PaymentRepository for MssqlPaymentRepository {
     async fn insert_payment(&self, payment: &Payment) -> Result<(), PaymentRepoError> {
         let amount = payment.amount;
-        // Payment.domain has no `method` field — derive from gateway_ref
-        // (empty for local intents).
+
         let method = if payment.gateway_ref.is_empty() {
             "local".to_string()
         } else {
@@ -55,8 +49,7 @@ impl PaymentRepository for MssqlPaymentRepository {
     }
 
     async fn find_payment(&self, id: Uuid) -> Result<Option<Payment>, PaymentRepoError> {
-        // M14.5: no dedicated find_payment SP. Admin dashboard endpoint
-        // that needs it lands in M15+.
+
         let _ = id;
         Ok(None)
     }
@@ -65,7 +58,7 @@ impl PaymentRepository for MssqlPaymentRepository {
         &self,
         _order_id: Uuid,
     ) -> Result<Option<Payment>, PaymentRepoError> {
-        // M14.5: no dedicated SP yet.
+
         Ok(None)
     }
 

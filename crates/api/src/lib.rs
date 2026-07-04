@@ -1,7 +1,4 @@
-//! Kokkeak API library — exposes the public composition helpers
-//! (router builder, state, adapters, repo factory) so
-//! integration tests can drive the same routes the binary
-//! serves.
+
 
 pub mod adapters;
 pub mod cert_watcher;
@@ -46,23 +43,6 @@ use kokkak_infra::storage::MemoryStorage;
 
 use adapters::{JwtIssuerAdapter, PasswordHasherAdapter};
 
-/// Build the `AppState` from a `RepoBundle` + JWT + health
-/// registry + settings. Use this from `main` (and from
-/// integration tests) so the wiring stays in one place.
-///
-/// `settings` is held as `Arc<Settings>` so the feature-flag
-/// gates can read it without copying the full config on every
-/// request (T-31).
-///
-/// Audit log path defaults to `logs/auth-audit.jsonl` (created on
-/// demand). Override via `KOKKAK_AUDIT_LOG_PATH` for production —
-/// point at a mounted volume that survives container restarts.
-///
-/// ponytail: the audit log + rate limiter here are fire-and-forget.
-/// A broken audit file becomes a dropped-line warning, not a 500
-/// on login. A failed rate-limit construction falls back to a
-/// no-op limiter so a startup misconfiguration doesn't take down
-/// the whole API.
 #[allow(clippy::too_many_arguments)]
 pub fn build_app_state_with(
     bundle: RepoBundle,
@@ -74,8 +54,7 @@ pub fn build_app_state_with(
     signed_url_secret: Arc<str>,
     signed_url_ttl_secs: u32,
 ) -> AppState {
-    // Audit sink: try FileAuditLogger, fall back to no-op so a
-    // permission error on the log dir doesn't break the API.
+
     let audit: Arc<dyn AuditLogger> = match build_audit_logger() {
         Ok(l) => Arc::new(l),
         Err(e) => {
@@ -87,9 +66,7 @@ pub fn build_app_state_with(
             Arc::new(NoopAuditLogger)
         }
     };
-    // Login rate limiter (per-username + IP, sliding window 5min,
-    // 5 attempts). For HA production swap in a Redis-backed
-    // implementation behind the same `LoginRateLimiter` trait.
+
     let login_rl: Arc<dyn LoginRateLimiter> = Arc::new(InMemoryLoginRateLimiter::new());
 
     let auth = Arc::new(AuthService::new(
@@ -119,11 +96,7 @@ pub fn build_app_state_with(
     let permission = Arc::new(PermissionUserService::new(bundle.permission_users.clone()));
     let master = Arc::new(MasterDropdownService::new(bundle.master.clone()));
     let translation: Arc<dyn TranslationRepository> = bundle.translation;
-    // M9 / T-16 extra: image processor (decode → WebP → store).
-    // Configured from `Settings::image`. One per process — the
-    // processor is just a thin wrapper around `Storage` + the
-    // `image` / `webp` codecs, so sharing it across handlers is
-    // free.
+
     let image_cfg = ImageProcessorConfig {
         max_input_bytes: settings.image.max_input_bytes,
         max_dimension_px: settings.image.max_dimension_px,
@@ -131,11 +104,6 @@ pub fn build_app_state_with(
     };
     let image: Arc<ImageProcessor> = Arc::new(ImageProcessor::new(storage.clone(), image_cfg));
 
-    // M15-prep: PermissionChecker. Uses the catch-all MSSQL pool
-    // (auth/RBAC lives on KOKKAK_MASTER, which is the catch-all slot).
-    // Falls back to disabled variants when the pool/redis are not
-    // configured — every check then returns Unavailable → handlers
-    // 403 the request (fail-secure).
     let pool_for_perm = bundle.mssql_pool.clone();
     let repo_for_perm = match pool_for_perm {
         Some(p) => Arc::new(kokkak_infra::db::mssql_permission::MssqlPermissionRepository::new(p)),
@@ -194,10 +162,6 @@ pub fn build_app_state_with(
     )
 }
 
-/// Resolve the audit-log path from env or fall back to
-/// `logs/auth-audit.jsonl` under the current working directory.
-/// Returned here so the caller can wrap the result with a clear
-/// `WARN` log when the file can't be opened.
 fn build_audit_logger(
 ) -> Result<FileAuditLogger, Box<dyn std::error::Error + Send + Sync + 'static>> {
     let path = std::env::var("KOKKAK_AUDIT_LOG_PATH")
@@ -205,11 +169,6 @@ fn build_audit_logger(
     FileAuditLogger::new(&path)
 }
 
-/// Build the full `AppState` from concrete infra handles.
-/// Kept for backwards-compat with the integration tests that
-/// pre-date the M10 factory; new code should call
-/// [`build_app_state_with`] with a `RepoBundle`.
-// optional because build_app_state_with doesn't need them.
 #[allow(clippy::too_many_arguments)]
 pub fn build_app_state(
     user_repo: Arc<dyn kokkak_domain::UserRepository>,
@@ -225,15 +184,9 @@ pub fn build_app_state(
     registry: HealthRegistry,
     translation: Arc<dyn TranslationRepository>,
 ) -> AppState {
-    // Backwards-compat shim — tests pre-dating the storage wiring
-    // get an in-memory store. New code should call
-    // `build_app_state_with` (which lets the caller pass a real
-    // adapter) or `build_storage` to construct the right one.
-    // The image processor is built inside `build_app_state_with`
-    // from `Settings::image`, so the test doesn't need to pass one.
+
     let storage: Arc<dyn kokkak_domain::Storage> = Arc::new(MemoryStorage::new());
-    // M14.5: backend is always Mssql; the pool/mssql_pool are
-    // optional because build_app_state_with doesn't need them.
+
     let backend_marker: Option<MssqlPool> = None;
     let bundle = RepoBundle {
         backend: RepoBackend::Mssql,
@@ -261,9 +214,6 @@ pub fn build_app_state(
     )
 }
 
-/// Convenience builder for tests/dev: pass chat + payments already
-/// built against MSSQL. The in-memory chat transport is wired up here.
-/// M14.5: removed JSON-DB sim entirely.
 #[allow(clippy::too_many_arguments)]
 pub fn build_app_state_json(
     user_repo: Arc<dyn kokkak_domain::UserRepository>,
@@ -294,9 +244,7 @@ pub fn build_app_state_json(
         mssql_pool: backend_marker,
         topology: None,
     };
-    // Same shim as `build_app_state` — in-memory storage. The
-    // image processor is built inside `build_app_state_with`
-    // from `Settings::image`, so this entry point stays simple.
+
     let storage: Arc<dyn kokkak_domain::Storage> = Arc::new(MemoryStorage::new());
     build_app_state_with(
         bundle,

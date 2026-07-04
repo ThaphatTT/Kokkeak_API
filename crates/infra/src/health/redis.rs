@@ -1,4 +1,4 @@
-//! `HealthCheck` for Redis (เช็คสถานะ Redis).
+
 
 use std::sync::Arc;
 
@@ -7,13 +7,12 @@ use kokkak_domain::{HealthCheck, HealthError};
 
 use crate::cache::redis::RedisCache;
 
-/// `HealthCheck` that sends a Redis `PING`.
 pub struct RedisHealthCheck {
     cache: Arc<RedisCache>,
 }
 
 impl RedisHealthCheck {
-    /// Wrap an existing cache client.
+
     pub fn new(cache: Arc<RedisCache>) -> Self {
         Self { cache }
     }
@@ -37,7 +36,6 @@ impl HealthCheck for RedisHealthCheck {
     }
 }
 
-/// Send a `PING` to an already-acquired Redis connection.
 async fn ping_from_conn(
     mut conn: deadpool_redis::Connection,
 ) -> Result<(), crate::cache::redis::RedisCacheError> {

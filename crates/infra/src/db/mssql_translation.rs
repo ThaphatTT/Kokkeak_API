@@ -1,7 +1,4 @@
-//! SQL Server-backed `TranslationRepository` (M14.5 — stored procedures).
-//!
-//! Replaces the M11 JSON file `translations.json` with a real DB table
-//! (see `migrations/20260620000006_sp_translation.sql`).
+
 
 use async_trait::async_trait;
 use tiberius::ToSql;
@@ -10,14 +7,13 @@ use kokkak_domain::traits::translation::{TranslationError, TranslationRepository
 
 use crate::db::mssql::{exec_sp, MssqlPool};
 
-/// SQL Server-backed `TranslationRepository` (M14.5 — stored procedures).
 #[derive(Clone)]
 pub struct MssqlTranslationRepository {
     pool: MssqlPool,
 }
 
 impl MssqlTranslationRepository {
-    /// Construct the repository with a shared `MssqlPool`.
+
     pub fn new(pool: MssqlPool) -> Self {
         Self { pool }
     }
@@ -33,7 +29,7 @@ impl TranslationRepository for MssqlTranslationRepository {
         )
         .await
         .map_err(|e| TranslationError::Backend(e.to_string()))?;
-        // First column of the first row = value.
+
         Ok(rows
             .first()
             .and_then(|r| r.get::<&str, _>(0))
@@ -41,7 +37,7 @@ impl TranslationRepository for MssqlTranslationRepository {
     }
 
     async fn put(&self, locale: &str, key: &str, value: &str) -> Result<(), TranslationError> {
-        let system_user = uuid::Uuid::nil(); // system actor — M15+ uses real actor
+        let system_user = uuid::Uuid::nil();
         let _ = exec_sp(
             &self.pool,
             "EXEC dbo.API_TRANSLATION_PUT \

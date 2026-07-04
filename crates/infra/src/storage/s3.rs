@@ -1,16 +1,4 @@
-//! S3 / MinIO `Storage` adapter (M9).
-//!
-//! Uses the pure-Rust `rust-s3` crate (tokio + rustls) to
-//! PUT/GET/DELETE blobs against any S3-compatible endpoint
-//! (AWS, MinIO, Cloudflare R2, ...). `presigned_get_url` is
-//! implemented natively by `rust-s3` (sync HMAC over the
-//! canonical request) — the API does not need to proxy
-//! downloads.
-//!
-//! The `Storage` port lives in `kokkak_domain::storage`. This
-//! adapter is wired in `api::main` when
-//! `KOKKAK_STORAGE__S3_BUCKET` is set (M9); otherwise the
-//! dev-friendly `MemoryStorage` is used.
+
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -23,27 +11,24 @@ use s3::Bucket;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-/// S3 connection settings (subset of the env-driven config
-/// — see `AGENTS.md` § 7.1 / M9).
 #[derive(Debug, Clone)]
 pub struct S3Config {
-    /// S3 endpoint URL (e.g. `https://s3.amazonaws.com`,
-    /// `http://minio.local:9000`).
+
     pub endpoint: String,
-    /// Region (`us-east-1` for MinIO).
+
     pub region: String,
-    /// Bucket name.
+
     pub bucket: String,
-    /// Access key id.
+
     pub access_key: String,
-    /// Secret access key.
+
     pub secret_key: String,
-    /// `true` for MinIO / non-AWS endpoints.
+
     pub path_style: bool,
 }
 
 impl S3Config {
-    /// Build a `Bucket` handle from this config.
+
     pub fn bucket(&self) -> Result<Box<Bucket>, S3Error> {
         let region = s3::Region::Custom {
             region: self.region.clone(),
@@ -68,21 +53,20 @@ impl S3Config {
     }
 }
 
-/// Errors raised by the S3 adapter.
 #[derive(Debug, Error)]
 pub enum S3Error {
-    /// Configuration / startup failure.
+
     #[error("s3 config error: {0}")]
     Config(String),
-    /// Underlying driver failure.
+
     #[error("s3 backend error: {0}")]
     Backend(String),
-    /// Hash mismatch.
+
     #[error("s3 hash mismatch: expected {expected}, got {actual}")]
     HashMismatch {
-        /// Digest the caller claimed (hex).
+
         expected: String,
-        /// Digest computed from the bytes actually stored (hex).
+
         actual: String,
     },
 }
@@ -98,14 +82,13 @@ impl From<S3Error> for StorageError {
     }
 }
 
-/// S3-backed `Storage`.
 #[derive(Clone)]
 pub struct S3Storage {
     bucket: Arc<Bucket>,
 }
 
 impl S3Storage {
-    /// Build from config.
+
     pub fn new(cfg: &S3Config) -> Result<Self, S3Error> {
         let bucket = cfg.bucket()?;
         Ok(Self {
@@ -183,9 +166,7 @@ impl Storage for S3Storage {
         key: &StorageKey,
         ttl_secs: u32,
     ) -> Result<Option<String>, StorageError> {
-        // `presign_get` is sync (HMAC over the canonical
-        // request) and takes `&self`; cloning the Arc gives
-        // us a stable handle.
+
         let bucket = self.bucket.clone();
         let key_s = key.0.clone();
         let extra: HashMap<String, String> = HashMap::new();

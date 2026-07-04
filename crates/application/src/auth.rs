@@ -1,16 +1,4 @@
-//! Auth use cases (M2 + M14).
-//!
-//! Encapsulates register / login / refresh. Takes `Arc<dyn UserRepository>`
-//! and a `PasswordHasher` + `JwtService` (from `infra`). Stays
-//! transport-agnostic — the API layer maps HTTP requests to these
-//! inputs.
-//!
-//! M14 changes (NEW_DB.txt alignment):
-//! - `email` field replaced by `username` (NEW_DB `user_username_username`)
-//! - `display_name` replaced by `first_name` + `last_name`
-//! - `locale` removed from the User aggregate (now lives in JWT /
-//!   Accept-Language per M11)
-//! - `EmailTaken` → `UsernameTaken`
+
 
 use std::sync::Arc;
 
@@ -23,71 +11,52 @@ use uuid::Uuid;
 use crate::audit::AuditEvent;
 use crate::rate_limit::RateLimitDecision;
 
-/// Register input (สมัครสมาชิกใหม่).
 #[derive(Debug, Clone)]
 pub struct RegisterInput {
-    /// Login username (will be lowercased). In practice this can be
-    /// an email, phone, or alphanumeric handle — the API doesn't
-    /// enforce a particular shape (NEW_DB stores it as
-    /// `user_username_username`).
+
     pub username: String,
-    /// Plain-text password (use case hashes it; never logged).
+
     pub password: String,
-    /// First name (`[user].user_first_name`).
+
     pub first_name: String,
-    /// Last name (`[user].user_last_name`).
+
     pub last_name: String,
-    /// Role to grant. Only customer/technician allowed in self-registration.
+
     pub role: Role,
 }
 
-/// Login input.
 #[derive(Debug, Clone)]
 pub struct LoginInput {
-    /// Login name (NEW_DB schema; matches `[user_username].user_username`).
+
     pub username: String,
-    /// Plain-text password supplied by the client. Hashed before storage.
+
     pub password: String,
-    /// Token scope (`"mobile"` / `"web"` / `"admin"`).
+
     pub scope: String,
-    /// Client IP. Sourced from `ConnectInfo<SocketAddr>` /
-    /// `X-Forwarded-For` at the HTTP layer and threaded through here
-    /// so the auth use case can drive per-(username, IP) rate
-    /// limiting and audit logging. `None` for tests / non-HTTP
-    /// callers; the auth path then keys on username alone.
+
     pub ip: Option<std::net::IpAddr>,
 }
 
-/// Result of register / login / refresh.
 #[derive(Debug, Clone)]
 pub struct AuthOutcome {
-    /// Public-safe view of the authenticated user.
+
     pub user: PublicUser,
-    /// Access + refresh token pair to return to the client.
+
     pub tokens: TokenPair,
 }
 
-/// Auth use case bundle.
 pub struct AuthService {
     users: Arc<dyn UserRepository>,
     hasher: Arc<dyn PasswordHasherPort>,
     jwt: Arc<dyn JwtIssuerPort>,
-    /// Audit sink. Receives one event per login / refresh / register
-    /// outcome. See [`crate::audit::AuditLogger`].
+
     audit: Arc<dyn crate::audit::AuditLogger>,
-    /// Login rate limiter. Drives per-(username, IP) lockout. See
-    /// [`crate::rate_limit::LoginRateLimiter`].
+
     login_rl: Arc<dyn crate::rate_limit::LoginRateLimiter>,
 }
 
 impl AuthService {
-    /// Construct the service bundle. All five ports are required at
-    /// startup (composition root wires the concrete adapters).
-    ///
-    /// For tests / non-HTTP callers that don't have an IP, pass
-    /// [`crate::rate_limit::AllowAllLoginRateLimiter`]. For dev /
-    /// single-instance production, the in-memory limiter is enough;
-    /// for multi-pod deployments, swap in a Redis-backed impl.
+
     pub fn new(
         users: Arc<dyn UserRepository>,
         hasher: Arc<dyn PasswordHasherPort>,
@@ -104,7 +73,6 @@ impl AuthService {
         }
     }
 
-    /// Register a new account.
     pub async fn register(&self, input: RegisterInput) -> Result<AuthOutcome, AuthError> {
         let username = input.username.trim().to_lowercase();
         if username.is_empty() {
@@ -141,9 +109,7 @@ impl AuthService {
             username,
             password_hash: self.hasher.hash(&input.password)?,
             roles: vec![input.role],
-            // Fresh registration has no permission overrides yet;
-            // role-based permissions land on the next login once the
-            // SP can resolve them.
+
             permissions: Vec::new(),
             status: UserStatus::Active,
             created_at: now,
@@ -181,43 +147,10 @@ impl AuthService {
         })
     }
 
-    /// Login by username + password.
-    ///
-    /// SECURITY — three layers of username-enumeration defense:
-    ///
-    /// 1. **Generic error**: every failure path (user-not-found,
-    ///    wrong password, suspended / deleted / pending account)
-    ///    collapses into [`AuthError::InvalidCredentials`]. The HTTP
-    ///    layer renders the same body and status for all of them so
-    ///    the client cannot distinguish "no such user" from "wrong
-    ///    password". Required by OWASP Authentication Cheat Sheet
-    ///    § Username Enumeration and NIST SP 800-63B § 5.2.2.
-    ///
-    /// 2. **Constant-time response**: even when the user is not
-    ///    found, we still call [`PasswordHasherPort::verify`] against
-    ///    a pre-computed dummy hash. Without this, a missing user
-    ///    responds in ~1 ms while a wrong password against a real
-    ///    hash takes ~50–200 ms (argon2id default cost), letting an
-    ///    attacker enumerate valid usernames by latency alone.
-    ///
-    /// 3. **Per-(username, IP) rate limit**: after N consecutive
-    ///    failures within the window, future calls return
-    ///    [`AuthError::RateLimited`] without touching the hasher at
-    ///    all. Defends against credential stuffing and password
-    ///    spraying — one attacker IP trying many usernames (or many
-    ///    IPs trying one username) hits the lockout.
-    ///
-    /// The specific reason is logged internally at WARN level AND
-    /// emitted as a structured [`crate::audit::AuditEvent`] so the
-    /// ops / SIEM pipeline can spot credential stuffing and account
-    /// abuse without the client ever seeing the distinction.
     pub async fn login(&self, input: LoginInput) -> Result<AuthOutcome, AuthError> {
         let username = input.username.trim().to_lowercase();
         let ip = input.ip;
 
-        // (3) Rate-limit gate — runs BEFORE the expensive argon2
-        // verify so a locked-out brute-force attack doesn't burn
-        // CPU. The decision is also audit-logged.
         if let Some(ip_addr) = ip {
             let decision = self.login_rl.check(&username, ip_addr);
             if let RateLimitDecision::Locked { retry_after } = decision {
@@ -246,10 +179,6 @@ impl AuthService {
             .await
             .map_err(|e| AuthError::Backend(e.to_string()))?;
 
-        // ponytail: pick the hash to verify BEFORE branching on the
-        // user-found outcome. The dummy hash is pre-computed at
-        // adapter construction so this branch is a string-slice
-        // pick — no allocation, no extra argon2 work, no timing leak.
         let hash_to_check = user
             .as_ref()
             .map(|u| u.password_hash.as_str())
@@ -257,10 +186,6 @@ impl AuthService {
 
         let verified = self.hasher.verify(&input.password, hash_to_check).is_ok();
 
-        // Combine the two facts (user exists + password verified).
-        // The dummy hash has a random salt per process so it cannot
-        // match any real password — a successful verify therefore
-        // implies `user.is_some()`.
         let failure_reason: Option<LoginFailureReason> = match (user.as_ref(), verified) {
             (Some(_), false) => Some(LoginFailureReason::WrongPassword),
             (None, _) => Some(LoginFailureReason::UserNotFound),
@@ -281,7 +206,6 @@ impl AuthService {
             return Err(AuthError::InvalidCredentials);
         }
 
-        // unwrap is safe: failure_reason was None so user was Some
         let user = user.expect("user must be Some when failure_reason is None");
 
         if !user.can_authenticate() {
@@ -299,9 +223,6 @@ impl AuthService {
             return Err(AuthError::InvalidCredentials);
         }
 
-        // Success — reset the per-(username, IP) counter so the
-        // legitimate user isn't penalised for typing their password
-        // correctly after a few typos.
         if let Some(ip_addr) = ip {
             self.login_rl.reset(&username, ip_addr);
         }
@@ -325,13 +246,6 @@ impl AuthService {
         })
     }
 
-    /// Exchange a refresh token for a new access + refresh pair.
-    ///
-    /// No constant-time guard here — the refresh path does not call
-    /// the password hasher (the JWT signature + the user-lookup is
-    /// the only work). The status check still logs the specific
-    /// reason so the ops pipeline can spot "token still valid but
-    /// account got suspended after issue".
     pub async fn refresh(
         &self,
         refresh_token: &str,
@@ -399,27 +313,22 @@ impl AuthService {
     }
 }
 
-/// Internal classification of *why* a login failed. Logged at WARN
-/// level for the security team; never surfaced to the client (the
-/// HTTP layer always returns a generic [`AuthError::InvalidCredentials`]).
 #[derive(Debug, Clone, Copy)]
 enum LoginFailureReason {
-    /// The username does not exist in `user_username`.
+
     UserNotFound,
-    /// The username exists but the password did not verify.
+
     WrongPassword,
-    /// The account is suspended — contact support to restore.
+
     AccountSuspended,
-    /// The account is soft-deleted (cannot log in).
+
     AccountDeleted,
-    /// The account is pending email verification.
+
     AccountPending,
 }
 
 impl LoginFailureReason {
-    /// Stable wire-shaped string used in `tracing` field values. These
-    /// are stable contracts that the SIEM / dashboard layer may
-    /// pivot on, so do not rename without coordinating with the ops team.
+
     fn as_str(&self) -> &'static str {
         match self {
             Self::UserNotFound => "user_not_found",
@@ -435,21 +344,12 @@ impl LoginFailureReason {
             UserStatus::Suspended => Self::AccountSuspended,
             UserStatus::Deleted => Self::AccountDeleted,
             UserStatus::Pending => Self::AccountPending,
-            // Active + non-authenticating shouldn't reach here
-            // (`can_authenticate()` filters it), but if it does we
-            // attribute it to wrong_password so we don't leak
-            // account state.
+
             UserStatus::Active => Self::WrongPassword,
         }
     }
 }
 
-/// Emit a single `auth.login.failure` event with the structured reason.
-/// SECURITY: never includes the password (or even its hash). The
-/// username is logged as-is — if your threat model treats usernames
-/// as PII, SHA256 it before logging. Output goes to `tracing` (JSON
-/// in production via the JSON subscriber) and is picked up by the
-/// log aggregator / SIEM for brute-force detection.
 fn log_login_failure(username: &str, reason: LoginFailureReason) {
     tracing::warn!(
         event = "auth.login.failure",
@@ -459,8 +359,6 @@ fn log_login_failure(username: &str, reason: LoginFailureReason) {
     );
 }
 
-/// Emit a single `auth.refresh.failure` event for a token whose
-/// subject points at an account that can no longer authenticate.
 fn log_refresh_failure(user_id: Uuid, reason: LoginFailureReason) {
     tracing::warn!(
         event = "auth.refresh.failure",
@@ -470,8 +368,6 @@ fn log_refresh_failure(user_id: Uuid, reason: LoginFailureReason) {
     );
 }
 
-/// Build a single login-failure audit event with the structured
-/// fields the SIEM pivot on. Keeps the call sites compact.
 fn build_login_failure_event(
     event: &'static str,
     username: &str,
@@ -487,51 +383,38 @@ fn build_login_failure_event(
     e
 }
 
-/// Port for password hashing (decouples the use case from `argon2`).
 pub trait PasswordHasherPort: Send + Sync {
-    /// Hash a plain-text password (returns a PHC-format string).
+
     fn hash(&self, password: &str) -> Result<String, AuthError>;
-    /// Verify a plain-text password against a stored PHC-format hash.
+
     fn verify(&self, password: &str, hash: &str) -> Result<(), AuthError>;
-    /// Throwaway PHC string that no real password can match. Used by
-    /// [`AuthService::login`] to keep the response time constant when
-    /// the username does not exist (defense against username
-    /// enumeration via timing — OWASP Authentication Cheat Sheet,
-    /// NIST SP 800-63B § 5.2.2). The plaintext and salt are picked
-    /// at construction time so the verify call costs the same as a
-    /// real verify; the random salt ensures no real password can
-    /// ever match the stored hash.
+
     fn dummy_hash(&self) -> &str;
 }
 
-/// Port for JWT issuing / verifying.
 pub trait JwtIssuerPort: Send + Sync {
-    /// Mint a short-lived access token for the given user / roles / scope.
+
     fn issue_access(&self, user_id: Uuid, roles: &[Role], scope: &str)
         -> Result<String, AuthError>;
-    /// Mint a long-lived refresh token for the given user / roles / scope.
+
     fn issue_refresh(
         &self,
         user_id: Uuid,
         roles: &[Role],
         scope: &str,
     ) -> Result<String, AuthError>;
-    /// Verify a token's signature + expiry and return its claims.
+
     fn verify(&self, token: &str) -> Result<Claims, AuthError>;
-    /// Access token TTL in seconds (used by the cookie `Max-Age`).
+
     fn access_ttl_secs(&self) -> i64;
-    /// Refresh token TTL in seconds.
+
     fn refresh_ttl_secs(&self) -> i64;
 }
-
-// ---- Adapters live in the api crate (composition root) ----
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// In-memory mock of UserRepository for unit tests.
-    /// Stores users in a HashMap; collision on username returns Conflict.
     #[derive(Default)]
     struct MockUserRepository {
         by_id: std::sync::Mutex<std::collections::HashMap<uuid::Uuid, User>>,
@@ -576,10 +459,7 @@ mod tests {
             by_id.insert(user.id, user.clone());
             Ok(())
         }
-        // M17 cleanup: only `list_with_permissions` remains (used by
-        // the admin user-list screen). `find_user_permissions_by_username`
-        // moved to the dedicated `PermissionUserRepository` port; the
-        // auth/login mock no longer needs to implement it.
+
         async fn list_with_permissions(
             &self,
             _caller_guid: Uuid,
@@ -606,11 +486,7 @@ mod tests {
 
     use kokkak_infra::auth::jwt::JwtService;
     use kokkak_infra::auth::password::PasswordHasherImpl;
-    // skip MssqlUserRepository;
 
-    // Test-only adapter: bridges the concrete `PasswordHasherImpl` to
-    // the `PasswordHasherPort` trait without depending on the
-    // production adapter in the api crate.
     struct TestHasher(PasswordHasherImpl);
     impl PasswordHasherPort for TestHasher {
         fn hash(&self, password: &str) -> Result<String, AuthError> {
@@ -620,9 +496,7 @@ mod tests {
             self.0.verify(password, hash)
         }
         fn dummy_hash(&self) -> &str {
-            // Delegate to the production hasher — the real argon2id
-            // hash is pre-computed at construction and lives inside
-            // the wrapped `PasswordHasherImpl`.
+
             self.0.dummy_hash()
         }
     }
@@ -660,11 +534,6 @@ mod tests {
         make_service_with_repo().await.0
     }
 
-    /// Build a service alongside its concrete mock repo so the test
-    /// can mutate user state (e.g. flip status to Suspended) before
-    /// driving login. The mock lives behind `Arc<dyn UserRepository>`
-    /// inside the service — mutating the inner state is visible to
-    /// every subsequent lookup because both sides hold the same Arc.
     async fn make_service_with_repo() -> (AuthService, Arc<MockUserRepository>) {
         let repo = Arc::new(MockUserRepository::default());
         let settings = kokkak_common::config::AuthSettings {
@@ -793,9 +662,7 @@ mod tests {
             .refresh(&registered.tokens.refresh_token, "mobile")
             .await
             .unwrap();
-        // Returns a valid pair; tokens may equal the previous ones
-        // when issued in the same second (JWT `iat` granularity).
-        // Production adds a `jti` claim for true rotation.
+
         assert!(!out.tokens.access_token.is_empty());
         assert!(!out.tokens.refresh_token.is_empty());
         assert_eq!(out.user.username, "alice");
@@ -853,13 +720,9 @@ mod tests {
         assert!(matches!(err, AuthError::Validation(_)));
     }
 
-    // ---- Username-enumeration defense (T-LoginEnum) ----
-
     #[tokio::test]
     async fn login_unknown_user_returns_generic_invalid_credentials() {
-        // SECURITY: no matter what the failure cause, the client
-        // must see the same error body. The specific reason is
-        // logged internally for the SIEM pipeline.
+
         let svc = make_service().await;
         let err = svc
             .login(LoginInput {
@@ -878,9 +741,7 @@ mod tests {
 
     #[tokio::test]
     async fn login_suspended_user_returns_generic_invalid_credentials() {
-        // A suspended user with the right password must STILL see
-        // the same generic error. The internal log carries the
-        // specific reason.
+
         let (svc, repo) = make_service_with_repo().await;
         svc.register(RegisterInput {
             username: "alice".into(),
@@ -959,10 +820,7 @@ mod tests {
 
     #[tokio::test]
     async fn login_always_calls_verify_for_constant_time() {
-        // SECURITY: even when the user is not found, we must call
-        // `verify` (against the dummy hash) so the response time
-        // doesn't leak "user-not-found" via latency. We verify
-        // this by using a counting hasher.
+
         let verify_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let count_for_hasher = verify_count.clone();
         let hasher: Arc<dyn PasswordHasherPort> = Arc::new(CountingHasher {
@@ -987,7 +845,6 @@ mod tests {
             Arc::new(crate::rate_limit::AllowAllLoginRateLimiter),
         );
 
-        // Login against a non-existent user — verify MUST still run.
         let _ = svc
             .login(LoginInput {
                 username: "ghost".into(),
@@ -1002,8 +859,6 @@ mod tests {
                      this is the constant-time login guard"
         );
     }
-
-    // ---- Audit log (T-AuditLogin) ----
 
     #[tokio::test]
     async fn login_success_emits_auth_login_success_audit_event() {
@@ -1089,8 +944,6 @@ mod tests {
         assert_eq!(fail.username.as_deref(), Some("ghost"));
     }
 
-    // ---- Rate limiting (T-LoginRateLimit) ----
-
     #[tokio::test]
     async fn rate_limited_login_returns_rate_limited_error_and_emits_audit() {
         let audit = Arc::new(crate::audit::TestAuditLogger::default());
@@ -1120,12 +973,12 @@ mod tests {
             })
             .await
             .unwrap_err();
-        // 429 surfaces through AuthError::RateLimited(secs).
+
         match err {
             AuthError::RateLimited(secs) => assert!(secs >= 1, "retry_after must be ≥ 1s"),
             other => panic!("expected RateLimited, got {other:?}"),
         }
-        // And the audit log carries the rate_limited event.
+
         let events = audit.events.lock().unwrap();
         let evt = events
             .iter()
@@ -1139,11 +992,7 @@ mod tests {
 
     #[tokio::test]
     async fn login_without_ip_skips_rate_limit_check() {
-        // The rate limiter is keyed on (username, IP). When no IP is
-        // available (tests / non-HTTP callers / behind a proxy that
-        // strips the header), we skip the gate rather than block on
-        // something we can't key — the HTTP middleware still applies
-        // its per-IP cap.
+
         let audit = Arc::new(crate::audit::TestAuditLogger::default());
         let repo: Arc<dyn UserRepository> = Arc::new(MockUserRepository::default());
         let settings = kokkak_common::config::AuthSettings {
@@ -1169,9 +1018,7 @@ mod tests {
         })
         .await
         .unwrap();
-        // ip = None: must NOT hit the rate limiter (it's keyed on
-        // IP), so login proceeds normally even though the limiter
-        // would otherwise block everyone.
+
         let out = svc
             .login(LoginInput {
                 username: "alice".into(),
@@ -1185,8 +1032,7 @@ mod tests {
 
     #[tokio::test]
     async fn successful_login_resets_rate_limit_counter() {
-        // Wire a counting limiter so we can observe that reset() was
-        // called on success.
+
         let audit = Arc::new(crate::audit::TestAuditLogger::default());
         let repo: Arc<dyn UserRepository> = Arc::new(MockUserRepository::default());
         let settings = kokkak_common::config::AuthSettings {
@@ -1240,9 +1086,7 @@ mod tests {
     }
 
     impl MockUserRepository {
-        /// Test-only: flip a stored user's status in place. Goes
-        /// through the public `update` path of the trait so we
-        /// exercise the real `User.password_hash` clone.
+
         fn update_status(&self, username: &str, status: UserStatus) {
             let key = username.trim().to_lowercase();
             let id = {
@@ -1259,9 +1103,6 @@ mod tests {
         }
     }
 
-    /// Counting hasher: wraps `PasswordHasherImpl` and tallies every
-    /// `verify` call. Used by the constant-time login test to assert
-    /// that the verify path runs even when the user is missing.
     struct CountingHasher {
         inner: PasswordHasherImpl,
         count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -1279,9 +1120,6 @@ mod tests {
         }
     }
 
-    /// Counting rate limiter: like `AllowAllLoginRateLimiter` but
-    /// records every `reset()` call so tests can assert that
-    /// successful login calls `reset()` exactly once.
     struct CountingRateLimiter {
         inner: crate::rate_limit::AllowAllLoginRateLimiter,
         reset_log: std::sync::Arc<std::sync::Mutex<Vec<(String, std::net::IpAddr)>>>,

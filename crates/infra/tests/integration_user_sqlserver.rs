@@ -1,24 +1,4 @@
-//! Live SQL Server integration test for the 4-table NEW_DB user schema (M14).
-//!
-//! Runs against a real SQL Server reachable via
-//! `KOKKAK_DATABASE__SQLSERVER_URL`. Skipped when the env var is
-//! empty / missing / `"disabled"`.
-//!
-//! ## What it covers
-//!
-//! 1. **Migration** — runs the discovered `.sql` files in
-//!    `migrations/` (idempotent; safe to run repeatedly).
-//! 2. **Insert** — writes to `[user]` + `[user_username]` +
-//!    `[user_user_role]` in one transaction.
-//! 3. **Read** — single JOIN query returns the `User` aggregate
-//!    with `roles: Vec<Role>` correctly assembled.
-//! 4. **Conflict** — duplicate username returns `RepoError::Conflict`.
-//! 5. **Update** — password + status changes persist through the
-//!    update path.
-//!
-//! ponytail: shared test pool + unique GUIDs / usernames per test
-//! avoid cleanup. Run with `cargo test --test integration_user_sqlserver -- --test-threads=1`
-//! against a real SQL Server to gate M14 release.
+
 
 use std::env;
 use std::time::Duration;
@@ -33,8 +13,6 @@ use kokkak_domain::{RepoError, Role, User, UserRepository, UserStatus};
 use chrono::Utc;
 use uuid::Uuid;
 
-/// Read `KOKKAK_DATABASE__SQLSERVER_URL`; return `None` when the
-/// live integration test should be skipped.
 fn live_url() -> Option<String> {
     let raw = env::var("KOKKAK_DATABASE__SQLSERVER_URL").ok()?;
     let trimmed = raw.trim();
@@ -44,8 +22,6 @@ fn live_url() -> Option<String> {
     Some(trimmed.to_string())
 }
 
-/// Build a one-off pool from the live URL. Each test gets its own
-/// pool so they don't fight for the connection budget.
 async fn pool_for(url: &str) -> MssqlPool {
     let settings = DatabaseSettings {
         sqlserver_url: url.to_string(),
@@ -58,9 +34,6 @@ async fn pool_for(url: &str) -> MssqlPool {
         .expect("build_pool against live SQL Server")
 }
 
-/// Run the versioned migrations against `pool` once. Idempotent:
-/// the runner tracks applied versions in `schema_migrations` so
-/// subsequent runs are no-ops.
 async fn ensure_schema(pool: &MssqlPool) {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../migrations");
     let applied = migrate::run(pool, &dir)
@@ -69,8 +42,6 @@ async fn ensure_schema(pool: &MssqlPool) {
     eprintln!("live_user_sqlserver: applied {} new migration(s)", applied);
 }
 
-/// Build a sample user with a unique username (so repeated runs
-/// don't collide on the `[user_username]` UNIQUE constraint).
 fn sample_user(role: Role) -> User {
     let now = Utc::now();
     User {
@@ -87,8 +58,6 @@ fn sample_user(role: Role) -> User {
     }
 }
 
-/// Helper: insert, then immediately find_by_username and verify
-/// the round-trip. Returns the freshly-inserted user.
 async fn insert_and_verify(repo: &MssqlUserRepository, user: User) -> User {
     repo.insert(&user).await.expect("insert");
     let by_username = repo
@@ -108,7 +77,6 @@ async fn insert_and_verify(repo: &MssqlUserRepository, user: User) -> User {
     );
     assert_eq!(by_username.roles, user.roles);
 
-    // find_by_id must hit the same row.
     let by_id = repo
         .find_by_id(user.id)
         .await

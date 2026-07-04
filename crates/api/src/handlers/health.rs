@@ -1,25 +1,10 @@
-//! Liveness and readiness probes.
-//!
-//! - [`healthz`] is **liveness**: the process is up. Always 200.
-//!   Used by orchestrators (k8s liveness probe) to decide whether to
-//!   restart the container.
-//!
-//! - [`readyz`] is **readiness**: the process can serve traffic.
-//!   Runs every check registered in [`HealthRegistry`]. Returns 200
-//!   if all pass, 503 if any fail. Used by load balancers and k8s
-//!   readiness probes to decide whether to send traffic to this
-//!   instance.
-//!
-//! The body always lists every check (regardless of overall status)
-//! so operators can curl `/readyz` and see exactly which dependency
-//! is the problem.
+
 
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use kokkak_common::response::ApiResponse;
 use kokkak_domain::HealthRegistry;
 use serde::Serialize;
 
-/// `GET /healthz` — liveness probe.
 #[utoipa::path(
     get,
     path = "/healthz",
@@ -32,15 +17,6 @@ pub async fn healthz() -> impl IntoResponse {
     (StatusCode::OK, "OK")
 }
 
-/// `GET /readyz` — readiness probe.
-///
-/// Reads the [`HealthRegistry`] from axum state, runs every check in
-/// parallel, and returns:
-/// - **200 OK** with `success: true`  when all checks pass (or none are registered)
-/// - **503 Service Unavailable** with `success: false` when any check fails
-///
-/// The body always includes a per-check breakdown so the failure
-/// cause is visible without parsing logs.
 #[utoipa::path(
     get,
     path = "/readyz",
@@ -53,8 +29,6 @@ pub async fn healthz() -> impl IntoResponse {
 pub async fn readyz(State(registry): State<HealthRegistry>) -> impl IntoResponse {
     let report = registry.run_all().await;
 
-    // Log each failed check at WARN so it surfaces in centralised
-    // log aggregators even when no one curls /readyz.
     for outcome in &report.checks {
         if !outcome.ok {
             tracing::warn!(
@@ -81,21 +55,19 @@ pub async fn readyz(State(registry): State<HealthRegistry>) -> impl IntoResponse
     (status, Json(envelope))
 }
 
-/// Response body for `/readyz`.
 #[derive(Debug, Serialize)]
 struct ReadyData {
-    /// One entry per registered check, in registration order.
+
     checks: Vec<CheckView>,
 }
 
-/// One row of the `/readyz` body.
 #[derive(Debug, Serialize)]
 struct CheckView {
-    /// Stable check identifier (e.g. `"sqlserver"`).
+
     name: String,
-    /// `"up"` or `"down"`.
+
     status: &'static str,
-    /// Set only when `status == "down"`. Skipped from JSON otherwise.
+
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }

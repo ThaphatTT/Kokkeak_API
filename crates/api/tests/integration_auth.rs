@@ -1,8 +1,4 @@
-//! End-to-end integration test for the auth flow (M14.5 — MSSQL only).
-//!
-//! Runs against a real SQL Server reachable via
-//! `KOKKAK_DATABASE__SQLSERVER_URL`. Skipped when the env var is empty
-//! or `"disabled"` (no JSON-DB sim in M14.5).
+
 
 use std::sync::Arc;
 
@@ -44,9 +40,9 @@ async fn make_app() -> (axum::Router, Vec<PathBuf>) {
     let url = match live_url() {
         Some(u) => u,
         None => {
-            // Return a sentinel — tests using this MUST gate on live_url() first.
+
             eprintln!("SKIPPED: integration_auth requires KOKKAK_DATABASE__SQLSERVER_URL");
-            // Return an empty router and dummy paths; tests will short-circuit.
+
             return (axum::Router::new(), vec![]);
         }
     };
@@ -58,7 +54,6 @@ async fn make_app() -> (axum::Router, Vec<PathBuf>) {
     };
     let pool = build_pool(&settings).await.expect("build_pool");
 
-    // Run migrations once (idempotent).
     let mig_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
@@ -92,18 +87,11 @@ async fn make_app() -> (axum::Router, Vec<PathBuf>) {
         orders: order_repo,
         chat: chat_repo,
         payments: payment_repo,
-        // M15-prep: shared with the admin permissions endpoint.
-        // Tests for this repo live in the unit suite (mock impl);
-        // this integration test exercises the rest of the route
-        // table and just needs any impl that satisfies the trait.
+
         user_roles: Arc::new(MssqlUserRoleRepository::new(pool.clone())),
-        // M17: dedicated permission-page repository (decoupled from
-        // `users`). Auth tests don't exercise permission routes, so a
-        // live MSSQL adapter against the same pool is sufficient.
+
         permission_users: Arc::new(MssqlPermissionUserRepository::new(pool.clone())),
-        // M20: master-data dropdowns. Auth tests don't exercise
-        // the new master routes, but the bundle requires the field
-        // so the wiring matches production.
+
         master: Arc::new(MssqlMasterDropdownRepository::new(pool.clone())),
         translation,
         mssql_pool: None,
@@ -131,7 +119,6 @@ async fn register_then_login_then_me_round_trip() {
     }
     let username = format!("user-{}@example.com", Uuid::new_v4());
 
-    // 1) Register
     let reg_body = serde_json::json!({
         "username": &username,
         "password": "supersecret-123",
@@ -158,7 +145,6 @@ async fn register_then_login_then_me_round_trip() {
     assert_eq!(v["data"]["user"]["username"], username);
     let _access_token = v["data"]["access_token"].as_str().unwrap().to_string();
 
-    // 2) Login
     let login_body = serde_json::json!({
         "username": &username,
         "password": "supersecret-123",
@@ -181,7 +167,6 @@ async fn register_then_login_then_me_round_trip() {
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let login_token = v["data"]["access_token"].as_str().unwrap().to_string();
 
-    // 3) /users/me with login token
     let resp = app
         .clone()
         .oneshot(
@@ -200,7 +185,6 @@ async fn register_then_login_then_me_round_trip() {
     assert_eq!(v["data"]["username"], username);
     assert_eq!(v["data"]["roles"][0], "customer");
 
-    // 4) /users/me without token → 401
     let resp = app
         .clone()
         .oneshot(

@@ -1,14 +1,4 @@
-//! MongoDB-backed `ChatRepository` (M8).
-//!
-//! Production adapter. Two collections, one transaction per
-//! aggregate (M12+ uses MongoDB sessions when running against
-//! a replica set; M8 ships the non-transactional path so the
-//! adapter works against a single-node Mongo too).
-//!
-//! - `chat_rooms` — one document per room.
-//! - `chat_messages` — one document per message; idempotent on
-//!   `_id` so the worker's `chat.persist` re-deliveries are
-//!   safe.
+
 
 use async_trait::async_trait;
 use bson::{doc, Document};
@@ -28,7 +18,6 @@ use crate::db::mongo::MongoClient;
 const COLL_ROOMS: &str = "chat_rooms";
 const COLL_MESSAGES: &str = "chat_messages";
 
-/// Production chat repository backed by MongoDB.
 #[derive(Clone)]
 pub struct MongoChatRepository {
     rooms: Collection<Document>,
@@ -36,7 +25,7 @@ pub struct MongoChatRepository {
 }
 
 impl MongoChatRepository {
-    /// Build from a connected `MongoClient`.
+
     pub fn new(client: &MongoClient) -> Self {
         let db: &Database = client.database();
         Self {
@@ -45,8 +34,6 @@ impl MongoChatRepository {
         }
     }
 
-    /// Build from a `Database` directly (used by tests with
-    /// `testcontainers`).
     pub fn from_db(db: &Database) -> Self {
         Self {
             rooms: db.collection(COLL_ROOMS),
@@ -213,7 +200,7 @@ impl ChatRepository for MongoChatRepository {
             .iter()
             .map(|u| bson::Bson::String(u.to_string()))
             .collect();
-        // Find any room that contains all of these user_ids.
+
         let mut cur = self
             .rooms
             .find(doc! { "participants.user_id": { "$all": uids } })
@@ -272,7 +259,7 @@ impl ChatRepository for MongoChatRepository {
         while let Some(d) = cur.next().await {
             let d = d.map_err(|e| ChatRepoError::Backend(e.to_string()))?;
             let room = room_from_doc(d.clone())?;
-            // Latest message.
+
             let msg_opts = FindOptions::builder()
                 .sort(doc! { "sent_at": -1 })
                 .limit(1)
@@ -287,8 +274,7 @@ impl ChatRepository for MongoChatRepository {
                 Some(Ok(d)) => Some(message_from_doc(d)?),
                 _ => None,
             };
-            // Unread count: messages whose sender is not me and
-            // that have no read receipt for me.
+
             let unread_filter = doc! {
                 "room_id": room.id.to_string(),
                 "sender_id": { "$ne": user_id.to_string() },
@@ -336,7 +322,7 @@ impl ChatRepository for MongoChatRepository {
     }
 
     async fn insert_message(&self, message: &ChatMessage) -> Result<(), ChatRepoError> {
-        // Idempotent on _id (MessageId).
+
         self.messages
             .insert_one(message_to_doc(message))
             .await
@@ -350,8 +336,7 @@ impl ChatRepository for MongoChatRepository {
         user_id: Uuid,
         at: DateTime<Utc>,
     ) -> Result<(), ChatRepoError> {
-        // Append a read receipt only to messages that don't
-        // already have one for this user.
+
         let filter = doc! {
             "room_id": room_id.to_string(),
             "sender_id": { "$ne": user_id.to_string() },

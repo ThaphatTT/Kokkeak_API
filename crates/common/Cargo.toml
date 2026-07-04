@@ -12,39 +12,39 @@ serde = { workspace = true }
 figment = { workspace = true }
 thiserror = { workspace = true }
 
-# Axum (for IntoResponse impl + Json helpers)
+
 axum = { workspace = true }
 
-# Telemetry
+
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 
-# M7: i18n
+
 rust-i18n = "3"
 
-# T-24: OpenTelemetry. Off by default — opt in via
-# `--features kokkak-common/otel` (CI keeps the default fast).
-# The `metrics` feature on `opentelemetry-otlp` lets us route the
-# existing Prometheus metrics through the OTLP exporter when
-# the operator prefers a single collector (Tempo + Mimir stack).
+
+
+
+
+
 opentelemetry = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }
 opentelemetry-otlp = { workspace = true, optional = true }
 tracing-opentelemetry = { workspace = true, optional = true }
 
-# LAYERING SMELL (see AGENTS.md § 3): common normally sits below
-# domain, but `i18n::tr_with_repo` lives here and needs the
-# `TranslationRepository` port from `domain` to look up per-tenant
-# overrides. The clean fix is to move `tr_with_repo` to
-# `application/i18n.rs` and drop this dep. Tracked for follow-up.
+
+
+
+
+
 kokkak-domain = { path = "../domain" }
 
 [features]
-# T-24: turn on to enable OTLP trace + metrics export.
-# Adds ~30 transitive crates and ~1m to clean build time;
-# worth it once you have a Tempo/Jaeger + Mimir stack.
+
+
+
 otel = [
     "dep:opentelemetry",
     "dep:opentelemetry_sdk",

@@ -1,15 +1,5 @@
-# Thai locale.
-#
-# Project primary language (per AGENTS.md § 13). The Lao market is
-# the deployment target; Thai covers a sizable secondary market and
-# helps reviewers verify coverage.
-#
-# NOTE: This is **starter copy** — native speakers on the KOKKAK
-# team must review every string before shipping. The translation
-# must convey the *meaning* of the English original, not be a
-# literal word-for-word rendering.
 
-# -- generic error envelope --
+
 err:
   bad_request: "คำขอไม่ถูกต้อง: {0}"
   unauthorized: "ไม่ได้รับอนุญาต"
@@ -20,7 +10,6 @@ err:
   rate_limited: "ถูกจำกัดจำนวนคำขอ"
   internal: "ข้อผิดพลาดภายใน: {0}"
 
-# -- AuthError / auth handlers --
 err_auth:
   invalid_credentials: "อีเมลหรือรหัสผ่านไม่ถูกต้อง"
   token_expired: "โทเคนหมดอายุ"
@@ -37,13 +26,11 @@ err_auth:
   role_not_allowed: "ไม่อนุญาตให้ใช้บทบาทนี้: {0}"
   user_not_found: "ไม่พบผู้ใช้: {0}"
 
-# -- RepoError (generic) --
 err_repo:
   not_found: "ไม่พบ: {0}"
   conflict: "ขัดแย้ง: {0}"
   backend: "ระบบจัดเก็บข้อมูลขัดข้อง: {0}"
 
-# -- ChatError + ChatRepoError --
 err_chat:
   not_participant: "คุณไม่ได้เป็นสมาชิกของห้อง {0}"
   room_not_found: "ไม่พบห้อง {0}"
@@ -57,7 +44,6 @@ err_chat_repo:
   not_found: "ไม่พบ: {0}"
   backend: "ระบบแชทขัดข้อง: {0}"
 
-# -- PaymentError + PaymentRepoError --
 err_payment:
   order_not_payable: "คำสั่งงาน {0} ไม่สามารถชำระเงินได้ (สถานะไม่ตรง)"
   not_found: "ไม่พบการชำระเงิน {0}"
@@ -72,15 +58,12 @@ err_payment_repo:
   not_found: "ไม่พบ: {0}"
   backend: "ระบบชำระเงินขัดข้อง: {0}"
 
-# -- Order handlers --
 err_order:
   invalid_total: "ยอดเงินไม่ถูกต้อง"
 
-# -- Generic request validation --
 err_request:
   bad_timestamp: "after ต้องเป็น timestamp รูปแบบ RFC3339"
 
-# -- Admin permissions (M15-prep: GET /api/v1/admin/permissions) --
 err_permission:
   mode_required: "ต้องระบุ query parameter `mode`"
   invalid_role_guid: "user_role_guid ไม่ใช่ UUID ที่ถูกต้อง"
@@ -90,7 +73,6 @@ err_permission:
   invalid_override_effect: "effect ต้องเป็น 'allow' หรือ 'deny'"
   invalid_override_status: "status ต้องเป็น 0 หรือ 1"
 
-# -- M20-b: admin user creation (SP_USER_INSERT_FULL) --
 err_admin_user:
   actor_required: "ต้องระบุ actor"
   actor_not_found: "ไม่พบ actor หรือ actor ไม่ได้ใช้งาน"

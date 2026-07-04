@@ -1,32 +1,4 @@
-//! Local-filesystem `Storage` adapter (M9-extra / T-16 variant).
-//!
-//! Reads blobs from a configurable root directory and writes them
-//! to the same root under a `StorageKey` that is treated as a
-//! **relative path** (e.g. `users/abc-123/profile/uuid.jpg`).
-//!
-//! The `LocalStorage` adapter exists for two scenarios where S3 is
-//! overkill or unavailable:
-//!
-//! 1. **Strangler transition** — the legacy ASP.NET service already
-//!    writes blobs to a shared filesystem mount; the new Rust API
-//!    can serve the same paths without rewriting history.
-//! 2. **Local dev / CI** — developers run the API without MinIO;
-//!    files land under `./data/uploads/` (default) for easy
-//!    inspection.
-//!
-//! `presigned_get_url` returns `Ok(None)` — local files don't have
-//! a signed URL concept. Callers that need to serve the bytes back
-//! over HTTP must wire a static-file middleware or a dedicated
-//! download endpoint (out of scope here).
-//!
-//! ponytail: this adapter assumes the process owns the root
-//! directory. Concurrent processes writing the same key race; the
-//! `put` is not transactional across `create_dir_all` + `write`.
-//! Upgrade path: add an `fs2`-style advisory lock, or move to S3
-//! when more than one writer exists. The race window is small
-//! (microseconds) and only happens on the same key, so for the
-//! current single-process dev / single-replica transition target
-//! this is acceptable.
+
 
 use std::path::{Component, Path, PathBuf};
 
@@ -38,19 +10,14 @@ use thiserror::Error;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
-/// Local-filesystem configuration.
 #[derive(Debug, Clone)]
 pub struct LocalConfig {
-    /// Root directory. Created on demand. The configured
-    /// `StorageKey` is appended to it verbatim (after the
-    /// path-traversal check).
+
     pub root: PathBuf,
 }
 
 impl LocalConfig {
-    /// Build from a root path string. Empty strings are
-    /// rejected because they would resolve to the process's
-    /// current directory — surprising default.
+
     pub fn new(root: impl Into<PathBuf>) -> Result<Self, LocalError> {
         let root = root.into();
         if root.as_os_str().is_empty() {
@@ -60,16 +27,15 @@ impl LocalConfig {
     }
 }
 
-/// Errors raised by the local adapter.
 #[derive(Debug, Error)]
 pub enum LocalError {
-    /// Configuration / startup failure.
+
     #[error("local storage config error: {0}")]
     Config(String),
-    /// Underlying filesystem failure (IO error, permission, ...).
+
     #[error("local storage backend error: {0}")]
     Backend(String),
-    /// Caller-supplied key would escape the configured root.
+
     #[error("invalid storage key `{0}`: must be a relative path with no `..` segments")]
     InvalidKey(String),
 }
@@ -83,16 +49,13 @@ impl From<LocalError> for StorageError {
     }
 }
 
-/// Local-filesystem `Storage` implementation.
 #[derive(Clone)]
 pub struct LocalStorage {
     root: PathBuf,
 }
 
 impl LocalStorage {
-    /// Build a local adapter and ensure the root directory exists.
-    /// The root is created on demand so a fresh checkout boots
-    /// without a manual `mkdir`.
+
     pub async fn new(cfg: &LocalConfig) -> Result<Self, LocalError> {
         fs::create_dir_all(&cfg.root)
             .await
@@ -102,12 +65,6 @@ impl LocalStorage {
         })
     }
 
-    /// Resolve a `StorageKey` to an absolute path under the root.
-    /// Rejects:
-    /// - empty keys
-    /// - absolute paths (`/foo`, `C:\foo`)
-    /// - any `..` segment (path-traversal guard)
-    /// - backslashes on non-Windows (force forward-slash keys)
     fn resolve(&self, key: &StorageKey) -> Result<PathBuf, LocalError> {
         let raw = key.as_str();
         if raw.is_empty() {
@@ -158,9 +115,7 @@ impl Storage for LocalStorage {
                 StorageError::Backend(format!("create parent {}: {e}", parent.display()))
             })?;
         }
-        // Write to a sibling temp file then rename — protects
-        // against a concurrent reader seeing a half-written
-        // file when the same key is re-uploaded.
+
         let tmp = abs.with_extension(format!(
             "{}.tmp",
             abs.extension().and_then(|e| e.to_str()).unwrap_or("part")
@@ -215,10 +170,7 @@ impl Storage for LocalStorage {
         _key: &StorageKey,
         _ttl_secs: u32,
     ) -> Result<Option<String>, StorageError> {
-        // ponytail: local files don't sign URLs — the caller
-        // already has a path. Returning `None` forces the API
-        // to either proxy via a future static-file route or
-        // hand the key back to the client as-is.
+
         Ok(None)
     }
 }

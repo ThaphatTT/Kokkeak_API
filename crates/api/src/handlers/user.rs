@@ -1,11 +1,4 @@
-//! User HTTP handlers (M2 + M11 i18n + T-06 AppError refactor).
-//!
-//! - GET /api/v1/users/me
-//!
-//! **T-06**: the duplicate `auth_error_to_response` helper that
-//! used to live here was deleted; errors now flow through
-//! [`crate::error::ApiError`] + `IntoLocalizedResponse`, identical
-//! to the auth handlers.
+
 
 use axum::{
     extract::State,
@@ -19,7 +12,6 @@ use crate::error::{ApiError, IntoLocalizedResponse};
 use crate::middleware::auth::AuthnUser;
 use crate::state::AppState;
 
-/// GET /api/v1/users/me
 #[utoipa::path(
     get,
     path = "/api/v1/users/me",

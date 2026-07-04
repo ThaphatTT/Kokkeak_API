@@ -1,14 +1,4 @@
-//! Kokkeak Worker entry point (M4).
-//!
-//! Connects to NATS JetStream, subscribes to the subjects defined
-//! in AGENTS.md § 10, and dispatches messages to the registered
-//! handlers (all idempotent).
-//!
-//! Run with: `cargo run --bin kokkak-worker`
-//!
-//! Required env:
-//! - KOKKAK_NATS__URL (`nats://host:4222`)
-//! - KOKKAK_REDIS__URL (optional — enables Redis-backed idempotency)
+
 
 use std::sync::Arc;
 
@@ -33,8 +23,7 @@ async fn main() {
 
     telemetry::init_tracing(settings.log.format);
     let _ = telemetry::init_metrics();
-    // T-24: opt-in OTLP bridge. No-op unless the `otel` feature
-    // is enabled and OTEL_EXPORTER_OTLP_ENDPOINT is set.
+
     if telemetry::init_otel("kokkak-worker", None) {
         info!("OTel exporter wired (traces + metrics OTLP)");
     }
@@ -51,7 +40,6 @@ async fn main() {
         std::process::exit(1);
     }
 
-    // Build the idempotency cache.
     let idempotency: Arc<dyn Idempotency> = match RedisCache::new(&settings.redis) {
         Ok(cache) => {
             info!("using Redis-backed idempotency cache");
@@ -63,12 +51,8 @@ async fn main() {
         }
     };
 
-    // Build the handler context.
     let ctx = HandlerContext { idempotency };
 
-    // M8: wire chat.persist to MSSQL (M14.5 — JSON-DB sim removed).
-    // The worker reuses the API process's topology when co-located,
-    // or builds its own pool from KOKKAK_DATABASE__SQLSERVER_URL.
     let mssql_url = std::env::var("KOKKAK_DATABASE__SQLSERVER_URL").unwrap_or_default();
     if mssql_url.is_empty() || mssql_url == "disabled" {
         eprintln!(
@@ -87,7 +71,6 @@ async fn main() {
     kokkak_worker::handlers::chat_persist::set_chat_repo(chat_repo);
     info!("chat.persist handler wired to MSSQL");
 
-    // Register every handler.
     let handlers: Vec<Arc<dyn kokkak_worker::handlers::Handler>> = vec![
         Arc::new(NotiPushHandler::new(ctx.clone())),
         Arc::new(CommEmailHandler::new(ctx.clone())),
@@ -96,7 +79,6 @@ async fn main() {
         Arc::new(PointsRecalcHandler::new(ctx)),
     ];
 
-    // Connect NATS + assemble worker.
     let queue = Arc::new(
         kokkak_infra::queue::nats::NatsQueue::connect(&settings.nats)
             .await
@@ -109,7 +91,6 @@ async fn main() {
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-    // Graceful shutdown on SIGINT / SIGTERM.
     tokio::spawn(async move {
         let ctrl_c = tokio::signal::ctrl_c();
         #[cfg(unix)]

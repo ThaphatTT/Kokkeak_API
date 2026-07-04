@@ -1,18 +1,4 @@
-//! Integration tests for the T-14 HTTP idempotency middleware.
-//!
-//! Each test builds a minimal router with a single POST handler
-//! that echoes a counter, wires the idempotency middleware with
-//! an in-memory store, and verifies the replay semantics:
-//!
-//! - First request with a key: handler runs, response is cached.
-//! - Second request with the same key: handler does NOT run
-//!   (counter stays at 1), response is replayed with
-//!   `Idempotency-Replayed: true`.
-//! - Non-POST requests bypass the middleware regardless of the
-//!   header (the layer is POST-only by design).
-//! - Requests without the header bypass the middleware
-//!   (permissive mode — strict mode is T-15).
-//! - 4xx / 5xx responses are not cached.
+
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -32,15 +18,10 @@ use kokkak_api::middleware::idempotency::{
 use kokkak_infra::idempotency::InMemoryIdempotencyStore;
 use tower::ServiceExt;
 
-/// Counter that the handler increments; tests use it to assert
-/// whether the handler was invoked or served from the cache.
 fn counter() -> Arc<AtomicU32> {
     Arc::new(AtomicU32::new(0))
 }
 
-/// Build a router that increments a counter on each POST and
-/// returns the new value. The idempotency middleware is wired
-/// around the handler with a fresh in-memory store.
 fn app_with_idempotency(counter: Arc<AtomicU32>) -> Router {
     let store: Arc<dyn kokkak_domain::IdempotencyStore> =
         Arc::new(InMemoryIdempotencyStore::new(100));
@@ -64,8 +45,6 @@ fn app_with_idempotency(counter: Arc<AtomicU32>) -> Router {
         }))
 }
 
-/// Build a router that returns a custom Content-Type so the
-/// replay-preserves-headers contract can be verified.
 fn app_with_typed_response(counter: Arc<AtomicU32>) -> Router {
     let store: Arc<dyn kokkak_domain::IdempotencyStore> =
         Arc::new(InMemoryIdempotencyStore::new(100));
@@ -139,7 +118,6 @@ async fn second_request_with_same_key_replays_cached_response() {
     let counter = counter();
     let app = app_with_idempotency(counter.clone());
 
-    // First call — handler runs.
     let r1 = app
         .clone()
         .oneshot(request_with_key("/echo", "key-2"))
@@ -148,13 +126,12 @@ async fn second_request_with_same_key_replays_cached_response() {
     assert_eq!(body_string(r1).await, "1");
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 
-    // Second call — replay, handler does NOT run.
     let r2 = app
         .clone()
         .oneshot(request_with_key("/echo", "key-2"))
         .await
         .unwrap();
-    // Check headers before consuming the body.
+
     assert_eq!(r2.status(), StatusCode::CREATED);
     assert_eq!(
         r2.headers()
@@ -188,16 +165,14 @@ async fn different_keys_invoke_handler_independently() {
         .oneshot(request_with_key("/echo", "key-B"))
         .await
         .unwrap();
-    // Different key, so handler runs again, counter ticks to 2.
+
     assert_eq!(body_string(r2).await, "2");
     assert_eq!(counter.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]
 async fn request_without_key_passes_through() {
-    // No `Idempotency-Key` header → middleware is a no-op and
-    // each call runs the handler. This is the "permissive"
-    // default; strict mode (require the header) is T-15.
+
     let counter = counter();
     let app = app_with_idempotency(counter.clone());
 
@@ -232,7 +207,7 @@ async fn empty_key_header_passes_through() {
 
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(body_string(resp).await, "1");
-    // Second call also runs (whitespace key is treated as absent).
+
     let resp = app
         .clone()
         .oneshot(request_without_key("/echo"))

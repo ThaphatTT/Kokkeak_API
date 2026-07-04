@@ -1,21 +1,21 @@
--- ============================================================================
--- KOKKAK NEW_DB v2 - Stored Procedures: Service Catalog
---
--- Reference: NEW_DB.txt `category_job_service_sub` is the leaf level the mobile
--- client renders. We expose a flat list keyed by guid + a top-N "active" view.
--- ============================================================================
 
--- ----------------------------------------------------------------------------
--- API_SERVICE_LIST_ACTIVE
--- Returns all currently-published service categories (master / sub / icon /
--- price / warranty). Single result set for the mobile home screen.
--- ----------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
 IF OBJECT_ID('dbo.API_SERVICE_LIST_ACTIVE', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.API_SERVICE_LIST_ACTIVE AS BEGIN SET NOCOUNT ON; END');
 GO
 
 ALTER PROCEDURE dbo.API_SERVICE_LIST_ACTIVE
-    @p_lang_code NVARCHAR(8) = N'th'  -- for future translation tables
+    @p_lang_code NVARCHAR(8) = N'th'  
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -40,10 +40,10 @@ BEGIN
 END;
 GO
 
--- ----------------------------------------------------------------------------
--- API_SERVICE_GET
--- Single service lookup by id.
--- ----------------------------------------------------------------------------
+
+
+
+
 IF OBJECT_ID('dbo.API_SERVICE_GET', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.API_SERVICE_GET AS BEGIN SET NOCOUNT ON; END');
 GO
@@ -78,10 +78,10 @@ BEGIN
 END;
 GO
 
--- ----------------------------------------------------------------------------
--- API_SERVICE_MAIN_LIST
--- Top-level category list (e.g. "Plumbing", "Electrical").
--- ----------------------------------------------------------------------------
+
+
+
+
 IF OBJECT_ID('dbo.API_SERVICE_MAIN_LIST', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.API_SERVICE_MAIN_LIST AS BEGIN SET NOCOUNT ON; END');
 GO

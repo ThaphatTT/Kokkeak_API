@@ -1,22 +1,4 @@
-# GitHub Actions CI for Kokkeak_API (plan T-02 + AGENTS.md §2).
-#
-# Four commit gates run in lock-step with what AGENTS.md §2 mandates:
-#   1. cargo fmt --check
-#   2. cargo clippy --workspace --all-targets -- -D warnings
-#   3. cargo test --workspace
-#   4. cargo build --release
-#
-# Matrices:
-#   - ubuntu-latest: primary; tiberius builds correctly here
-#   - windows-latest: optional mirror; the team uses Windows for dev
-#
-# Toolchain pinning:
-#   - dtolnay/rust-toolchain reads rust-toolchain.toml automatically
-#     (no manual channel duplication here).
-#   - Swatinem/rust-cache@v2 keys on rust-toolchain.toml so cache
-#     invalidates automatically when the toolchain file changes.
-#
-# Fail-fast: any step failing aborts the run.
+
 
 name: CI
 
@@ -26,15 +8,14 @@ on:
   pull_request:
     branches: [main]
 
-# Cancel in-flight runs for the same PR/branch.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  # Network glitch workaround on Windows runners — see AGENTS.md / plan.
+
   RUSTUP_MAX_RETRIES: "10"
-  # Suppress cargo's incremental-build noise in CI logs.
+
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
 
@@ -82,8 +63,6 @@ jobs:
         with:
           cache-on-failure: true
 
-      # `--all-features` exposes feature-gated dead code so the
-      # `-D warnings` gate catches it before merge.
       - name: cargo clippy (workspace, all targets, all features)
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
@@ -105,9 +84,6 @@ jobs:
         with:
           cache-on-failure: true
 
-      # `--all-features` matches clippy so feature-gated code is
-      # exercised in CI. Single-threaded because rust_i18n uses a
-      # global locale (see project AGENTS.md / test_count_2026-06-19).
       - name: cargo test (workspace, all features)
         run: cargo test --workspace --all-features -- --test-threads=1
 

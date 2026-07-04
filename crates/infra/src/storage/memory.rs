@@ -1,8 +1,4 @@
-//! In-memory `Storage` adapter (M9 dev / test).
-//!
-//! Backed by a `tokio::sync::RwLock<HashMap<StorageKey, Vec<u8>>>`.
-//! Presigned URLs are not supported (returns `Ok(None)`); the
-//! API must proxy downloads via a dedicated endpoint (M12+).
+
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,14 +9,13 @@ use kokkak_domain::{PutResult, Storage, StorageError, StorageKey};
 use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
 
-/// In-memory object store.
 #[derive(Clone, Default)]
 pub struct MemoryStorage {
     blobs: Arc<RwLock<HashMap<String, Vec<u8>>>>,
 }
 
 impl MemoryStorage {
-    /// Build a fresh in-memory store.
+
     pub fn new() -> Self {
         Self::default()
     }

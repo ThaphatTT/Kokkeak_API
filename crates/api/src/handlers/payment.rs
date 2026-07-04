@@ -1,11 +1,4 @@
-//! Payment HTTP handlers (M9 + M11 i18n).
-//!
-//! - `POST /api/v1/payments` — open a payment intent.
-//! - `POST /api/v1/payments/:id/confirm` — capture + commission + payout.
-//! - `GET  /api/v1/payments/me` — list my payments.
-//! - `GET  /api/v1/payments/:id` — fetch one payment.
-//! - `GET  /api/v1/admin/payouts` — admin: list payouts.
-//! - `POST /api/v1/admin/payouts/:id/pay` — admin: mark a payout paid.
+
 
 use axum::{
     extract::{Path, Query, State},
@@ -29,7 +22,7 @@ use crate::state::AppState;
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct CreatePaymentRequest {
     pub order_id: Uuid,
-    /// Optional override (otherwise the order's total is used).
+
     pub amount: Option<String>,
 }
 
@@ -60,7 +53,6 @@ impl From<Payment> for PaymentDto {
     }
 }
 
-/// POST /api/v1/payments — open a payment intent.
 #[utoipa::path(
     post,
     path = "/api/v1/payments",
@@ -187,7 +179,6 @@ impl From<Payout> for PayoutDto {
     }
 }
 
-/// POST /api/v1/payments/:id/confirm — capture + commission + payout.
 #[utoipa::path(
     post,
     path = "/api/v1/payments/{id}/confirm",
@@ -219,11 +210,7 @@ pub async fn confirm_payment(
         let msg = tr("err_payment.not_found_msg", &locale, &[]);
         return Ok(not_found(msg));
     };
-    // M15-prep: owner OR admin-override. The admin path is gated
-    //    by `FinanceEscrowRelease` — "admin can capture / confirm
-    //    any payment" (e.g. dispute resolution, orphaned
-    //    payments, customer-requested capture). Fail-secure via
-    //    `AuthnUser::has_permission`.
+
     if p.customer_id != user.id()
         && !user
             .has_permission(Permission::FinanceEscrowRelease, &state.permission_checker)
@@ -264,7 +251,6 @@ pub struct ListMyQuery {
     pub limit: Option<u32>,
 }
 
-/// GET /api/v1/payments/me — list my payments.
 #[utoipa::path(
     get,
     path = "/api/v1/payments/me",
@@ -295,7 +281,6 @@ pub async fn list_my_payments(
     Ok((StatusCode::OK, paginated(items, meta)).into_response())
 }
 
-/// GET /api/v1/payments/:id — fetch one payment.
 #[utoipa::path(
     get,
     path = "/api/v1/payments/{id}",
@@ -324,11 +309,7 @@ pub async fn get_payment(
         let msg = tr("err_payment.not_found_msg", &locale, &[]);
         return Ok(not_found(msg));
     };
-    // M15-prep: owner OR admin-override. The admin path is gated
-    //    by `FinanceExport` — the closest semantic match in the
-    //    permission catalog for "admin can read any payment".
-    //    ponytail: not adding a `PAYMENT_ADMIN_VIEW` code yet
-    //    because no consumer beyond this fallback uses it.
+
     if p.customer_id != user.id()
         && !user
             .has_permission(Permission::FinanceExport, &state.permission_checker)
@@ -356,7 +337,6 @@ pub struct ListPayoutsQuery {
     pub limit: Option<u32>,
 }
 
-/// GET /api/v1/admin/payouts — admin: list payouts.
 #[utoipa::path(
     get,
     path = "/api/v1/admin/payouts",
@@ -375,8 +355,7 @@ pub async fn list_payouts_admin(
     Query(q): Query<ListPayoutsQuery>,
 ) -> Result<Response, Response> {
     let locale = current_locale();
-    // 1. RBAC — M15-prep: listing payouts is a finance-export
-    //    action; gate on `FinanceExport`.
+
     if !user
         .has_permission(Permission::FinanceExport, &state.permission_checker)
         .await
@@ -415,7 +394,6 @@ pub async fn list_payouts_admin(
     Ok((StatusCode::OK, paginated(items, meta)).into_response())
 }
 
-/// POST /api/v1/admin/payouts/:id/pay — admin: mark a payout paid.
 #[utoipa::path(
     post,
     path = "/api/v1/admin/payouts/{id}/pay",
@@ -437,8 +415,7 @@ pub async fn mark_payout_paid_admin(
     Path(id): Path<Uuid>,
 ) -> Result<Response, Response> {
     let locale = current_locale();
-    // 1. RBAC — M15-prep: marking a payout paid is the escrow
-    //    release action; gate on `FinanceEscrowRelease`.
+
     if !user
         .has_permission(Permission::FinanceEscrowRelease, &state.permission_checker)
         .await
@@ -526,6 +503,4 @@ async fn payment_err_to_response(e: PaymentError, state: &AppState) -> Response 
     (status, Json(envelope)).into_response()
 }
 
-/// Borrow the `PaymentService` type for adapter crates that
-/// only have the api lib.
 pub type ApiPaymentService = PaymentService;

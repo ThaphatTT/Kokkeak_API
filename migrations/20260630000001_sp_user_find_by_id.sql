@@ -1,15 +1,15 @@
--- 20260630000001_sp_user_find_by_id.sql
---
--- SP_USER_FIND_BY_ID — read user by GUID for refresh-token flow (M14.5+).
--- Companion to SP_USER_FIND_BY_USERNAME; same column shape (profile +
--- permissions rows, discriminated by row_kind) so MssqlUserRepository
--- ::row_to_user can read either without modification.
---
--- ponytail: varchar(50) GUID param per project convention — DB GUID
--- columns are stored as varchar/nvarchar (implicit-cast at WHERE).
--- LTRIM/RTRIM/ISNULL/IF-empty guards mirror SP_USER_FIND_BY_USERNAME
--- pattern. Ceiling: SP_-prefixed read SP family only — API_-prefixed
--- SPs keep UNIQUEIDENTIFIER params (caller binds natively).
+
+
+
+
+
+
+
+
+
+
+
+
 
 IF OBJECT_ID('dbo.SP_USER_FIND_BY_ID', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.SP_USER_FIND_BY_ID AS BEGIN SET NOCOUNT ON; END');

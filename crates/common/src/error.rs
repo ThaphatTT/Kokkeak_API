@@ -1,27 +1,4 @@
-//! Application error type + JSON body shape.
-//!
-//! Maps to HTTP status codes per AGENTS.md § 11.3. Renders to a
-//! standard `ApiResponse` envelope via `IntoResponse` (see [`ApiResponse`]).
-//!
-//! ## Variants
-//!
-//! Each variant maps to a specific HTTP status via [`AppError::status`]
-//! and a stable snake-case code via [`AppError::code`]. New codes
-//! require extending the [`crate::error_codes::ErrorCode`] catalog and
-//! adding the matching variant here — codes are STABLE, never renamed.
-//!
-//! ## Localization
-//!
-//! The sync [`AppError::IntoResponse`] impl uses the variant's `Display`
-//! string, which is fine for logs and tests. For request-scoped
-//! localized messages, handlers convert the error to an [`AppError`]
-//! and wrap it with [`AppError::with_message`] (or call the api-layer
-//! `IntoLocalizedResponse::into_localized_response` extension). The
-//! `Localized` variant carries a pre-rendered message; `IntoResponse`
-//! surfaces that message verbatim instead of the English `Display`.
-//!
-//! See [`crate::i18n::tr_with_repo`] for the message lookup used to
-//! fill `Localized`.
+
 
 use axum::{
     http::StatusCode,
@@ -33,93 +10,64 @@ use thiserror::Error;
 
 use crate::response::ApiResponse;
 
-/// Top-level application error.
-///
-/// Each variant maps to a specific HTTP status code via [`AppError::status`]
-/// and a stable string code via [`AppError::code`].
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum AppError {
-    /// 400 — request is malformed (e.g. invalid JSON, missing field).
+
     #[error("bad request: {0}")]
     BadRequest(String),
 
-    /// 401 — no/invalid/expired credentials.
     #[error("unauthorized")]
     Unauthorized,
 
-    /// 401 — bearer token signature / format invalid.
     #[error("invalid token: {0}")]
     InvalidToken(String),
 
-    /// 401 — bearer token past its `exp`.
     #[error("token expired")]
     TokenExpired,
 
-    /// 403 — authenticated but lacks required permission.
     #[error("forbidden: {0}")]
     Forbidden(String),
 
-    /// 403 — admin role required (admin-only endpoints).
     #[error("admin role required")]
     AdminRequired,
 
-    /// 404 — resource not found.
     #[error("not found: {0}")]
     NotFound(String),
 
-    /// 409 — state conflict (e.g. unique-key collision).
     #[error("conflict: {0}")]
     Conflict(String),
 
-    /// 409 — username already taken (registration, admin user create).
     #[error("username already taken")]
     UsernameTaken,
 
-    /// 422 — semantic validation failure.
     #[error("validation: {0}")]
     Validation(String),
 
-    /// 422 — role string not in the public-registration allow-list.
     #[error("role not allowed: {0}")]
     RoleNotAllowed(String),
 
-    /// 429 — rate limit hit. The payload is the seconds-until-retry
-    /// hint from the rate limiter; [`IntoResponse`] echoes it back in
-    /// the `Retry-After` response header (RFC 6585 §4) so well-behaved
-    /// clients back off automatically. The HTTP-layer rate limit
-    /// middleware and the per-(username, IP) login rate limiter both
-    /// produce this variant.
     #[error("rate limited")]
     RateLimited {
-        /// Seconds the client should wait before retrying.
+
         retry_after_secs: u64,
     },
 
-    /// 500 — unexpected internal error. Use for catch-all.
     #[error("internal: {0}")]
     Internal(String),
 
-    /// i18n carrier — wraps any (status, code) with a pre-localized
-    /// message. Handlers convert a domain error to [`AppError`] and
-    /// then wrap via [`AppError::with_message`] after looking up the
-    /// translation key. `IntoResponse` surfaces `message` verbatim
-    /// instead of the English `Display`.
     #[error("localized error ({code}): {message}")]
     Localized {
-        /// HTTP status the carrier represents. Inherited from the
-        /// wrapped variant when produced by [`AppError::with_message`].
+
         status: StatusCode,
-        /// Stable snake-case code (e.g. `"validation"`). Inherited
-        /// from the wrapped variant; see [`crate::error_codes`].
+
         code: &'static str,
-        /// Pre-rendered, locale-specific message. Surfaced verbatim
-        /// by `IntoResponse` instead of the English `Display`.
+
         message: String,
     },
 }
 
 impl AppError {
-    /// Map to the HTTP status code that should be returned.
+
     pub fn status(&self) -> StatusCode {
         match self {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
@@ -139,7 +87,6 @@ impl AppError {
         }
     }
 
-    /// Stable snake-case code (safe for clients to switch on).
     pub fn code(&self) -> &'static str {
         match self {
             Self::BadRequest(_) => "bad_request",
@@ -159,9 +106,6 @@ impl AppError {
         }
     }
 
-    /// Build the serializable body that goes in the envelope's `error`
-    /// field. For the `Localized` variant, the pre-rendered message is
-    /// used verbatim; all other variants fall back to `Display`.
     pub fn body(&self) -> ApiErrorBody {
         match self {
             Self::Localized { code, message, .. } => ApiErrorBody {
@@ -175,10 +119,6 @@ impl AppError {
         }
     }
 
-    /// Wrap the error in [`AppError::Localized`] with a pre-rendered
-    /// message. Use after looking up the i18n key via
-    /// [`crate::i18n::tr_with_repo`] so the user sees the request's
-    /// locale instead of the English `Display`.
     pub fn with_message(self, message: String) -> Self {
         Self::Localized {
             status: self.status(),
@@ -199,13 +139,6 @@ impl IntoResponse for AppError {
         let status = self.status();
         let mut resp = (status, Json(envelope)).into_response();
 
-        // RFC 7235 §3.1: a 401 response MUST carry a
-        // `WWW-Authenticate` challenge. We use Bearer since the API
-        // authenticates with JWT bearer tokens. Affects all 401
-        // variants (`Unauthorized` / `InvalidToken` / `TokenExpired`).
-        // ponytail: realm is a human-readable scope hint, not a
-        // security boundary — the API does not run multiple auth
-        // schemes that would need realm disambiguation.
         if status == StatusCode::UNAUTHORIZED {
             resp.headers_mut().insert(
                 axum::http::header::WWW_AUTHENTICATE,
@@ -213,16 +146,8 @@ impl IntoResponse for AppError {
             );
         }
 
-        // RFC 6585 §4: 429 responses SHOULD carry `Retry-After` so
-        // well-behaved clients (OkHttp, axios, browser fetch)
-        // back off automatically. The seconds come from the rate
-        // limiter that produced the error (login RL or HTTP RL).
         if let Self::RateLimited { retry_after_secs } = &self {
-            // `u64::to_string()` always produces ASCII digits, which
-            // is a valid `HeaderValue` per RFC 7230. The `if let Ok`
-            // is defensive only — if a future refactor passes a
-            // non-numeric value through this path, the response
-            // stays correct (just without the header).
+
             if let Ok(v) = axum::http::HeaderValue::from_str(&retry_after_secs.to_string()) {
                 resp.headers_mut()
                     .insert(axum::http::header::RETRY_AFTER, v);
@@ -233,12 +158,11 @@ impl IntoResponse for AppError {
     }
 }
 
-/// JSON body returned in the envelope's `error` field.
 #[derive(Debug, Serialize, Clone)]
 pub struct ApiErrorBody {
-    /// Stable, snake-case error code (e.g. `"not_found"`).
+
     pub code: String,
-    /// Human-readable error message (safe to log/display).
+
     pub message: String,
 }
 
@@ -297,9 +221,7 @@ mod tests {
 
     #[test]
     fn codes_match_error_code_catalog() {
-        // Every code returned by AppError::code() must exist in the
-        // ErrorCode catalog (T-17). Adding a variant here requires
-        // extending the catalog.
+
         let pairs: &[(AppError, &str)] = &[
             (
                 AppError::BadRequest("x".into()),
@@ -401,7 +323,7 @@ mod tests {
             }
             other => panic!("expected Localized, got {other:?}"),
         }
-        // Status + code are inherited from the original variant.
+
         assert_eq!(err.status(), 422);
         assert_eq!(err.code(), "validation");
     }
@@ -416,9 +338,7 @@ mod tests {
 
     #[test]
     fn localized_status_and_code_independent_of_variant() {
-        // The Localized variant can stand on its own — e.g. if a
-        // handler wants to surface a localized message that doesn't
-        // map to any typed AppError variant.
+
         let err = AppError::Localized {
             status: StatusCode::SERVICE_UNAVAILABLE,
             code: "maintenance",
@@ -429,14 +349,6 @@ mod tests {
         assert_eq!(err.body().message, "ปิดปรับปรุง");
     }
 
-    // ---- Security headers (RFC 7235 §3.1, RFC 6585 §4) ----
-    //
-    // 401 responses MUST carry a `WWW-Authenticate` challenge
-    // (RFC 7235). Without it, well-behaved HTTP clients (browsers,
-    // OkHttp, axios interceptors) cannot properly handle auth
-    // challenges. 429 responses SHOULD carry `Retry-After` (RFC 6585)
-    // so clients back off automatically.
-
     fn header_value(resp: &Response, name: axum::http::header::HeaderName) -> Option<String> {
         resp.headers()
             .get(name)
@@ -446,8 +358,7 @@ mod tests {
 
     #[test]
     fn unauthorized_response_carries_www_authenticate_bearer() {
-        // Login-style failure (no specific reason). The body is
-        // generic; the header signals the auth scheme.
+
         let resp = AppError::Unauthorized.into_response();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         let challenge =
@@ -464,8 +375,7 @@ mod tests {
 
     #[test]
     fn invalid_token_response_carries_www_authenticate_bearer() {
-        // Bearer token with bad signature/format. Same challenge as
-        // `Unauthorized` — both are 401, same auth scheme.
+
         let resp = AppError::InvalidToken("bad sig".into()).into_response();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         let challenge = header_value(&resp, axum::http::header::WWW_AUTHENTICATE)
@@ -485,9 +395,7 @@ mod tests {
 
     #[test]
     fn non_401_responses_do_not_carry_www_authenticate() {
-        // The challenge only makes sense on 401. Other 4xx/5xx
-        // must NOT set it (clients would interpret the 4xx as a
-        // fresh auth challenge and re-prompt).
+
         for (err, expected_status) in [
             (AppError::BadRequest("x".into()), 400),
             (AppError::Forbidden("x".into()), 403),
@@ -522,10 +430,7 @@ mod tests {
 
     #[test]
     fn rate_limited_response_retry_after_uses_clamped_minimum() {
-        // The login rate limiter clamps retry-after to ≥1s (see
-        // `RateLimitDecision::retry_after_secs`). The header should
-        // reflect whatever the variant carries — the limiter, not
-        // the renderer, owns the floor.
+
         for secs in [1u64, 5, 30, 60, 300, 3600] {
             let resp = AppError::RateLimited {
                 retry_after_secs: secs,
@@ -539,9 +444,7 @@ mod tests {
 
     #[test]
     fn non_429_responses_do_not_carry_retry_after() {
-        // Retry-After is rate-limit-specific. A 503 (Service
-        // Unavailable) might also use it in some specs, but
-        // `AppError::Internal` is a 500 catch-all — no retry hint.
+
         let resp = AppError::Internal("db down".into()).into_response();
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert!(

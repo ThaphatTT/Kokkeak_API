@@ -1,8 +1,4 @@
-//! JWT issue / verify (M2).
-//!
-//! HS256 with a shared secret. Production may swap to RS256 by
-//! changing the `EncodingKey` / `DecodingKey` types — the
-//! `JwtService` API stays the same.
+
 
 use chrono::Utc;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
@@ -11,7 +7,6 @@ use uuid::Uuid;
 use kokkak_common::config::AuthSettings;
 use kokkak_domain::{AuthError, Claims, Role, TokenKind};
 
-/// JWT service (HS256).
 #[derive(Clone)]
 pub struct JwtService {
     encoding: EncodingKey,
@@ -33,8 +28,7 @@ impl std::fmt::Debug for JwtService {
 }
 
 impl JwtService {
-    /// Build from settings. Returns `Err(Backend)` when the secret
-    /// is empty (production must set `KOKKAK_AUTH__JWT_SECRET`).
+
     pub fn new(settings: &AuthSettings) -> Result<Self, AuthError> {
         if settings.jwt_secret.is_empty() {
             return Err(AuthError::Backend(
@@ -51,7 +45,6 @@ impl JwtService {
         })
     }
 
-    /// Issue an access token for `user_id` with the given roles.
     pub fn issue_access(
         &self,
         user_id: Uuid,
@@ -67,7 +60,6 @@ impl JwtService {
         )
     }
 
-    /// Issue a refresh token for `user_id`.
     pub fn issue_refresh(
         &self,
         user_id: Uuid,
@@ -109,7 +101,6 @@ impl JwtService {
         .map_err(|e| AuthError::Backend(format!("jwt encode: {e}")))
     }
 
-    /// Verify a token. Returns the parsed claims on success.
     pub fn verify(&self, token: &str) -> Result<Claims, AuthError> {
         let data =
             decode::<Claims>(token, &self.decoding, &self.validation).map_err(|e| {
@@ -118,19 +109,17 @@ impl JwtService {
                     _ => AuthError::InvalidToken(e.to_string()),
                 }
             })?;
-        // Issuer check.
+
         if data.claims.iss != self.issuer {
             return Err(AuthError::InvalidToken("issuer mismatch".into()));
         }
         Ok(data.claims)
     }
 
-    /// Access-token TTL in seconds.
     pub fn access_ttl_secs(&self) -> i64 {
         self.access_ttl_secs
     }
 
-    /// Refresh-token TTL in seconds.
     pub fn refresh_ttl_secs(&self) -> i64 {
         self.refresh_ttl_secs
     }
@@ -193,7 +182,7 @@ mod tests {
             .issue_access(Uuid::new_v4(), &[Role::Customer], "x")
             .unwrap();
         let mut tampered = token.clone();
-        // Flip a character near the end (signature segment).
+
         let last = tampered.pop().unwrap();
         tampered.push(if last == 'A' { 'B' } else { 'A' });
         let err = svc.verify(&tampered).unwrap_err();

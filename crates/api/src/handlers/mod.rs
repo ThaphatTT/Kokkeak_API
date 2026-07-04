@@ -1,4 +1,4 @@
-//! HTTP handlers (one module per feature area).
+
 
 pub mod admin;
 pub mod auth;

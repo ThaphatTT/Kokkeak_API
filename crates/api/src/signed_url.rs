@@ -1,28 +1,4 @@
-//! HMAC-SHA256 signed `/files/*` URLs (T-23-b).
-//!
-//! Frontend contract is unchanged: take the URL from the API
-//! response, paste it into `<img src=...>`. The URL the API hands
-//! out carries a one-way HMAC signature that the same API
-//! verifies on the matching `GET /files/*` request. Replay past
-//! `exp` returns 403; tampering with the path or the signature
-//! also returns 403; the secret never leaves the server.
-//!
-//! ## Wire format
-//!
-//! ```text
-//! {base}/files/{storage_key}?exp={unix_seconds}&sig={url_safe_b64_hmac_sha256}
-//! ```
-//!
-//! The HMAC payload is `"{storage_key}|{exp}"` — binding the
-//! expiry to the path so an attacker can't extend a leaked URL
-//! by replaying the same signature under a different exp (or
-//! vice-versa).
-//!
-//! ponytail: HMAC-SHA256 + secret >=32 bytes satisfies the
-//! AGENTS.md §21.7 NIST 800-175B requirement (one of SHA-2
-//! family with key). Constant-time compare happens inside
-//! `Hmac::verify_slice` (RustCrypto guarantee) so we don't
-//! need a separate `subtle` import.
+
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -32,12 +8,6 @@ use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// Compose a signed `/files/*` URL. `None` when:
-/// - `public_base_url` is empty
-/// - `storage_key` is empty
-/// - `secret` is empty
-/// - `ttl_secs` is zero (or system clock is pre-epoch, which
-///   would be a bug — keep the call site from panicking).
 pub fn signed_image_url(
     public_base_url: &str,
     storage_key: &str,
@@ -57,12 +27,6 @@ pub fn signed_image_url(
     ))
 }
 
-/// Verify the query parameters on a `/files/*` request.
-///
-/// Returns `false` on:
-/// - signature can't be decoded as URL-safe base64
-/// - signature is wrong (constant-time mismatch)
-/// - `exp` is in the past (or now-or-earlier).
 pub fn verify(secret: &[u8], storage_key: &str, exp: u64, sig: &str) -> bool {
     let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) else {
         return false;
@@ -79,7 +43,7 @@ pub fn verify(secret: &[u8], storage_key: &str, exp: u64, sig: &str) -> bool {
     mac.update(storage_key.as_bytes());
     mac.update(b"|");
     mac.update(exp.to_string().as_bytes());
-    // Hmac::verify_slice uses constant-time compare internally.
+
     mac.verify_slice(&sig_bytes).is_ok()
 }
 
@@ -107,14 +71,13 @@ mod tests {
             600,
         )
         .expect("non-empty inputs");
-        // Shape: <base>/files/<key>?exp=<N>&sig=<base64>
+
         assert!(
             url.starts_with("https://api.example.com/files/users/u-1/profile/uuid.webp?exp="),
             "url shape wrong: {url}"
         );
         assert!(url.contains("&sig="), "url missing sig: {url}");
 
-        // Pull out exp + sig and verify.
         let q = url.rsplit_once('?').unwrap().1;
         let mut parts = q.split('&');
         let exp_str = parts.next().unwrap().strip_prefix("exp=").unwrap();
@@ -170,7 +133,7 @@ mod tests {
             .parse()
             .unwrap();
         let sig = parts.next().unwrap().strip_prefix("sig=").unwrap();
-        // Flip the first char of the sig.
+
         let tampered = if sig.starts_with('A') {
             format!("B{}", &sig[1..])
         } else {
@@ -181,7 +144,7 @@ mod tests {
 
     #[test]
     fn rejects_expired() {
-        // exp = 1s in the past is for sure expired.
+
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -198,8 +161,7 @@ mod tests {
 
     #[test]
     fn signature_differs_for_different_exp() {
-        // The exp is part of the HMAC payload — bumping it
-        // produces a fresh signature even with the same path.
+
         let a = sign(SECRET, "k", 1000);
         let b = sign(SECRET, "k", 2000);
         assert_ne!(a, b);

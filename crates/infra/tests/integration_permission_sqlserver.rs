@@ -1,26 +1,4 @@
-//! Live SQL Server integration test for `dbo.FN_SECURITY_USER_HAS_PERMISSION`
-//! (the SP wrapper around `FN_SECURITY_USER_HAS_PERMISSION`).
-//!
-//! Runs against a real SQL Server reachable via
-//! `KOKKAK_DATABASE__SQLSERVER_URL`. Skipped when the env var is
-//! empty / missing / `"disabled"`.
-//!
-//! ## What it covers
-//!
-//! 1. **Deny** — user with no role and no override → `is_allowed = 0`.
-//! 2. **Role-allow** — admin user (seeded by M14) has `USERS_CREATE` → `is_allowed = 1`.
-//!
-//! ## Prerequisite
-//!
-//! The DBA must have applied the migration
-//! `migrations/20260701000002_sp_permission_has_permission_wrapper.sql`
-//! (or its TVF `dbo.FN_SECURITY_USER_HAS_PERMISSION`) before this
-//! test runs. The test does NOT auto-migrate — the SP lives outside
-//! our migration runner's scope.
-//!
-//! ponytail: each test mints fresh GUIDs so the suite can run
-//! concurrently (no shared seed cleanup). Run with
-//! `cargo test --test integration_permission_sqlserver -- --test-threads=4`.
+
 
 use std::env;
 
@@ -64,8 +42,6 @@ async fn deny_when_user_has_no_roles_and_no_overrides() {
     let pool = pool_for(&url).await;
     let repo = MssqlPermissionRepository::new(pool);
 
-    // Fresh GUID that the SP will fail to resolve → resolved_user
-    // is empty → CASE branch 1 fires (NOT EXISTS resolved_user).
     let unknown_guid = Uuid::new_v4();
     let result = repo
         .has_permission(unknown_guid, Permission::UsersCreate)
@@ -85,8 +61,6 @@ async fn role_allow_grants_permission_to_admin() {
     };
     let pool = pool_for(&url).await;
 
-    // Look up the admin user's GUID (seeded by M14 migration
-    // 20260619000002_seed_user_roles.sql).
     let admin_guid = match lookup_user_guid_by_username(&pool, "admin").await {
         Some(g) => g,
         None => {
@@ -106,20 +80,9 @@ async fn role_allow_grants_permission_to_admin() {
     assert!(result, "admin role must grant USERS_CREATE");
 }
 
-/// Resolve a username → user_guid via a raw query. The canonical
-/// lookup lives in `MssqlUserRepository`; this helper hits the table
-/// directly to keep this test file self-contained.
 async fn lookup_user_guid_by_username(pool: &MssqlPool, username: &str) -> Option<Uuid> {
     use tiberius::ToSql;
-    // ponytail: the inline `&[&username as &dyn ToSql]` slice is a
-    // temporary that ends at the next `;`, but `exec_sp`'s future
-    // (and every chained `.await` / `.ok()?` / `.first()?` along
-    // the way) borrows from it. Bind the slice to a `let` so the
-    // borrow checker sees a name whose lifetime extends through
-    // `.await`. Same pattern is used in every mssql_* repository
-    // where `let rows = exec_sp(...).await?;` keeps the params
-    // ref in a single statement — this helper just spans more
-    // `?` operators, so it needs the explicit `let`.
+
     let params: &[&dyn ToSql] = &[&username as &dyn ToSql];
     let rows = kokkak_infra::db::mssql::exec_sp(
         pool,
@@ -129,8 +92,7 @@ async fn lookup_user_guid_by_username(pool: &MssqlPool, username: &str) -> Optio
     .await
     .ok()?;
     let row = rows.first()?;
-    // Row::get returns `Option<&str>` (None when column missing / NULL).
-    // `?` unwraps; `to_string()` owns the value so `parse_str` can borrow it.
+
     let guid_str: String = row.get::<&str, _>("user_guid")?.to_string();
     Uuid::parse_str(&guid_str).ok()
 }

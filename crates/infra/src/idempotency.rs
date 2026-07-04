@@ -1,18 +1,4 @@
-//! In-memory [`IdempotencyStore`] (T-14).
-//!
-//! Stores cached HTTP responses in a `HashMap` behind a `Mutex`.
-//! Suitable for single-process deployments and integration tests;
-//! multi-instance deployments should swap in a Redis-backed
-//! implementation (T-14 ceiling — see `AGENTS.md`).
-//!
-//! ## Eviction policy
-//!
-//! When the map grows past `max_entries`, the next `put` evicts
-//! half the entries (naive, O(n) scan). The chosen victim is
-//! arbitrary — for a market-ready eviction policy, swap in
-//! an LRU (e.g. `lru` crate) or a TTL-indexed structure
-//! (e.g. `moka`). Ponytail: minimum code that works for the
-//! 10K-entry default ceiling.
+
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -22,11 +8,6 @@ use async_trait::async_trait;
 use kokkak_domain::{CachedResponse, IdempotencyStore};
 use tokio::sync::Mutex;
 
-/// In-memory idempotency store. Single-process; no external deps.
-///
-/// Construction is `new(max_entries)` — call sites in `api/main.rs`
-/// construct one and wrap it in `Arc` for sharing with the
-/// middleware layer.
 pub struct InMemoryIdempotencyStore {
     entries: Arc<Mutex<HashMap<String, Entry>>>,
     max_entries: usize,
@@ -38,11 +19,7 @@ struct Entry {
 }
 
 impl InMemoryIdempotencyStore {
-    /// Build a store with a soft cap on the number of entries.
-    /// When `put` is called and the map is at the cap, the next
-    /// insert triggers a half-flush eviction (Ponytail `lite`:
-    /// good enough for a v0.x ceiling; swap for LRU when traffic
-    /// makes half-flushes visible in p99 latency).
+
     pub fn new(max_entries: usize) -> Self {
         Self {
             entries: Arc::new(Mutex::new(HashMap::new())),
@@ -57,9 +34,7 @@ impl IdempotencyStore for InMemoryIdempotencyStore {
         let mut map = self.entries.lock().await;
         match map.get(key) {
             Some(entry) if entry.expires_at > Instant::now() => Some(entry.response.clone()),
-            // Expired or missing — either way, drop the entry
-            // opportunistically. A periodic GC task could also
-            // do this; we keep it inline for simplicity.
+
             Some(_) => {
                 map.remove(key);
                 None
@@ -73,12 +48,7 @@ impl IdempotencyStore for InMemoryIdempotencyStore {
         let mut map = self.entries.lock().await;
 
         if map.len() >= self.max_entries {
-            // Ponytail: half-flush is the cheapest correct
-            // answer. Trade-off: a steady stream of unique keys
-            // will trigger this on every put above the cap,
-            // costing O(n). For the default 10K cap at
-            // 100 req/s this is ~10ms of GC every 100s, well
-            // within budget. Upgrade path: LRU or moka.
+
             let to_drop = map.len() / 2;
             let keys: Vec<String> = map.keys().take(to_drop).cloned().collect();
             for k in keys {
@@ -96,10 +66,7 @@ impl IdempotencyStore for InMemoryIdempotencyStore {
     }
 
     fn len(&self) -> usize {
-        // `len` is sync; the lock is async. We use `try_lock` and
-        // report 0 if contended (the diagnostic caller can retry).
-        // In practice, the call sites that matter (tests + future
-        // /metrics) hit this when no writes are in flight.
+
         match self.entries.try_lock() {
             Ok(map) => map.len(),
             Err(_) => 0,
@@ -141,7 +108,7 @@ mod tests {
         store
             .put("k1", small_resp(), Duration::from_millis(10))
             .await;
-        // Sleep just past the TTL.
+
         tokio::time::sleep(Duration::from_millis(25)).await;
         assert!(
             store.get("k1").await.is_none(),
@@ -159,7 +126,6 @@ mod tests {
         }
         assert_eq!(store.len(), 4);
 
-        // The 5th put should trigger half-flush → 4 → 2 → then add 1 = 3.
         store.put("k4", small_resp(), Duration::from_secs(60)).await;
         assert!(
             store.len() <= 3,

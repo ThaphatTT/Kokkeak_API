@@ -1,8 +1,4 @@
-//! SQL Server-backed `ChatRepository` (M14.5 — stored procedures).
-//!
-//! See `migrations/20260620000004_sp_chat.sql` for SP definitions.
-//! Methods without a matching SP return `ChatRepoError::Backend` and are
-//! scheduled for M15+.
+
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -13,14 +9,13 @@ use uuid::Uuid;
 
 use crate::db::mssql::{exec_sp, read_i32, read_str, read_uuid, MssqlPool};
 
-/// SQL Server-backed `ChatRepository` (M14.5 — stored procedures).
 #[derive(Clone)]
 pub struct MssqlChatRepository {
     pool: MssqlPool,
 }
 
 impl MssqlChatRepository {
-    /// Construct the repository with a shared `MssqlPool`.
+
     pub fn new(pool: MssqlPool) -> Self {
         Self { pool }
     }
@@ -29,8 +24,7 @@ impl MssqlChatRepository {
 #[async_trait]
 impl ChatRepository for MssqlChatRepository {
     async fn find_room(&self, room_id: RoomId) -> Result<Option<ChatRoom>, ChatRepoError> {
-        // M14.5: scan the inbox of each participant (deduped at the SP layer
-        // when API_CHAT_FIND_BY_ID lands in M15+).
+
         let rows = exec_sp(
             &self.pool,
             "EXEC dbo.API_CHAT_LIST_ROOMS @p_user_guid = @P1",
@@ -102,7 +96,7 @@ impl ChatRepository for MssqlChatRepository {
         _room_id: RoomId,
         _last_msg_at: DateTime<Utc>,
     ) -> Result<(), ChatRepoError> {
-        // M14.5: API_CHAT_SEND_MESSAGE bumps room_last_msg_at internally.
+
         Ok(())
     }
 

@@ -1,17 +1,5 @@
-# Simplified Chinese locale.
-#
-# Added 2026-07-01 to support Chinese-speaking customers and admins.
-# Uses Simplified characters (zh-CN / zh-Hans); Traditional (zh-TW)
-# is NOT covered — request that separately if needed.
-#
-# NOTE: This is **starter copy** — native Chinese speakers on the
-# KOKKAK team must review every string before shipping. The
-# translation conveys the *meaning* of the English original, not
-# a literal word-for-word rendering. Formal register (您-style) is
-# used throughout — the admin web and mobile customer/technician
-# clients are both business contexts.
 
-# -- generic error envelope --
+
 err:
   bad_request: "请求无效：{0}"
   unauthorized: "未授权"
@@ -22,7 +10,6 @@ err:
   rate_limited: "请求频率超限"
   internal: "服务器内部错误：{0}"
 
-# -- AuthError / auth handlers --
 err_auth:
   invalid_credentials: "用户名或密码错误"
   token_expired: "令牌已过期"
@@ -38,13 +25,11 @@ err_auth:
   role_not_allowed: "不允许使用该角色：{0}"
   user_not_found: "未找到用户：{0}"
 
-# -- RepoError (generic) --
 err_repo:
   not_found: "未找到：{0}"
   conflict: "冲突：{0}"
   backend: "数据存储服务出错：{0}"
 
-# -- ChatError + ChatRepoError --
 err_chat:
   not_participant: "您不是房间 {0} 的成员"
   room_not_found: "未找到房间 {0}"
@@ -58,7 +43,6 @@ err_chat_repo:
   not_found: "未找到：{0}"
   backend: "聊天服务出错：{0}"
 
-# -- PaymentError + PaymentRepoError --
 err_payment:
   order_not_payable: "订单 {0} 当前状态不可支付"
   not_found: "未找到支付记录 {0}"
@@ -73,15 +57,12 @@ err_payment_repo:
   not_found: "未找到：{0}"
   backend: "支付服务出错：{0}"
 
-# -- Order handlers --
 err_order:
   invalid_total: "金额无效"
 
-# -- Generic request validation --
 err_request:
   bad_timestamp: "after 必须是 RFC3339 格式的时间戳"
 
-# -- Admin permissions (M15-prep: GET /api/v1/admin/permissions) --
 err_permission:
   mode_required: "必须提供 query 参数 `mode`"
   invalid_role_guid: "user_role_guid 不是有效的 UUID"
@@ -91,7 +72,6 @@ err_permission:
   invalid_override_effect: "effect 必须是 'allow' 或 'deny'"
   invalid_override_status: "status 必须是 0 或 1"
 
-# -- M20-b: admin user creation (SP_USER_INSERT_FULL) --
 err_admin_user:
   actor_required: "必须提供 actor"
   actor_not_found: "未找到 actor 或 actor 未启用"

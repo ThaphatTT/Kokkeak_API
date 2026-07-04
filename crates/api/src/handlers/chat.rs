@@ -1,15 +1,4 @@
-//! Chat HTTP handlers (M8 + M11 i18n).
-//!
-//! - `GET  /api/v1/chat/rooms` — inbox (list rooms for user).
-//! - `POST /api/v1/chat/rooms` — open (or return existing) 1:1 room.
-//! - `GET  /api/v1/chat/rooms/:id/messages?after=&limit=` — list messages.
-//! - `POST /api/v1/chat/rooms/:id/messages` — send a message.
-//! - `POST /api/v1/chat/rooms/:id/read` — append a read receipt.
-//!
-//! The WebSocket gateway is in `super::ws`. User-visible error
-//! strings are rendered via `kokkak_common::i18n::tr_with_repo`
-//! against the per-tenant `TranslationRepository`; the
-//! file-based catalog is the fallback.
+
 
 use axum::{
     extract::{Path, Query, State},
@@ -34,7 +23,6 @@ pub struct ListRoomsQuery {
     pub limit: Option<u32>,
 }
 
-/// Room summary response item.
 #[derive(Debug, Serialize)]
 pub struct RoomSummaryDto {
     pub room: ChatRoom,
@@ -52,14 +40,12 @@ impl From<RoomSummary> for RoomSummaryDto {
     }
 }
 
-/// GET /api/v1/chat/rooms — list the user's inbox.
 pub async fn list_rooms(
     State(state): State<AppState>,
     user: AuthnUser,
     Query(q): Query<ListRoomsQuery>,
 ) -> Result<Response, Response> {
-    // We do not require any specific role: customers +
-    // technicians + admin can all chat.
+
     let limit = q.limit.unwrap_or(20);
     let user = match state.users.get_user(user.id()).await {
         Ok(u) => u,
@@ -90,7 +76,6 @@ pub struct OpenRoomRequest {
     pub other_role: String,
 }
 
-/// POST /api/v1/chat/rooms — find-or-create a 1:1 room.
 pub async fn open_room(
     State(state): State<AppState>,
     user: AuthnUser,
@@ -164,7 +149,6 @@ impl From<ChatMessage> for MessageDto {
     }
 }
 
-/// GET /api/v1/chat/rooms/:id/messages — list messages in a room.
 pub async fn list_messages(
     State(state): State<AppState>,
     user: AuthnUser,
@@ -215,7 +199,6 @@ pub struct SendMessageRequest {
     pub body: String,
 }
 
-/// POST /api/v1/chat/rooms/:id/messages — send a message.
 pub async fn send_message(
     State(state): State<AppState>,
     user: AuthnUser,
@@ -238,7 +221,6 @@ pub async fn send_message(
         .into_response())
 }
 
-/// POST /api/v1/chat/rooms/:id/read — append a read receipt.
 pub async fn mark_read(
     State(state): State<AppState>,
     user: AuthnUser,
@@ -309,5 +291,4 @@ async fn chat_err_to_response(e: ChatError, state: &AppState) -> Response {
     err_envelope(status, code, message)
 }
 
-/// Borrow the room id type.
 pub type RoomIdAlias = RoomId;

@@ -1,24 +1,4 @@
-//! End-to-end integration test for the M8 (chat) + M9 (payment)
-//! flow:
-//!
-//! 1. Register a customer + a technician (admin created in setup).
-//! 2. Open a 1:1 chat room (deduped).
-//! 3. Customer sends a message.
-//! 4. Customer lists rooms (unread = 1 for technician).
-//! 5. Customer creates a payment for an order; admin confirms it
-//!    (the dev / e2e flow skips the gateway webhook).
-//! 6. Customer lists their payments and sees the captured one.
-//!
-//! M14.5: runs against a real SQL Server reachable via
-//! `KOKKAK_DATABASE__SQLSERVER_URL`. The JSON-DB simulation is gone —
-//! every repository handle is `Mssql*Repository::new(pool)`. Each
-//! test is `#[ignore]` so CI without SQL Server still passes; enable
-//! with `cargo test -- --ignored` once a SQL Server test fixture is
-//! available.
-//!
-//! ponytail: the test bodies are kept verbatim from M8/M9 because the
-//! HTTP plumbing hasn't changed — only the persistence backend. When
-//! the SPs stabilize, these will run unmodified.
+
 
 use std::sync::Arc;
 
@@ -161,7 +141,7 @@ async fn m8_chat_open_send_and_list_rooms() {
     let tech_email = format!("tech-{ts}@example.com");
     let cust_token = register(app.clone(), &customer_email, "supersecret-123", "customer").await;
     let tech_token = register(app.clone(), &tech_email, "supersecret-123", "technician").await;
-    // Look up the technician user id by /users/me.
+
     let me_resp = app
         .clone()
         .oneshot(
@@ -180,7 +160,6 @@ async fn m8_chat_open_send_and_list_rooms() {
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let tech_id = v["data"]["id"].as_str().unwrap().to_string();
 
-    // Open the room (customer perspective).
     let open_body = serde_json::json!({
         "other_user_id": tech_id,
         "other_role": "technician",
@@ -203,7 +182,6 @@ async fn m8_chat_open_send_and_list_rooms() {
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let room_id = v["data"]["id"].as_str().unwrap().to_string();
 
-    // Customer sends a message.
     let send_body = serde_json::json!({ "body": "ສະບາຍດີ, ຊ່າງ!" });
     let resp = app
         .clone()
@@ -223,7 +201,6 @@ async fn m8_chat_open_send_and_list_rooms() {
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(v["data"]["body"], "ສະບາຍດີ, ຊ່າງ!");
 
-    // Technician's inbox should show 1 unread.
     let resp = app
         .clone()
         .oneshot(
@@ -242,7 +219,7 @@ async fn m8_chat_open_send_and_list_rooms() {
     assert_eq!(v["data"].as_array().unwrap().len(), 1);
     assert_eq!(v["data"][0]["unread"], 1);
 
-    let _ = paths; // M14.5: no JSON file paths to clean up.
+    let _ = paths;
 }
 
 #[tokio::test]
@@ -261,10 +238,6 @@ async fn m9_payment_create_and_confirm() {
     let tech_token = register(app.clone(), &tech_email, "supersecret-123", "technician").await;
     let admin_token = register(app.clone(), &admin_email, "supersecret-123", "admin").await;
 
-    // Customer creates an order. (The order has no technician yet
-    // — the payment flow expects a technician; for the e2e
-    // test we skip the dispatch step and just check the payment
-    // side.)
     let order_body = serde_json::json!({
         "service_code": "ac",
         "description": "AC repair",
@@ -287,22 +260,16 @@ async fn m9_payment_create_and_confirm() {
     let status = resp.status();
     let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    // The order create may be 201 (with technician dispatch) or
-    // some other status; we only need the id.
+
     let order_id = v["data"]["id"].as_str().map(|s| s.to_string());
-    // If the dispatch flow did not auto-assign a technician
-    // (no matching algorithm in this test), we just verify
-    // the payment is rejected (because the order has no
-    // technician). That is itself a valid business outcome.
+
     if status != StatusCode::CREATED || order_id.is_none() {
-        // Order create path may have failed without a
-        // dispatchable technician; skip the rest of the test.
+
         let _ = paths;
         return;
     }
     let order_id = order_id.unwrap();
 
-    // Create a payment.
     let create_body = serde_json::json!({ "order_id": order_id });
     let resp = app
         .clone()
@@ -323,8 +290,6 @@ async fn m9_payment_create_and_confirm() {
     let payment_id = v["data"]["id"].as_str().unwrap().to_string();
     assert_eq!(v["data"]["status"], "pending");
 
-    // Confirm (the dev / e2e flow accepts the call without a
-    // real gateway; the M9 use case flips the status).
     let confirm_body = serde_json::json!({ "gateway_ref": "pi_e2e" });
     let resp = app
         .clone()
@@ -339,17 +304,13 @@ async fn m9_payment_create_and_confirm() {
         )
         .await
         .unwrap();
-    // If the order had no technician, the confirm returns
-    // 409 conflict (OrderNotPayable); otherwise 200. Both
-    // outcomes are valid for this test — the e2e is about
-    // the HTTP plumbing, not the dispatch algorithm.
+
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::CONFLICT,
         "confirm returned {status}"
     );
 
-    // List my payments.
     let resp = app
         .clone()
         .oneshot(

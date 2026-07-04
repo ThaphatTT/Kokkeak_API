@@ -1,30 +1,4 @@
-//! OpenAPI spec for the Kokkeak API (T-16).
-//!
-//! We use `utoipa` to derive the spec at compile time from the
-//! handler signatures + `#[derive(ToSchema)]` types. The
-//! resulting `ApiDoc` is served at `/api/openapi.json` (raw JSON)
-//! and `/api/docs` (Swagger UI).
-//!
-//! ## Scope
-//!
-//! Paths are listed explicitly per route group. Mobile team
-//! needs every endpoint that the BFF / mobile app might call:
-//! - auth (register, login, refresh, logout)
-//! - users (get_me)
-//! - catalog (list_services)
-//! - orders (list_my_orders, list_assigned_orders, create_order)
-//! - payments (list_my_payments, create_payment, confirm_payment,
-//!   get_payment)
-//! - admin (payouts list / mark paid, user create, user list,
-//!   per-user permissions, role × permission matrix)
-//! - chat (rooms list / open, messages list / send, mark read)
-//! - health (healthz, readyz)
-//!
-//! ## Idempotency-Key header
-//!
-//! The 3 protected POSTs (`/orders`, `/payments`, `/auth/register`)
-//! carry a required `Idempotency-Key: <unique>` header. Mobile
-//! retries MUST send the same key. See `AGENTS.md` § 12.4.
+
 
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::Modify;
@@ -46,32 +20,32 @@ use crate::handlers;
         contact(name = "Kokkeak Team"),
     ),
     paths(
-        // ---- T-16: health probes (always available) ----
+
         handlers::health::healthz,
         handlers::health::readyz,
-        // ---- Auth ----
+
         handlers::auth::register,
         handlers::auth::login,
         handlers::auth::refresh,
         handlers::auth::logout,
-        // ---- User / catalog ----
+
         handlers::user::get_me,
         handlers::catalog::list_services,
-        // ---- M20: Master data ----
+
                         handlers::master::list_countries,
                         handlers::master::autocomplete_user_department_team,
                         handlers::master::autocomplete_user_department,
                         handlers::master::autocomplete_master_positions,
-        // ---- Orders ----
+
         handlers::order::list_my_orders,
         handlers::order::list_assigned_orders,
         handlers::order::create_order,
-        // ---- Payments ----
+
         handlers::payment::list_my_payments,
         handlers::payment::get_payment,
         handlers::payment::create_payment,
         handlers::payment::confirm_payment,
-        // ---- Admin ----
+
                         handlers::payment::list_payouts_admin,
                         handlers::payment::mark_payout_paid_admin,
                         handlers::admin::create_user_admin,
@@ -82,12 +56,12 @@ use crate::handlers;
                                                 handlers::admin::get_user_detail_full_admin,
                                 handlers::admin::list_permissions,
                                 handlers::admin::update_permissions_admin,
-                // ---- Permission (M18: batch override upsert) ----
+
                 handlers::permission::update_permission_overrides,
     ),
     components(
         schemas(
-            // Request DTOs (auth + admin — the rest are inline in the path annotations).
+
                         handlers::auth::RegisterRequest,
                         handlers::auth::LoginRequest,
                         handlers::auth::RefreshRequest,
@@ -103,15 +77,15 @@ use crate::handlers;
                                                 handlers::master::PositionsAutocompleteQuery,
                                                 kokkak_domain::MasterPositionAutocompleteRow,
                         handlers::admin::CreateUserRequest,
-                        // M20-b: rich admin user creation (SP_USER_INSERT_FULL)
+
                                                 handlers::admin::AdminInsertUserRequest,
                                                 handlers::admin::AdminInsertUserResponse,
-                                                // M22-b: rich admin user update (SP_USER_UPDATE_FULL)
+
                                                 handlers::admin::AdminUpdateUserRequest,
                                                 handlers::admin::AdminUpdateUserResponse,
                                                 handlers::admin::WeeklyScheduleDto,
                                                 handlers::admin::DayScheduleDto,
-                        // M22: rich admin user detail (SP_USER_DETAIL_FULL_GET)
+
                         kokkak_domain::AdminUserDetail,
                         kokkak_domain::AdminUserDetailUsername,
                         kokkak_domain::AdminUserDetailProfileImage,
@@ -131,7 +105,7 @@ use crate::handlers;
                         handlers::admin::PermissionUpdateItem,
                         handlers::admin::PermissionUpdateResultItem,
                         kokkak_domain::PermissionUpdateRow,
-            // Domain entities (cfg-gated `ToSchema` via the `openapi` feature).
+
                         kokkak_domain::PublicUser,
                                     kokkak_domain::UserListRow,
                                     kokkak_domain::admin_user::UserListPagingRow,
@@ -147,17 +121,17 @@ use crate::handlers;
             kokkak_domain::UserRolePermission,
             kokkak_domain::UserRolePermissionRow,
             kokkak_domain::UserRoleWithPermissions,
-            // M17: permission-page wire payload.
+
             kokkak_domain::PermissionUserListRow,
             kokkak_domain::PermissionUserDetailRow,
             kokkak_domain::PermissionUserGroupEntry,
             kokkak_domain::PermissionUserGroup,
-            // M18: batch permission-override update wire payload.
+
             kokkak_domain::PermissionOverrideUpdateItem,
             kokkak_domain::PermissionOverrideUpdateResult,
             handlers::permission::UpdatePermissionOverridesRequest,
             handlers::permission::UpdatePermissionOverridesResponse,
-            // Error envelope (used by all 4xx / 5xx responses).
+
             ApiError,
             ApiErrorBody,
         ),
@@ -175,10 +149,6 @@ use crate::handlers;
 )]
 pub struct ApiDoc;
 
-/// T-16: add the bearer auth security scheme via a Modify
-/// impl. The utoipa `security_schemes(...)` macro syntax is
-/// fiddlier than the `components(schemas(...))` syntax, so we
-/// use the documented `Modify` pattern instead — same effect.
 struct SecurityAddon;
 
 impl Modify for SecurityAddon {
@@ -196,25 +166,20 @@ impl Modify for SecurityAddon {
     }
 }
 
-/// T-17: catalog of stable error codes. Mobile teams should fetch
-/// this on app start (or bake it into their build) so they can
-/// generate strongly-typed error handlers in the client SDK.
 #[derive(Clone, Debug, serde::Serialize, utoipa::ToSchema)]
 pub struct ErrorCodeEntry {
-    /// Stable snake_case string from `kokkak_common::error_codes`.
+
     pub code: &'static str,
-    /// HTTP status code that always accompanies this error.
+
     pub status: u16,
-    /// One-line description for the mobile / BFF developer.
+
     pub description: &'static str,
 }
 
-/// T-17: full catalog rendered as JSON for the
-/// `GET /api/error-codes.json` endpoint.
 pub fn error_codes_catalog() -> Vec<ErrorCodeEntry> {
     use kokkak_common::error_codes::ErrorCode;
     vec![
-        // 400
+
         (
             ErrorCode::BAD_REQUEST,
             400,
@@ -225,7 +190,7 @@ pub fn error_codes_catalog() -> Vec<ErrorCodeEntry> {
             400,
             "`Idempotency-Key` header is missing or whitespace on a protected endpoint.",
         ),
-        // 401
+
         (
             ErrorCode::UNAUTHORIZED,
             401,
@@ -246,7 +211,7 @@ pub fn error_codes_catalog() -> Vec<ErrorCodeEntry> {
             401,
             "Refresh token rejected (revoked, malformed, or expired).",
         ),
-        // 403
+
         (
             ErrorCode::FORBIDDEN,
             403,
@@ -262,10 +227,10 @@ pub fn error_codes_catalog() -> Vec<ErrorCodeEntry> {
             403,
             "Caller is not a participant of the target chat room.",
         ),
-        // 404
+
         (ErrorCode::NOT_FOUND, 404, "Resource not found."),
         (ErrorCode::ROOM_NOT_FOUND, 404, "Chat room not found."),
-        // 409
+
         (
             ErrorCode::CONFLICT,
             409,
@@ -281,7 +246,7 @@ pub fn error_codes_catalog() -> Vec<ErrorCodeEntry> {
             409,
             "Payment already captured (cannot confirm twice).",
         ),
-        // 422
+
         (ErrorCode::VALIDATION, 422, "Semantic validation failure."),
         (
             ErrorCode::ROLE_NOT_ALLOWED,
@@ -293,9 +258,9 @@ pub fn error_codes_catalog() -> Vec<ErrorCodeEntry> {
             422,
             "Chat message body was empty or too long.",
         ),
-        // 429
+
         (ErrorCode::RATE_LIMITED, 429, "Per-IP rate limit hit."),
-        // 5xx
+
         (
             ErrorCode::INTERNAL,
             500,
@@ -311,31 +276,22 @@ pub fn error_codes_catalog() -> Vec<ErrorCodeEntry> {
     .collect()
 }
 
-/// Minimal stand-in for the standard error envelope. The real
-/// one lives in `kokkak_common::response::ApiResponse<T>` and is
-/// generic over the success payload — utoipa can't derive a
-/// schema for the full envelope without a concrete `T`, so we
-/// document the shape here as a flat object that matches what
-/// `ApiResponse::err(...)` actually serializes.
 #[derive(Debug, serde::Serialize, utoipa::ToSchema)]
 pub struct ApiError {
-    /// Always `false` for an error response.
+
     pub success: bool,
-    /// Null on error.
+
     pub data: Option<serde_json::Value>,
-    /// Populated on error.
+
     pub error: ApiErrorBody,
-    /// Null on error (would carry pagination on success).
+
     pub meta: Option<serde_json::Value>,
 }
 
 #[derive(Debug, serde::Serialize, utoipa::ToSchema)]
 pub struct ApiErrorBody {
-    /// Machine-readable code, e.g. `"validation"`, `"username_taken"`,
-    /// `"idempotency_key_required"`. Mobile clients pattern-match on
-    /// this string instead of parsing the human message.
+
     pub code: String,
-    /// Localized human-readable message. Server picks the locale
-    /// from `Accept-Language` / `?lang=` (see AGENTS.md § 13).
+
     pub message: String,
 }

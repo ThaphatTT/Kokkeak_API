@@ -1,59 +1,59 @@
--- =============================================================================
--- M17: Permission-page stored procedures.
--- -----------------------------------------------------------------------------
--- Decouples the permission flow from `dbo.SP_PERMISSION_USER_FIND_BY_USERNAME`
--- (the M16 SP that also backed the admin user-management screen). The new
--- SPs:
---
---   - take GUIDs directly (no GUID→username translation in Rust)
---   - return a single `user_role_name` string instead of CSV
---   - return `has_override` / `effective_status` as `INT` (0/1)
---
--- Both SPs are read-only and live in KOKKAK_MASTER (same DB as the M16 SPs).
---
--- M19 follow-up: the original M17 SP was named `SP_PERMISSION_USER_LIST_V2`
--- (intentionally suffixed to coexist with the legacy M16
--- `SP_PERMISSION_USER_LIST`). M19 renames the M17 SP to the canonical
--- `SP_PERMISSION_USER_LIST` name and merges the M16 column set into the
--- returned row shape so a single SP backs both the admin console and the
--- permission page. The implementation + `@p_user_guid` admin gate live in
--- `20260628000001_sp_caller_user_guid.sql` — this file keeps the stub
--- `CREATE PROCEDURE` so a fresh install from scratch doesn't 500 on
--- `ALTER PROCEDURE` of a non-existent object before the M19 migration runs.
--- =============================================================================
 
--- ----------------------------------------------------------------------------
--- SP_PERMISSION_USER_LIST  (canonical — see M19 for body + @p_user_guid)
--- ----------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 IF OBJECT_ID('dbo.SP_PERMISSION_USER_LIST', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.SP_PERMISSION_USER_LIST AS BEGIN SET NOCOUNT ON; END');
 GO
 
--- ----------------------------------------------------------------------------
--- SP_PERMISSION_USER_DETAIL_FIND_BY_GUID
--- ----------------------------------------------------------------------------
--- Per-user detailed permission rows (one per `(user, permission)` pair).
--- Takes a GUID directly (no GUID→username translation needed in Rust).
---
--- Returns:
---   - One row per `(user, catalog-permission)` pair (catalog × user expansion)
---   - `effective_status = 0` when an explicit deny wins, `1` otherwise
---   - `has_override = 1` when the user has an explicit allow/deny override
---
--- Result columns:
---   user_guid             UNIQUEIDENTIFIER
---   full_name             NVARCHAR(201)
---   email                 NVARCHAR(255)
---   user_role_name        NVARCHAR(64)
---   user_permission_code  NVARCHAR(64)
---   user_permission_name  NVARCHAR(128)
---   has_override          INT               (0 / 1)
---   override_effect       NVARCHAR(16)      ('allow' | 'deny' | '')
---   effective_status      INT               (0 / 1)
---
--- Errors:
---   No rows  → user_guid doesn't resolve to a user (caller maps to 404).
--- ----------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 IF OBJECT_ID('dbo.SP_PERMISSION_USER_DETAIL_FIND_BY_GUID', 'P') IS NULL
 EXEC ('CREATE PROCEDURE dbo.SP_PERMISSION_USER_DETAIL_FIND_BY_GUID AS BEGIN SET NOCOUNT ON; END');
 GO
@@ -64,8 +64,8 @@ AS
 BEGIN
     SET NOCOUNT ON;
 
-    -- Profile lookup (raises nothing if missing — caller treats empty
-    -- result set as 404 per the trait contract).
+    
+    
     DECLARE @user_full_name NVARCHAR(201) =
         LTRIM(RTRIM(ISNULL(
             (SELECT u.user_first_name + ' ' + u.user_last_name
@@ -90,7 +90,7 @@ BEGIN
              ORDER BY r.user_role_code),
             '');
 
-    -- Catalog expansion × role grants × explicit overrides.
+    
     SELECT
         @p_user_guid AS user_guid,
         @user_full_name AS full_name,
