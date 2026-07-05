@@ -1,5 +1,3 @@
-
-
 use async_trait::async_trait;
 use tiberius::ToSql;
 
@@ -24,7 +22,6 @@ pub struct MssqlUserRepository {
 }
 
 impl MssqlUserRepository {
-
     pub fn new(pool: MssqlPool) -> Self {
         Self { pool }
     }
@@ -33,7 +30,6 @@ impl MssqlUserRepository {
 #[async_trait]
 impl UserRepository for MssqlUserRepository {
     async fn find_by_id(&self, id: Uuid) -> Result<Option<User>, RepoError> {
-
         let id_str = id.to_string();
         let rows = exec_sp(
             &self.pool,
@@ -77,7 +73,6 @@ impl UserRepository for MssqlUserRepository {
     }
 
     async fn insert(&self, user: &User) -> Result<(), RepoError> {
-
         let role_code = user
             .roles
             .first()
@@ -194,7 +189,6 @@ impl UserRepository for MssqlUserRepository {
         &self,
         req: &AdminInsertUserRequest,
     ) -> Result<AdminInsertUserResult, AdminInsertUserError> {
-
         const EXEC_SQL: &str = "EXEC dbo.SP_USER_INSERT_FULL \
                 @p_actor_user_username_guid = @P1, \
                 @p_user_guid = @P2, \
@@ -388,12 +382,9 @@ impl UserRepository for MssqlUserRepository {
             &source_of_funds,
         ];
 
-        let rows = exec_sp(&self.pool, EXEC_SQL, params)
-            .await
-
-            .map_err(|e| {
-                AdminInsertUserError::new("internal", format!("SP_USER_INSERT_FULL: {e}"))
-            })?;
+        let rows = exec_sp(&self.pool, EXEC_SQL, params).await.map_err(|e| {
+            AdminInsertUserError::new("internal", format!("SP_USER_INSERT_FULL: {e}"))
+        })?;
 
         let row = rows.first().ok_or_else(|| {
             AdminInsertUserError::new(
@@ -431,7 +422,6 @@ impl UserRepository for MssqlUserRepository {
         &self,
         req: &AdminUpdateUserRequest,
     ) -> Result<AdminUpdateUserResult, AdminUpdateUserError> {
-
         const EXEC_SQL: &str = "EXEC dbo.SP_USER_UPDATE_FULL \
                         @p_actor_user_username_guid = @P1, \
                         @p_user_guid = @P2, \
@@ -622,12 +612,9 @@ impl UserRepository for MssqlUserRepository {
             &source_of_funds,
         ];
 
-        let rows = exec_sp(&self.pool, EXEC_SQL, params)
-            .await
-
-            .map_err(|e| {
-                AdminUpdateUserError::new("internal", format!("SP_USER_UPDATE_FULL: {e}"))
-            })?;
+        let rows = exec_sp(&self.pool, EXEC_SQL, params).await.map_err(|e| {
+            AdminUpdateUserError::new("internal", format!("SP_USER_UPDATE_FULL: {e}"))
+        })?;
 
         let row = rows.first().ok_or_else(|| {
             AdminUpdateUserError::new(
@@ -846,7 +833,6 @@ mod parse_role_codes_tests {
 
     #[test]
     fn skips_empty_segments() {
-
         assert_eq!(
             parse_role_codes("customer,,admin,"),
             vec![Role::Customer, Role::Admin]
@@ -864,7 +850,6 @@ mod parse_role_codes_tests {
 
     #[test]
     fn skips_unknown_codes_without_panicking() {
-
         assert_eq!(
             parse_role_codes("customer,new_admin_role,admin"),
             vec![Role::Customer, Role::Admin]
@@ -1241,7 +1226,7 @@ mod parse_permission_codes_tests {
     #[test]
     fn parses_known_codes() {
         assert_eq!(
-            parse_permission_codes("PAGE_DASHBOARD_VIEW,JOBS_CREATE,JOBS_UPDATE"),
+            parse_permission_codes("DASHBOARD_VIEW,JOBS_CREATE,JOBS_UPDATE"),
             vec![
                 Permission::PageDashboardView,
                 Permission::JobsCreate,
@@ -1253,7 +1238,7 @@ mod parse_permission_codes_tests {
     #[test]
     fn skips_empty_segments_and_trims() {
         assert_eq!(
-            parse_permission_codes("PAGE_JOBS_VIEW,,JOBS_CREATE,"),
+            parse_permission_codes("JOBS_VIEW,,JOBS_CREATE,"),
             vec![Permission::PageJobsView, Permission::JobsCreate]
         );
         assert_eq!(parse_permission_codes(""), Vec::<Permission>::new());
@@ -1265,7 +1250,6 @@ mod parse_permission_codes_tests {
 
     #[test]
     fn skips_unknown_codes_without_panicking() {
-
         assert_eq!(
             parse_permission_codes("JOBS_CREATE,FUTURE_PERMISSION,JOBS_DELETE"),
             vec![Permission::JobsCreate, Permission::JobsDelete]

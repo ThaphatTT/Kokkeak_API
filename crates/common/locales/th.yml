@@ -1,5 +1,3 @@
-
-
 err:
   bad_request: "คำขอไม่ถูกต้อง: {0}"
   unauthorized: "ไม่ได้รับอนุญาต"
@@ -101,3 +99,16 @@ err_admin_user:
   employee_role_not_found: "ไม่พบ role EMPLOYEE หรือ role ไม่ได้ใช้งาน"
   user_not_found: "ไม่พบผู้ใช้หรือผู้ใช้ถูกลบไปแล้ว"
   image_invalid: 'อัปโหลดรูปภาพไม่สำเร็จสำหรับฟิลด์ "{field}"'
+
+err_category_job_service_main:
+  not_found: "ไม่พบบริการ {0}"
+  validation: "ข้อมูลบริการไม่ผ่านการตรวจสอบ: {0}"
+  backend: "ระบบจัดการบริการขัดข้อง: {0}"
+
+err_category_job_service_sub:
+  not_found: "ไม่พบบริการย่อย {0}"
+  main_not_found: "ไม่พบบริการหลัก {0}"
+  name_required: "ต้องระบุชื่อบริการย่อย"
+  invalid_status: "สถานะไม่ถูกต้อง (ต้องเป็น 0 หรือ 1)"
+  validation: "ข้อมูลบริการย่อยไม่ผ่านการตรวจสอบ: {0}"
+  backend: "ระบบจัดการบริการย่อยขัดข้อง: {0}"

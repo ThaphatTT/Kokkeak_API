@@ -1,5 +1,3 @@
-
-
 err:
   bad_request: "bad request: {0}"
   unauthorized: "unauthorized"
@@ -101,3 +99,16 @@ err_admin_user:
   employee_role_not_found: "role EMPLOYEE not found or inactive"
   user_not_found: "user not found or deleted"
   image_invalid: 'image upload failed for field "{field}"'
+
+  err_category_job_service_main:
+    not_found: "service not found: {0}"
+    validation: "service validation failed: {0}"
+    backend: "service backend error: {0}"
+
+  err_category_job_service_sub:
+    not_found: "service sub not found: {0}"
+    main_not_found: "parent service not found: {0}"
+    name_required: "service sub name is required"
+    invalid_status: "status must be 0 or 1"
+    validation: "service sub validation failed: {0}"
+    backend: "service sub backend error: {0}"

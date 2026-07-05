@@ -1,11 +1,12 @@
-
-
 pub mod keys;
 pub mod local;
 pub mod memory;
 pub mod s3;
 
-pub use keys::{user_attachment, user_bank_book, user_profile, UserAttachment};
+pub use keys::{
+    category_job_main_icon, category_job_service_main_icon, user_attachment, user_bank_book,
+    user_profile, UserAttachment,
+};
 pub use local::{LocalConfig, LocalError, LocalStorage};
 pub use memory::MemoryStorage;
 pub use s3::{S3Config, S3Error, S3Storage};
@@ -18,7 +19,6 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum BuildStorageError {
-
     #[error("local storage init failed: {0}")]
     Local(String),
 

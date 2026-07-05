@@ -1,5 +1,3 @@
-
-
 use figment::providers::{Env, Format, Toml};
 use figment::Figment;
 use serde::{Deserialize, Serialize};
@@ -30,18 +28,11 @@ fn load_env_file() {
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
-
     #[error("config provider error: {0}")]
     Figment(#[from] Box<figment::Error>),
 
-
     #[error("invalid config: key={key}, {message}")]
-    Invalid {
-
-        key: String,
-
-        message: String,
-    },
+    Invalid { key: String, message: String },
 }
 
 impl From<figment::Error> for ConfigError {
@@ -52,80 +43,47 @@ impl From<figment::Error> for ConfigError {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct Settings {
-
     #[serde(default)]
     pub server: ServerSettings,
-
 
     #[serde(default)]
     pub log: LogSettings,
 
-
-
-
     #[serde(default)]
     pub database: DatabaseSettings,
-
-
-
-
 
     #[serde(default)]
     pub database_topology: DatabaseTopologySettings,
 
-
     #[serde(default)]
     pub redis: RedisSettings,
-
-
-
 
     #[serde(default)]
     pub permission_cache: PermissionCacheSettings,
 
-
     #[serde(default)]
     pub nats: NatsSettings,
-
 
     #[serde(default)]
     pub mongo: MongoSettings,
 
-
     #[serde(default)]
     pub data_dir: DataDirSettings,
-
 
     #[serde(default)]
     pub auth: AuthSettings,
 
-
-
-
     #[serde(default)]
     pub environment: Environment,
-
-
-
 
     #[serde(default)]
     pub tls: TlsSettings,
 
-
-
-
     #[serde(default)]
     pub middleware: MiddlewareSettings,
 
-
-
-
-
     #[serde(default)]
     pub storage: StorageSettings,
-
-
-
 
     #[serde(default)]
     pub image: ImageProcessorSettings,
@@ -133,47 +91,29 @@ pub struct Settings {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StorageSettings {
-
     #[serde(default)]
     pub s3_bucket: String,
-
-
 
     #[serde(default)]
     pub s3_endpoint: String,
 
-
     #[serde(default = "default_storage_s3_region")]
     pub s3_region: String,
-
 
     #[serde(default)]
     pub s3_access_key: String,
 
-
     #[serde(default)]
     pub s3_secret_key: String,
-
 
     #[serde(default)]
     pub s3_path_style: bool,
 
-
-
     #[serde(default)]
     pub local_path: String,
 
-
-
-
-
     #[serde(default)]
     pub signed_url_secret: String,
-
-
-
-
-
 
     #[serde(default = "default_signed_url_ttl_secs")]
     pub signed_url_ttl_secs: u32,
@@ -200,10 +140,6 @@ impl Default for StorageSettings {
 }
 
 impl StorageSettings {
-
-
-
-
     pub fn signed_url_knobs_valid(&self) -> Result<(), ConfigError> {
         if self.signed_url_secret.trim().is_empty() {
             return Err(ConfigError::Invalid {
@@ -234,15 +170,6 @@ impl StorageSettings {
 }
 
 impl StorageSettings {
-
-
-
-
-
-
-
-
-
     pub fn adapter_kind(&self) -> StorageAdapterKind {
         if !self.s3_bucket.trim().is_empty() {
             StorageAdapterKind::S3
@@ -257,7 +184,6 @@ impl StorageSettings {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum StorageAdapterKind {
-
     S3,
 
     Local,
@@ -266,7 +192,6 @@ pub enum StorageAdapterKind {
 }
 
 impl StorageAdapterKind {
-
     pub fn as_str(self) -> &'static str {
         match self {
             StorageAdapterKind::S3 => "s3",
@@ -282,19 +207,11 @@ fn default_storage_s3_region() -> String {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ImageProcessorSettings {
-
-
-
     #[serde(default = "default_image_max_input_bytes")]
     pub max_input_bytes: usize,
 
-
-
     #[serde(default = "default_image_max_dimension_px")]
     pub max_dimension_px: u32,
-
-
-
 
     #[serde(default = "default_image_webp_quality")]
     pub webp_quality: u8,
@@ -311,11 +228,6 @@ impl Default for ImageProcessorSettings {
 }
 
 fn default_image_max_input_bytes() -> usize {
-
-
-
-
-
     1024 * 1024
 }
 fn default_image_max_dimension_px() -> u32 {
@@ -327,44 +239,14 @@ fn default_image_webp_quality() -> u8 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ServerSettings {
-
     #[serde(default = "default_addr")]
     pub addr: String,
-
-
-
-
-
 
     #[serde(default = "default_workers")]
     pub workers: usize,
 
-
-
-
-
-
-
-
-
-
     #[serde(default = "default_trust_forwarded_for")]
     pub trust_forwarded_for: bool,
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     #[serde(default)]
     pub public_base_url: String,
@@ -383,7 +265,6 @@ impl Default for ServerSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LogSettings {
-
     #[serde(default = "default_log_format")]
     pub format: LogFormat,
 }
@@ -398,7 +279,6 @@ impl Default for LogSettings {
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum DbRole {
-
     Master,
 
     Catalog,
@@ -415,7 +295,6 @@ pub enum DbRole {
 }
 
 impl DbRole {
-
     pub const fn env_suffix(self) -> &'static str {
         match self {
             Self::Master => "MASTER_URL",
@@ -428,7 +307,6 @@ impl DbRole {
         }
     }
 
-
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Master => "master",
@@ -440,7 +318,6 @@ impl DbRole {
             Self::Temp => "temp",
         }
     }
-
 
     pub const ALL: [DbRole; 7] = [
         Self::Master,
@@ -461,25 +338,20 @@ impl std::fmt::Display for DbRole {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DatabaseSettings {
-
     #[serde(default)]
     pub sqlserver_url: String,
-
 
     #[serde(default = "default_db_pool_size")]
     pub pool_size: u32,
 
-
     #[serde(default = "default_db_connect_timeout_secs")]
     pub connect_timeout_secs: u64,
-
 
     #[serde(default = "default_migrations_dir")]
     pub migrations_dir: String,
 }
 
 impl DatabaseSettings {
-
     pub fn is_configured(&self) -> bool {
         !self.sqlserver_url.trim().is_empty() && self.sqlserver_url != "disabled"
     }
@@ -497,14 +369,6 @@ impl Default for DatabaseSettings {
 }
 
 impl DatabaseSettings {
-
-
-
-
-
-
-
-
     pub fn from_url(url: impl Into<String>) -> Self {
         Self {
             sqlserver_url: url.into(),
@@ -515,9 +379,6 @@ impl DatabaseSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct DatabaseTopologySettings {
-
-
-
     #[serde(default)]
     pub catch_all: DatabaseSettings,
 
@@ -544,17 +405,6 @@ pub struct DatabaseTopologySettings {
 }
 
 impl DatabaseTopologySettings {
-
-
-
-
-
-
-
-
-
-
-
     pub fn from_settings(s: &Settings) -> Self {
         let mut out = DatabaseTopologySettings {
             catch_all: s.database.clone(),
@@ -568,10 +418,6 @@ impl DatabaseTopologySettings {
         out
     }
 
-
-
-
-
     pub fn slot(&self, role: crate::config::DbRole) -> &DatabaseSettings {
         match role {
             crate::config::DbRole::Master => &self.master,
@@ -583,7 +429,6 @@ impl DatabaseTopologySettings {
             crate::config::DbRole::Temp => &self.temp,
         }
     }
-
 
     pub fn slot_mut(&mut self, role: crate::config::DbRole) -> &mut DatabaseSettings {
         match role {
@@ -597,10 +442,6 @@ impl DatabaseTopologySettings {
         }
     }
 
-
-
-
-
     pub fn for_role(&self, role: crate::config::DbRole) -> DatabaseSettings {
         let slot = self.slot(role);
         if !slot.sqlserver_url.trim().is_empty() {
@@ -608,8 +449,6 @@ impl DatabaseTopologySettings {
         }
 
         if !self.catch_all.sqlserver_url.trim().is_empty() {
-
-
             let mut out = self.catch_all.clone();
             if slot.pool_size != default_db_pool_size() {
                 out.pool_size = slot.pool_size;
@@ -624,8 +463,6 @@ impl DatabaseTopologySettings {
         }
         slot.clone()
     }
-
-
 
     fn settings_for(&self, role: crate::config::DbRole) -> &DatabaseSettings {
         self.slot(role)
@@ -654,19 +491,16 @@ fn merge_with_fallback(
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RedisSettings {
-
     #[serde(default = "default_redis_url")]
     pub url: String,
-
 
     #[serde(default = "default_redis_pool_size")]
     pub pool_size: usize,
 }
 
 impl RedisSettings {
-
     pub fn is_configured(&self) -> bool {
-        !self.url.trim().is_empty() && self.url != "redis:
+        !self.url.trim().is_empty() && self.url != "redis://disabled"
     }
 }
 
@@ -681,7 +515,6 @@ impl Default for RedisSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PermissionCacheSettings {
-
     #[serde(default = "default_permission_cache_ttl_secs")]
     pub ttl_secs: u64,
 }
@@ -696,7 +529,6 @@ impl Default for PermissionCacheSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NatsSettings {
-
     #[serde(default = "default_nats_url")]
     pub url: String,
 
@@ -705,9 +537,8 @@ pub struct NatsSettings {
 }
 
 impl NatsSettings {
-
     pub fn is_configured(&self) -> bool {
-        !self.url.trim().is_empty() && self.url != "nats:
+        !self.url.trim().is_empty() && self.url != "nats://disabled"
     }
 }
 
@@ -722,7 +553,6 @@ impl Default for NatsSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MongoSettings {
-
     #[serde(default = "default_mongo_url")]
     pub url: String,
 
@@ -731,7 +561,6 @@ pub struct MongoSettings {
 }
 
 impl MongoSettings {
-
     pub fn is_configured(&self) -> bool {
         !self.url.trim().is_empty() && self.url != "mongodb://disabled"
     }
@@ -748,7 +577,6 @@ impl Default for MongoSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DataDirSettings {
-
     #[serde(default = "default_data_dir_path")]
     pub path: String,
 
@@ -767,7 +595,6 @@ impl Default for DataDirSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AuthSettings {
-
     #[serde(default)]
     pub jwt_secret: String,
 
@@ -793,7 +620,6 @@ impl Default for AuthSettings {
 }
 
 impl AuthSettings {
-
     pub fn is_configured(&self) -> bool {
         !self.jwt_secret.is_empty()
     }
@@ -802,7 +628,6 @@ impl AuthSettings {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum LogFormat {
-
     Json,
 
     Pretty,
@@ -811,7 +636,6 @@ pub enum LogFormat {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Environment {
-
     #[default]
     Development,
 
@@ -819,7 +643,6 @@ pub enum Environment {
 }
 
 impl Environment {
-
     pub const fn is_production(self) -> bool {
         matches!(self, Self::Production)
     }
@@ -827,7 +650,6 @@ impl Environment {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TlsSettings {
-
     #[serde(default)]
     pub enabled: bool,
 
@@ -861,7 +683,6 @@ impl Default for TlsSettings {
 }
 
 impl TlsSettings {
-
     pub fn cert_path_or_empty(&self) -> &str {
         self.cert_path.as_deref().unwrap_or("").trim()
     }
@@ -878,7 +699,6 @@ fn default_workers() -> usize {
     4
 }
 fn default_trust_forwarded_for() -> bool {
-
     true
 }
 fn default_log_format() -> LogFormat {
@@ -933,7 +753,6 @@ fn default_hsts_max_age_secs() -> u64 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MiddlewareSettings {
-
     #[serde(default, deserialize_with = "deserialize_comma_list")]
     pub cors_allow_origins: Vec<String>,
 
@@ -961,7 +780,6 @@ pub struct MiddlewareSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FeatureFlagSettings {
-
     #[serde(default = "default_flag_enabled")]
     pub auth: bool,
 
@@ -996,7 +814,6 @@ fn default_flag_enabled() -> bool {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IdempotencySettings {
-
     #[serde(default)]
     pub enabled: bool,
 
@@ -1028,7 +845,6 @@ fn default_idempotency_max_entries() -> usize {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum RateLimitBackend {
-
     #[default]
     Memory,
 
@@ -1037,7 +853,6 @@ pub enum RateLimitBackend {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RateLimitSettings {
-
     #[serde(default)]
     pub enabled: bool,
 
@@ -1116,17 +931,14 @@ fn default_compression_enabled() -> bool {
 }
 
 fn default_request_body_limit_bytes() -> usize {
-
     16 * 1024 * 1024
 }
 
 fn default_max_concurrency() -> usize {
-
     512
 }
 
 impl Settings {
-
     pub fn load() -> Result<Self, ConfigError> {
         load_env_file();
         let figment = Figment::new()
@@ -1617,7 +1429,6 @@ mod tests {
 
     #[test]
     fn tls_default_settings_validate() {
-
         let s = Settings::default();
         assert!(!s.tls.enabled);
         assert!(s.validate().is_ok());
@@ -1762,7 +1573,6 @@ mod tests {
 
     #[test]
     fn production_with_public_bind_addr_fails_validation() {
-
         let s = Settings {
             environment: Environment::Production,
             server: ServerSettings {
@@ -1786,7 +1596,6 @@ mod tests {
 
     #[test]
     fn production_with_loopback_bind_and_tls_off_validates() {
-
         let s = Settings {
             environment: Environment::Production,
             server: ServerSettings {
@@ -1808,7 +1617,6 @@ mod tests {
 
     #[test]
     fn production_with_ipv6_loopback_bind_validates() {
-
         let s = Settings {
             environment: Environment::Production,
             server: ServerSettings {
@@ -1830,7 +1638,6 @@ mod tests {
 
     #[test]
     fn production_with_malformed_bind_addr_fails_validation() {
-
         let s = Settings {
             environment: Environment::Production,
             server: ServerSettings {
@@ -1854,7 +1661,6 @@ mod tests {
 
     #[test]
     fn production_with_tls_enabled_but_missing_key_still_fails() {
-
         let s = Settings {
             environment: Environment::Production,
             server: ServerSettings {
@@ -1884,7 +1690,6 @@ mod tests {
 
     #[test]
     fn development_with_tls_disabled_still_validates() {
-
         let s = Settings::default();
         assert_eq!(s.environment, Environment::Development);
         assert!(!s.tls.enabled);
@@ -1893,7 +1698,6 @@ mod tests {
 
     #[test]
     fn trust_forwarded_for_defaults_to_true() {
-
         let s = Settings::default();
         assert!(s.server.trust_forwarded_for);
     }
@@ -1908,7 +1712,6 @@ mod tests {
 
     #[test]
     fn t23_public_base_url_set_in_production_with_local_storage_validates() {
-
         let s = Settings {
             environment: Environment::Production,
             server: ServerSettings {
@@ -1917,7 +1720,6 @@ mod tests {
                 ..ServerSettings::default()
             },
             storage: StorageSettings {
-
                 local_path: "/var/kokkak/uploads".into(),
                 signed_url_secret: "test-secret-with-at-least-32-bytes-yes".into(),
                 ..StorageSettings::default()
@@ -2008,7 +1810,6 @@ mod tests {
 
     #[test]
     fn t23_public_base_url_empty_with_memory_storage_is_allowed() {
-
         let s = Settings {
             environment: Environment::Production,
             server: ServerSettings {
@@ -2016,7 +1817,6 @@ mod tests {
                 ..ServerSettings::default()
             },
             storage: StorageSettings {
-
                 signed_url_secret: "test-secret-with-at-least-32-bytes-yes".into(),
                 ..StorageSettings::default()
             },
@@ -2047,7 +1847,6 @@ mod tests {
 
     #[test]
     fn t16_safety_knobs_default_positive() {
-
         let s = MiddlewareSettings::default();
         assert!(s.request_body_limit_bytes >= 1024);
         assert!(s.max_concurrency >= 1);
@@ -2106,7 +1905,6 @@ mod tests {
 
     #[test]
     fn middleware_zero_timeout_is_allowed() {
-
         let s = Settings {
             middleware: MiddlewareSettings {
                 request_timeout_secs: 0,
@@ -2119,7 +1917,6 @@ mod tests {
 
     #[test]
     fn production_without_cors_allowlist_fails_validation() {
-
         let s = Settings {
             environment: Environment::Production,
 
@@ -2182,7 +1979,6 @@ mod tests {
 
     #[test]
     fn rate_limit_default_is_disabled() {
-
         let s = Settings::default();
         assert!(!s.middleware.rate_limit.enabled);
         assert_eq!(s.middleware.rate_limit.requests_per_second, 100);
@@ -2256,7 +2052,6 @@ mod tests {
 
     #[test]
     fn rate_limit_disabled_with_zero_knobs_validates() {
-
         let s = Settings {
             middleware: MiddlewareSettings {
                 rate_limit: RateLimitSettings {
@@ -2274,7 +2069,6 @@ mod tests {
 
     #[test]
     fn rate_limit_backend_redis_without_redis_url_fails() {
-
         let s = Settings {
             middleware: MiddlewareSettings {
                 rate_limit: RateLimitSettings {
@@ -2304,7 +2098,6 @@ mod tests {
 
     #[test]
     fn rate_limit_backend_redis_with_redis_url_validates() {
-
         let mut s = Settings::default();
         s.redis.url = "redis://127.0.0.1:6379".into();
         s.middleware.rate_limit = RateLimitSettings {
@@ -2318,7 +2111,6 @@ mod tests {
 
     #[test]
     fn rate_limit_backend_default_is_memory() {
-
         assert_eq!(RateLimitBackend::default(), RateLimitBackend::Memory);
         let s = Settings::default();
         assert_eq!(s.middleware.rate_limit.backend, RateLimitBackend::Memory);

@@ -1,5 +1,3 @@
-
-
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -8,7 +6,6 @@ use uuid::Uuid;
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub enum Role {
-
     Customer,
 
     Technician,
@@ -19,7 +16,6 @@ pub enum Role {
 }
 
 impl Role {
-
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Customer => "customer",
@@ -44,7 +40,6 @@ impl Role {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Permission {
-
     #[serde(rename = "DASHBOARD_VIEW")]
     PageDashboardView,
 
@@ -121,6 +116,30 @@ pub enum Permission {
 
     BannerDelete,
 
+    CategoryJobMainView,
+
+    CategoryJobMainCreate,
+
+    CategoryJobMainUpdate,
+
+    CategoryJobMainDelete,
+
+    CategoryJobServiceMainView,
+
+    CategoryJobServiceMainCreate,
+
+    CategoryJobServiceMainUpdate,
+
+    CategoryJobServiceMainDelete,
+
+    CategoryJobServiceSubView,
+
+    CategoryJobServiceSubCreate,
+
+    CategoryJobServiceSubUpdate,
+
+    CategoryJobServiceSubDelete,
+
     CompaniesCreate,
 
     CompaniesUpdate,
@@ -147,7 +166,6 @@ pub enum Permission {
 }
 
 impl Permission {
-
     pub fn code(&self) -> &'static str {
         match self {
             Self::PageDashboardView => "DASHBOARD_VIEW",
@@ -193,6 +211,21 @@ impl Permission {
             Self::BannerCreate => "BANNER_CREATE",
             Self::BannerUpdate => "BANNER_UPDATE",
             Self::BannerDelete => "BANNER_DELETE",
+
+            Self::CategoryJobMainView => "CATEGORY_JOB_MAIN_VIEW",
+            Self::CategoryJobMainCreate => "CATEGORY_JOB_MAIN_CREATE",
+            Self::CategoryJobMainUpdate => "CATEGORY_JOB_MAIN_UPDATE",
+            Self::CategoryJobMainDelete => "CATEGORY_JOB_MAIN_DELETE",
+
+            Self::CategoryJobServiceMainView => "CATEGORY_JOB_SERVICE_MAIN_VIEW",
+            Self::CategoryJobServiceMainCreate => "CATEGORY_JOB_SERVICE_MAIN_CREATE",
+            Self::CategoryJobServiceMainUpdate => "CATEGORY_JOB_SERVICE_MAIN_UPDATE",
+            Self::CategoryJobServiceMainDelete => "CATEGORY_JOB_SERVICE_MAIN_DELETE",
+
+            Self::CategoryJobServiceSubView => "CATEGORY_JOB_SERVICE_SUB_VIEW",
+            Self::CategoryJobServiceSubCreate => "CATEGORY_JOB_SERVICE_SUB_CREATE",
+            Self::CategoryJobServiceSubUpdate => "CATEGORY_JOB_SERVICE_SUB_UPDATE",
+            Self::CategoryJobServiceSubDelete => "CATEGORY_JOB_SERVICE_SUB_DELETE",
 
             Self::CompaniesCreate => "COMPANIES_CREATE",
             Self::CompaniesUpdate => "COMPANIES_UPDATE",
@@ -258,6 +291,21 @@ impl Permission {
             "BANNER_UPDATE" => Some(Self::BannerUpdate),
             "BANNER_DELETE" => Some(Self::BannerDelete),
 
+            "CATEGORY_JOB_MAIN_VIEW" => Some(Self::CategoryJobMainView),
+            "CATEGORY_JOB_MAIN_CREATE" => Some(Self::CategoryJobMainCreate),
+            "CATEGORY_JOB_MAIN_UPDATE" => Some(Self::CategoryJobMainUpdate),
+            "CATEGORY_JOB_MAIN_DELETE" => Some(Self::CategoryJobMainDelete),
+
+            "CATEGORY_JOB_SERVICE_MAIN_VIEW" => Some(Self::CategoryJobServiceMainView),
+            "CATEGORY_JOB_SERVICE_MAIN_CREATE" => Some(Self::CategoryJobServiceMainCreate),
+            "CATEGORY_JOB_SERVICE_MAIN_UPDATE" => Some(Self::CategoryJobServiceMainUpdate),
+            "CATEGORY_JOB_SERVICE_MAIN_DELETE" => Some(Self::CategoryJobServiceMainDelete),
+
+            "CATEGORY_JOB_SERVICE_SUB_VIEW" => Some(Self::CategoryJobServiceSubView),
+            "CATEGORY_JOB_SERVICE_SUB_CREATE" => Some(Self::CategoryJobServiceSubCreate),
+            "CATEGORY_JOB_SERVICE_SUB_UPDATE" => Some(Self::CategoryJobServiceSubUpdate),
+            "CATEGORY_JOB_SERVICE_SUB_DELETE" => Some(Self::CategoryJobServiceSubDelete),
+
             "COMPANIES_CREATE" => Some(Self::CompaniesCreate),
             "COMPANIES_UPDATE" => Some(Self::CompaniesUpdate),
             "COMPANIES_DELETE" => Some(Self::CompaniesDelete),
@@ -282,7 +330,6 @@ impl Permission {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UserStatus {
-
     Pending,
 
     Active,
@@ -293,7 +340,6 @@ pub enum UserStatus {
 }
 
 impl UserStatus {
-
     pub fn can_login(&self) -> bool {
         matches!(self, Self::Active)
     }
@@ -329,7 +375,6 @@ impl UserStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
-
     pub id: Uuid,
 
     pub first_name: String,
@@ -352,7 +397,6 @@ pub struct User {
 }
 
 impl User {
-
     pub fn has_role(&self, role: Role) -> bool {
         self.roles.contains(&role)
     }
@@ -397,7 +441,6 @@ impl User {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct UserListRow {
-
     pub user_guid: String,
 
     pub full_name: String,
@@ -540,7 +583,6 @@ mod tests {
 
     #[test]
     fn permission_code_round_trip_covers_all_variants() {
-
         let samples = [
             Permission::PageDashboardView,
             Permission::PageJobsView,
@@ -575,6 +617,10 @@ mod tests {
             Permission::BannerCreate,
             Permission::BannerUpdate,
             Permission::BannerDelete,
+            Permission::CategoryJobServiceSubView,
+            Permission::CategoryJobServiceSubCreate,
+            Permission::CategoryJobServiceSubUpdate,
+            Permission::CategoryJobServiceSubDelete,
             Permission::CompaniesCreate,
             Permission::CompaniesUpdate,
             Permission::CompaniesDelete,
@@ -597,7 +643,6 @@ mod tests {
 
     #[test]
     fn permission_serializes_as_screaming_snake_case_code() {
-
         let json = serde_json::to_string(&Permission::JobsCreate).unwrap();
         assert_eq!(json, "\"JOBS_CREATE\"");
 

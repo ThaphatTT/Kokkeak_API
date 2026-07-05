@@ -37,6 +37,7 @@ rust_decimal = { workspace = true }
 tiberius = { version = "0.12", default-features = false, features = ["chrono", "rust_decimal", "tokio", "tokio-rustls", "rustls"] }
 bb8 = "0.8"
 bb8-tiberius = "0.14"
+tokio-util = { version = "0.6", features = ["compat"] }
 
 
 redis = { workspace = true }

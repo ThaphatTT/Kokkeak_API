@@ -18,6 +18,10 @@ authors = ["Kokkeak Team"]
 description = "Kokkeak Backend API — handyman/technician marketplace (Laos)"
 
 
+[workspace.lints.rust]
+missing_docs = "allow"
+
+
 [workspace.dependencies]
 
 tokio = { version = "1.40", features = ["full"] }

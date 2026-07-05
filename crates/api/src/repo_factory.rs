@@ -1,17 +1,19 @@
-
-
 use std::path::Path;
 use std::sync::Arc;
 
 use kokkak_application::order::OrderService;
 use kokkak_common::config::DatabaseTopologySettings;
 use kokkak_domain::{
+    CategoryJobMainRepository, CategoryJobServiceMainRepository, CategoryJobServiceSubRepository,
     ChatRepository, MasterDropdownRepository, OrderRepository, PaymentRepository,
     PermissionUserRepository, ServiceRepository, TranslationRepository, UserRepository,
     UserRoleRepository,
 };
 use kokkak_infra::cache::translation_cache::CachedTranslationRepository;
 use kokkak_infra::db::mssql_catalog::MssqlServiceRepository;
+use kokkak_infra::db::mssql_category_job_main::MssqlCategoryJobMainRepository;
+use kokkak_infra::db::mssql_category_job_service_main::MssqlCategoryJobServiceMainRepository;
+use kokkak_infra::db::mssql_category_job_service_sub::MssqlCategoryJobServiceSubRepository;
 use kokkak_infra::db::mssql_chat::MssqlChatRepository;
 use kokkak_infra::db::mssql_master::MssqlMasterDropdownRepository;
 use kokkak_infra::db::mssql_order::MssqlOrderRepository;
@@ -25,7 +27,6 @@ use tracing::{info, warn};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepoBackend {
-
     Mssql,
 }
 
@@ -53,6 +54,12 @@ pub struct RepoBundle {
 
     pub master: Arc<dyn MasterDropdownRepository>,
 
+    pub category_job_main: Arc<dyn CategoryJobMainRepository>,
+
+    pub category_job_service_main: Arc<dyn CategoryJobServiceMainRepository>,
+
+    pub category_job_service_sub: Arc<dyn CategoryJobServiceSubRepository>,
+
     pub mssql_pool: Option<kokkak_infra::db::mssql::MssqlPool>,
     pub topology: Option<DatabaseTopology>,
 }
@@ -63,7 +70,7 @@ impl std::fmt::Debug for RepoBundle {
             .field("backend", &self.backend)
             .field("mssql_pool", &self.mssql_pool.as_ref().map(|_| "<pool>"))
             .field("topology", &self.topology.as_ref().map(|t| t.live_roles()))
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -126,6 +133,21 @@ pub async fn from_settings(
                         MssqlTranslationRepository::new(primary_pool.clone()),
                     )),
                     master: Arc::new(MssqlMasterDropdownRepository::new(primary_pool.clone())),
+                    category_job_main: Arc::new(MssqlCategoryJobMainRepository::new(topo_pool(
+                        &topo,
+                        DbRole::Master,
+                        &primary_pool,
+                    ))),
+                    category_job_service_main: Arc::new(
+                        MssqlCategoryJobServiceMainRepository::new(topo_pool(
+                            &topo,
+                            DbRole::Master,
+                            &primary_pool,
+                        )),
+                    ),
+                    category_job_service_sub: Arc::new(MssqlCategoryJobServiceSubRepository::new(
+                        topo_pool(&topo, DbRole::Master, &primary_pool),
+                    )),
                     mssql_pool: Some(primary_pool),
                     topology: Some(topo),
                 })

@@ -1,6 +1,7 @@
-
-
 pub mod catalog;
+pub mod category_job_main;
+pub mod category_job_service_main;
+pub mod category_job_service_sub;
 pub mod chat;
 pub mod master;
 pub mod order;
@@ -11,6 +12,9 @@ pub mod user;
 pub mod user_role;
 
 pub use catalog::ServiceRepository;
+pub use category_job_main::CategoryJobMainRepository;
+pub use category_job_service_main::CategoryJobServiceMainRepository;
+pub use category_job_service_sub::CategoryJobServiceSubRepository;
 pub use chat::{ChatMembership, ChatRepoError, ChatRepository, MessagePage};
 pub use master::MasterDropdownRepository;
 pub use order::OrderRepository;

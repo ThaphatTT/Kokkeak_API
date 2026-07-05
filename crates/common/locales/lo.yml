@@ -1,5 +1,3 @@
-
-
 err:
   bad_request: "ຄຳຂໍບໍ່ຖືກຕ້ອງ: {0}"
   unauthorized: "ບໍ່ໄດ້ຮັບອະນຸຍາດ"
@@ -101,3 +99,16 @@ err_admin_user:
   employee_role_not_found: "ບໍ່ພົບ role EMPLOYEE ຫຼືບໍ່ໄດ້ເປີດໃຊ້ງານ"
   user_not_found: "ບໍ່ພົບຜູ້ໃຊ້ ຫຼື ຖືກລົບໄປແລ້ວ"
   image_invalid: 'ອັບໂຫລດຮູບບໍ່ສຳເລັດສຳລັບຟິວສ "{field}"'
+
+  err_category_job_service_main:
+    not_found: "บໍ່ພົບບໍລິການ {0}"
+    validation: "ຂໍ້ມູນບໍລິການບໍ່ຜ່ານການກວດສອບ: {0}"
+    backend: "ລະບົບຈັດການບໍລິການຂັດຂ້ອງ: {0}"
+
+  err_category_job_service_sub:
+    not_found: "บໍ່ພົບບໍລິການຍ່ອຍ {0}"
+    main_not_found: "บໍ່ພົບບໍລິການຫຼັກ {0}"
+    name_required: "ຕ້ອງລະບຸຊື່ບໍລິການຍ່ອຍ"
+    invalid_status: "ສະຖານະບໍ່ຖືກຕ້ອງ (ຕ້ອງເປັນ 0 ຫຼື 1)"
+    validation: "ຂໍ້ມູນບໍລິການຍ່ອຍບໍ່ຜ່ານການກວດສອບ: {0}"
+    backend: "ລະບົບຈັດການບໍລິການຍ່ອຍຂັດຂ້ອງ: {0}"

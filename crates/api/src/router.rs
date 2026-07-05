@@ -1,5 +1,3 @@
-
-
 use std::sync::Arc;
 
 use axum::{
@@ -23,18 +21,14 @@ use crate::openapi::ApiDoc;
 use crate::state::AppState;
 
 pub fn build(state: AppState) -> Router {
-
     let health_routes = Router::new()
         .route("/healthz", get(handlers::health::healthz))
         .route("/readyz", get(handlers::health::readyz))
         .with_state(state.health.clone());
 
     let idempotent_routes = Router::new()
-
         .route("/api/v1/auth/register", post(handlers::auth::register))
-
         .route("/api/v1/orders", post(handlers::order::create_order))
-
         .route("/api/v1/payments", post(handlers::payment::create_payment))
         .layer(from_fn(require_idempotency_key))
         .layer(from_fn(auth_flag(Arc::new(state.clone()))))
@@ -53,12 +47,38 @@ pub fn build(state: AppState) -> Router {
             "/api/v1/catalog/services",
             get(handlers::catalog::list_services),
         )
-
+        .route(
+            "/api/v1/category-job-mains",
+            get(handlers::category_job_main::list_category_job_mains),
+        )
+        .route(
+            "/api/v1/category-job-mains/:guid",
+            get(handlers::category_job_main::get_category_job_main),
+        )
+        .route(
+            "/api/v1/category-job-services",
+            get(handlers::category_job_service_main::list_category_job_service_mains),
+        )
+        .route(
+            "/api/v1/category-job-services/:service_guid",
+            get(handlers::category_job_service_main::get_category_job_service_main),
+        )
+        .route(
+            "/api/v1/category-job-service-subs",
+            get(handlers::category_job_service_sub::list_category_job_service_subs),
+        )
+        .route(
+            "/api/v1/category-job-service-subs/:sub_guid",
+            get(handlers::category_job_service_sub::get_category_job_service_sub),
+        )
+        .route(
+            "/api/v1/category-job-service-subs/:sub_guid/images",
+            get(handlers::category_job_service_sub::list_category_job_service_sub_images),
+        )
         .route(
             "/api/v1/master/countries",
             get(handlers::master::list_countries),
         )
-
         .route(
             "/api/v1/master/user-department-teams/autocomplete",
             get(handlers::master::autocomplete_user_department_team),
@@ -67,7 +87,6 @@ pub fn build(state: AppState) -> Router {
             "/api/v1/master/user-departments/autocomplete",
             get(handlers::master::autocomplete_user_department),
         )
-
         .route(
             "/api/v1/master/positions/autocomplete",
             get(handlers::master::autocomplete_master_positions),
@@ -120,6 +139,44 @@ pub fn build(state: AppState) -> Router {
         )
         .layer(from_fn(admin_flag(Arc::new(state.clone()))));
 
+    let admin_category_job_main_routes = Router::new()
+        .route(
+            "/api/v1/admin/category-job-mains",
+            post(handlers::category_job_main::create_category_job_main_admin),
+        )
+        .route(
+            "/api/v1/admin/category-job-mains/:guid",
+            put(handlers::category_job_main::update_category_job_main_admin)
+                .delete(handlers::category_job_main::delete_category_job_main_admin),
+        )
+        .layer(from_fn(admin_flag(Arc::new(state.clone()))));
+
+    let admin_category_job_service_main_routes = Router::new()
+        .route(
+            "/api/v1/admin/category-job-services",
+            post(handlers::category_job_service_main::create_category_job_service_main_admin),
+        )
+        .route(
+            "/api/v1/admin/category-job-services/:service_guid",
+            put(handlers::category_job_service_main::update_category_job_service_main_admin)
+                .delete(
+                    handlers::category_job_service_main::delete_category_job_service_main_admin,
+                ),
+        )
+        .layer(from_fn(admin_flag(Arc::new(state.clone()))));
+
+    let admin_category_job_service_sub_routes = Router::new()
+        .route(
+            "/api/v1/admin/category-job-service-subs",
+            post(handlers::category_job_service_sub::create_category_job_service_sub_admin),
+        )
+        .route(
+            "/api/v1/admin/category-job-service-subs/:sub_guid",
+            put(handlers::category_job_service_sub::update_category_job_service_sub_admin)
+                .delete(handlers::category_job_service_sub::delete_category_job_service_sub_admin),
+        )
+        .layer(from_fn(admin_flag(Arc::new(state.clone()))));
+
     let admin_users_routes = Router::new()
         .route(
             "/api/v1/admin/users",
@@ -159,7 +216,6 @@ pub fn build(state: AppState) -> Router {
             "/api/v1/permission/users/:guid/permissions",
             get(handlers::permission::list_user_permissions_permission),
         )
-
         .route(
             "/api/v1/permission/overrides",
             post(handlers::permission::update_permission_overrides),
@@ -173,6 +229,9 @@ pub fn build(state: AppState) -> Router {
         .merge(chat_routes)
         .merge(payment_routes)
         .merge(admin_payout_routes)
+        .merge(admin_category_job_main_routes)
+        .merge(admin_category_job_service_main_routes)
+        .merge(admin_category_job_service_sub_routes)
         .merge(admin_users_routes)
         .merge(admin_permissions_routes)
         .merge(permission_page_routes)
@@ -187,7 +246,6 @@ where
     S: Clone + Send + Sync + 'static,
 {
     if matches!(env, Environment::Production) {
-
         return Router::new();
     }
 
@@ -259,7 +317,6 @@ mod tests {
 
     #[tokio::test]
     async fn production_closes_error_codes_route() {
-
         let res = app_for(Environment::Production)
             .oneshot(get("/api/error-codes.json"))
             .await

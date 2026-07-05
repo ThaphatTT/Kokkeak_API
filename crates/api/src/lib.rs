@@ -1,5 +1,3 @@
-
-
 pub mod adapters;
 pub mod cert_watcher;
 pub mod error;
@@ -25,6 +23,9 @@ use kokkak_application::admin_user::AdminUserService;
 use kokkak_application::audit::{AuditLogger, NoopAuditLogger};
 use kokkak_application::auth::AuthService;
 use kokkak_application::catalog::CatalogService;
+use kokkak_application::category_job_main::CategoryJobMainService;
+use kokkak_application::category_job_service_main::CategoryJobServiceMainService;
+use kokkak_application::category_job_service_sub::CategoryJobServiceSubService;
 use kokkak_application::chat::{BroadcastTransport, ChatService, ChatTransport};
 use kokkak_application::master::MasterDropdownService;
 use kokkak_application::order::OrderService;
@@ -43,6 +44,185 @@ use kokkak_infra::storage::MemoryStorage;
 
 use adapters::{JwtIssuerAdapter, PasswordHasherAdapter};
 
+#[allow(dead_code)]
+struct MssqlCategoryJobMainRepositoryNoop;
+
+#[async_trait::async_trait]
+impl kokkak_domain::CategoryJobMainRepository for MssqlCategoryJobMainRepositoryNoop {
+    async fn list(
+        &self,
+        _input: &kokkak_domain::CategoryJobMainListInput,
+    ) -> Result<kokkak_domain::CategoryJobMainPage, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_main repo not wired in build_app_state (set KOKKAK_DATABASE__SQLSERVER_URL)"
+                .into(),
+        ))
+    }
+    async fn create(
+        &self,
+        _input: &kokkak_domain::CategoryJobMainCreateInput,
+    ) -> Result<kokkak_domain::CategoryJobMainCreateResult, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_main repo not wired in build_app_state".into(),
+        ))
+    }
+    async fn update(
+        &self,
+        _input: &kokkak_domain::CategoryJobMainUpdateInput,
+    ) -> Result<kokkak_domain::CategoryJobMainUpdateResult, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_main repo not wired in build_app_state".into(),
+        ))
+    }
+    async fn delete(
+        &self,
+        _category_guid: &str,
+        _actor_user_guid: &str,
+    ) -> Result<kokkak_domain::CategoryJobMainDeleteResult, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_main repo not wired in build_app_state".into(),
+        ))
+    }
+}
+
+#[allow(dead_code)]
+struct MssqlCategoryJobServiceMainRepositoryNoop;
+
+#[async_trait::async_trait]
+impl kokkak_domain::CategoryJobServiceMainRepository for MssqlCategoryJobServiceMainRepositoryNoop {
+    async fn list(
+        &self,
+        _category_job_main_guid: &str,
+        _keyword: Option<&str>,
+        _include_inactive: bool,
+    ) -> Result<Vec<kokkak_domain::CategoryJobServiceMainRow>, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_service_main repo not wired in build_app_state (set KOKKAK_DATABASE__SQLSERVER_URL)"
+                .into(),
+        ))
+    }
+    async fn create(
+        &self,
+        _input: &kokkak_domain::CategoryJobServiceMainCreateInput,
+    ) -> Result<kokkak_domain::CategoryJobServiceMainCreateResult, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_service_main repo not wired in build_app_state".into(),
+        ))
+    }
+    async fn update(
+        &self,
+        _input: &kokkak_domain::CategoryJobServiceMainUpdateInput,
+    ) -> Result<kokkak_domain::CategoryJobServiceMainUpdateResult, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_service_main repo not wired in build_app_state".into(),
+        ))
+    }
+    async fn delete(
+        &self,
+        _service_guid: &str,
+        _actor_user_guid: &str,
+    ) -> Result<kokkak_domain::CategoryJobServiceMainDeleteResult, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_service_main repo not wired in build_app_state".into(),
+        ))
+    }
+}
+
+#[allow(dead_code)]
+struct MssqlCategoryJobServiceSubRepositoryNoop;
+
+#[async_trait::async_trait]
+impl kokkak_domain::CategoryJobServiceSubRepository for MssqlCategoryJobServiceSubRepositoryNoop {
+    async fn list(
+        &self,
+        _category_job_service_guid: &str,
+        _keyword: Option<&str>,
+        _include_inactive: bool,
+    ) -> Result<Vec<kokkak_domain::CategoryJobServiceSubRow>, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_service_sub repo not wired in build_app_state (set KOKKAK_DATABASE__SQLSERVER_URL)"
+                .into(),
+        ))
+    }
+    async fn detail(
+        &self,
+        _category_job_service_sub_guid: &str,
+    ) -> Result<kokkak_domain::CategoryJobServiceSubDetailBundle, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_service_sub repo not wired in build_app_state".into(),
+        ))
+    }
+    async fn list_images(
+        &self,
+        _category_job_service_sub_guid: &str,
+    ) -> Result<Vec<kokkak_domain::CategoryJobServiceSubImageRow>, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_service_sub repo not wired in build_app_state".into(),
+        ))
+    }
+    async fn create(
+        &self,
+        _input: &kokkak_domain::CategoryJobServiceSubCreateInput,
+    ) -> Result<kokkak_domain::CategoryJobServiceSubCreateResult, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_service_sub repo not wired in build_app_state".into(),
+        ))
+    }
+    async fn update(
+        &self,
+        _input: &kokkak_domain::CategoryJobServiceSubUpdateInput,
+    ) -> Result<kokkak_domain::CategoryJobServiceSubUpdateResult, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_service_sub repo not wired in build_app_state".into(),
+        ))
+    }
+    async fn delete(
+        &self,
+        _category_job_service_sub_guid: &str,
+        _actor_user_guid: &str,
+    ) -> Result<kokkak_domain::CategoryJobServiceSubDeleteResult, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_service_sub repo not wired in build_app_state".into(),
+        ))
+    }
+    async fn create_image(
+        &self,
+        _input: &kokkak_domain::CategoryJobServiceSubImageCreateInput,
+    ) -> Result<kokkak_domain::CategoryJobServiceSubImageCreateResult, kokkak_domain::RepoError>
+    {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_service_sub repo not wired in build_app_state".into(),
+        ))
+    }
+    async fn delete_image(
+        &self,
+        _input: &kokkak_domain::CategoryJobServiceSubImageDeleteInput,
+    ) -> Result<kokkak_domain::CategoryJobServiceSubImageDeleteResult, kokkak_domain::RepoError>
+    {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_service_sub repo not wired in build_app_state".into(),
+        ))
+    }
+    async fn create_with_images(
+        &self,
+        _input: &kokkak_domain::CategoryJobServiceSubCreateInput,
+        _image_paths: &[kokkak_domain::traits::category_job_service_sub::SubImageForCreate],
+    ) -> Result<kokkak_domain::CategoryJobServiceSubCreateResult, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_service_sub repo not wired in build_app_state".into(),
+        ))
+    }
+    async fn update_with_images(
+        &self,
+        _input: &kokkak_domain::CategoryJobServiceSubUpdateInput,
+        _image_paths: &[kokkak_domain::traits::category_job_service_sub::SubImageForUpdate],
+    ) -> Result<kokkak_domain::CategoryJobServiceSubUpdateResult, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_service_sub repo not wired in build_app_state".into(),
+        ))
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn build_app_state_with(
     bundle: RepoBundle,
@@ -54,7 +234,6 @@ pub fn build_app_state_with(
     signed_url_secret: Arc<str>,
     signed_url_ttl_secs: u32,
 ) -> AppState {
-
     let audit: Arc<dyn AuditLogger> = match build_audit_logger() {
         Ok(l) => Arc::new(l),
         Err(e) => {
@@ -80,6 +259,15 @@ pub fn build_app_state_with(
     let hasher = Arc::new(PasswordHasherAdapter::new());
     let admin_users = Arc::new(AdminUserService::new(bundle.users.clone(), hasher));
     let catalog = Arc::new(CatalogService::new(bundle.services.clone()));
+    let category_job_main = Arc::new(CategoryJobMainService::new(
+        bundle.category_job_main.clone(),
+    ));
+    let category_job_service_main = Arc::new(CategoryJobServiceMainService::new(
+        bundle.category_job_service_main.clone(),
+    ));
+    let category_job_service_sub = Arc::new(CategoryJobServiceSubService::new(
+        bundle.category_job_service_sub.clone(),
+    ));
     let orders = Arc::new(OrderService::new(bundle.orders.clone()));
     let local: Arc<BroadcastTransport> = Arc::new(BroadcastTransport::default());
     let transport: Arc<dyn ChatTransport> = local.clone();
@@ -143,6 +331,9 @@ pub fn build_app_state_with(
         user,
         admin_users,
         catalog,
+        category_job_main,
+        category_job_service_main,
+        category_job_service_sub,
         master,
         orders,
         chat,
@@ -184,7 +375,6 @@ pub fn build_app_state(
     registry: HealthRegistry,
     translation: Arc<dyn TranslationRepository>,
 ) -> AppState {
-
     let storage: Arc<dyn kokkak_domain::Storage> = Arc::new(MemoryStorage::new());
 
     let backend_marker: Option<MssqlPool> = None;
@@ -199,6 +389,9 @@ pub fn build_app_state(
         permission_users: permission_user_repo,
         translation,
         master: master_repo,
+        category_job_main: Arc::new(MssqlCategoryJobMainRepositoryNoop),
+        category_job_service_main: Arc::new(MssqlCategoryJobServiceMainRepositoryNoop),
+        category_job_service_sub: Arc::new(MssqlCategoryJobServiceSubRepositoryNoop),
         mssql_pool: backend_marker,
         topology: None,
     };
@@ -241,6 +434,9 @@ pub fn build_app_state_json(
         permission_users: permission_user_repo,
         translation,
         master: master_repo,
+        category_job_main: Arc::new(MssqlCategoryJobMainRepositoryNoop),
+        category_job_service_main: Arc::new(MssqlCategoryJobServiceMainRepositoryNoop),
+        category_job_service_sub: Arc::new(MssqlCategoryJobServiceSubRepositoryNoop),
         mssql_pool: backend_marker,
         topology: None,
     };

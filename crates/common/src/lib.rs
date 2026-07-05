@@ -1,7 +1,6 @@
 
 
 #![deny(unsafe_code)]
-#![warn(missing_docs)]
 
 rust_i18n::i18n!("locales", fallback = "en");
 

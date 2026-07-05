@@ -1,5 +1,3 @@
-
-
 use std::sync::Arc;
 
 use axum::{
@@ -98,6 +96,9 @@ async fn make_app() -> (axum::Router, Arc<MssqlTranslationRepository>) {
         translation: cached,
         mssql_pool: None,
         topology: None,
+        category_job_main: Arc::new(kokkak_infra::db::mssql_category_job_main::MssqlCategoryJobMainRepository::disabled()),
+        category_job_service_main: Arc::new(kokkak_infra::db::mssql_category_job_service_main::MssqlCategoryJobServiceMainRepository::disabled()),
+        category_job_service_sub: Arc::new(kokkak_infra::db::mssql_category_job_service_sub::MssqlCategoryJobServiceSubRepository::disabled()),
     };
     let state = build_app_state_with(
         bundle,
@@ -268,7 +269,6 @@ async fn per_tenant_override_wins_over_file_catalog() {
 #[tokio::test]
 #[ignore = "M14.5: requires live SQL Server; enable with cargo test -- --ignored"]
 async fn localizable_keys_match_catalog_for_all_locales() {
-
     let err = AuthError::InvalidCredentials;
     for locale in ["en", "th", "lo", "zh"] {
         let resolved = tr(err.l10n_key(), locale, &[]);
@@ -283,7 +283,6 @@ async fn localizable_keys_match_catalog_for_all_locales() {
 #[tokio::test]
 #[ignore = "M14.5: requires live SQL Server; enable with cargo test -- --ignored"]
 async fn settings_default_has_empty_translation() {
-
     let mut settings = Settings::default();
     settings.data_dir.path = tmp_dir(&format!("settings-{}", Uuid::new_v4()))
         .to_string_lossy()

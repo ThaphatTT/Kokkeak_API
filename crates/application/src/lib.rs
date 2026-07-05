@@ -1,12 +1,12 @@
-
-
 #![deny(unsafe_code)]
-#![warn(missing_docs)]
 
 pub mod admin_user;
 pub mod audit;
 pub mod auth;
 pub mod catalog;
+pub mod category_job_main;
+pub mod category_job_service_main;
+pub mod category_job_service_sub;
 pub mod chat;
 pub mod master;
 pub mod order;
@@ -19,6 +19,9 @@ pub mod user_role;
 pub use audit::{AuditEvent, AuditLogger, NoopAuditLogger, TestAuditLogger};
 pub use auth::{AuthOutcome, AuthService, LoginInput, RegisterInput};
 pub use catalog::{CatalogService, ServiceListPage};
+pub use category_job_main::CategoryJobMainService;
+pub use category_job_service_main::CategoryJobServiceMainService;
+pub use category_job_service_sub::CategoryJobServiceSubService;
 pub use chat::{BroadcastTransport, ChatEvent, ChatService, ChatTransport, ChatUseCaseError};
 pub use master::MasterDropdownService;
 pub use order::{OrderListPage, OrderService};

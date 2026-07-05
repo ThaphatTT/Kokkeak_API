@@ -1,12 +1,13 @@
-
-
 #![deny(unsafe_code)]
-#![warn(missing_docs)]
+#![allow(missing_docs)]
 
 pub mod admin_user;
 pub mod auth;
 pub mod cache;
 pub mod catalog;
+pub mod category_job_main;
+pub mod category_job_service_main;
+pub mod category_job_service_sub;
 pub mod chat;
 pub mod error;
 pub mod health;
@@ -32,6 +33,25 @@ pub use admin_user::{
 pub use auth::{AuthError, AuthSession, Claims, PublicUser, TokenKind, TokenPair};
 pub use cache::{Cache, CacheError, CacheExt, CacheGroup, CacheKey, InvalidationStream};
 pub use catalog::ServiceCategory;
+pub use category_job_main::{
+    CategoryJobMainCreateInput, CategoryJobMainCreateResult, CategoryJobMainDeleteResult,
+    CategoryJobMainError, CategoryJobMainListInput, CategoryJobMainPage, CategoryJobMainRow,
+    CategoryJobMainUpdateInput, CategoryJobMainUpdateResult,
+};
+pub use category_job_service_main::{
+    CategoryJobServiceMainCreateInput, CategoryJobServiceMainCreateResult,
+    CategoryJobServiceMainDeleteResult, CategoryJobServiceMainError, CategoryJobServiceMainRow,
+    CategoryJobServiceMainUpdateInput, CategoryJobServiceMainUpdateResult,
+};
+pub use category_job_service_sub::{
+    CategoryJobServiceSubCreateInput, CategoryJobServiceSubCreateResult,
+    CategoryJobServiceSubDeleteResult, CategoryJobServiceSubDetailBundle,
+    CategoryJobServiceSubError, CategoryJobServiceSubFeeRow, CategoryJobServiceSubImageCreateInput,
+    CategoryJobServiceSubImageCreateResult, CategoryJobServiceSubImageDeleteInput,
+    CategoryJobServiceSubImageDeleteResult, CategoryJobServiceSubImageInput,
+    CategoryJobServiceSubImageRow, CategoryJobServiceSubRow, CategoryJobServiceSubUpdateInput,
+    CategoryJobServiceSubUpdateResult, CategoryJobServiceSubWarrantyRow,
+};
 pub use chat::{ChatError, ChatMessage, ChatRoom, MessageId, Participant, RoomId, RoomSummary};
 pub use error::LocalizedError;
 pub use health::{CheckOutcome, HealthCheck, HealthError, HealthRegistry, ReadyReport};
@@ -59,5 +79,8 @@ pub use traits::permission::PermissionUserRepository;
 pub use traits::translation::{TranslationError, TranslationRepository};
 pub use traits::user::RepoError;
 pub use traits::user_role::UserRoleRepository;
-pub use traits::{ServiceRepository, UserRepository};
+pub use traits::{
+    CategoryJobMainRepository, CategoryJobServiceMainRepository, CategoryJobServiceSubRepository,
+    ServiceRepository, UserRepository,
+};
 pub use user::{Permission, Role, User, UserListRow, UserStatus};

@@ -1,0 +1,574 @@
+use std::sync::Arc;
+
+use axum::{
+    extract::{Path, Query, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    Json,
+};
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
+use kokkak_common::i18n::{current_locale, tr, tr_with_repo};
+use kokkak_common::response::{created, ok, ApiResponse};
+use kokkak_domain::{LocalizedError, RepoError};
+use kokkak_infra::image_processor::UserImageKind;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use crate::middleware::auth::AuthnUser;
+use crate::state::AppState;
+
+#[derive(Debug, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
+pub struct ListCategoryJobMainQuery {
+    pub keyword: Option<String>,
+
+    pub status: Option<i32>,
+
+    pub locale: Option<String>,
+
+    pub page: Option<u32>,
+
+    pub page_size: Option<u32>,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct ListCategoryJobMainMeta {
+    pub total_count: i64,
+
+    pub page: u32,
+
+    pub page_size: u32,
+
+    pub total_page: u32,
+
+    pub has_next: bool,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct ListCategoryJobMainResponse {
+    pub items: Vec<kokkak_domain::CategoryJobMainRow>,
+
+    pub meta: ListCategoryJobMainMeta,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/category-job-mains",
+    tag = "category-job-main",
+    params(ListCategoryJobMainQuery),
+    responses(
+        (status = 200, description = "Active category job mains (mobile/web landing page) — paginated, localized", body = ListCategoryJobMainResponse),
+        (status = 401, description = "Not authenticated", body = crate::openapi::ApiError),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn list_category_job_mains(
+    State(state): State<AppState>,
+    Query(q): Query<ListCategoryJobMainQuery>,
+) -> Result<Response, Response> {
+    let page = q.page.unwrap_or(1).max(1);
+    let page_size = q.page_size.unwrap_or(20).clamp(1, 100);
+    let status = q.status.filter(|v| matches!(v, 0 | 1));
+
+    let locale = q.locale.clone().or_else(|| Some(current_locale()));
+
+    let input = kokkak_domain::CategoryJobMainListInput {
+        keyword: q.keyword.clone(),
+        status,
+        locale,
+        page,
+        page_size,
+    };
+
+    let page_data = match state.category_job_main.list(input).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "category_job_main.list failed");
+            return Err(repo_error_to_response(e, &state).await);
+        }
+    };
+
+    let mut items = page_data.items;
+    populate_signed_image_urls(&state, &mut items);
+
+    let total_page = page_data.total_page;
+    let has_next = page_data.page < total_page && total_page > 0;
+
+    let resp = ListCategoryJobMainResponse {
+        items,
+        meta: ListCategoryJobMainMeta {
+            total_count: page_data.total_count,
+            page: page_data.page,
+            page_size: page_data.page_size,
+            total_page,
+            has_next,
+        },
+    };
+    Ok((StatusCode::OK, ok(resp)).into_response())
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/category-job-mains/{guid}",
+    tag = "category-job-main",
+    params(
+        ("guid" = String, Path, description = "Category Job Main GUID (UUID)"),
+    ),
+    responses(
+        (status = 200, description = "Single category job main by GUID"),
+        (status = 401, description = "Not authenticated"),
+        (status = 404, description = "Category not found"),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn get_category_job_main(
+    State(state): State<AppState>,
+    Path(guid): Path<String>,
+) -> Result<Response, Response> {
+    let input = kokkak_domain::CategoryJobMainListInput {
+        keyword: None,
+        status: None,
+        locale: Some(current_locale()),
+        page: 1,
+        page_size: 100,
+    };
+    let page = match state.category_job_main.list(input).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "category_job_main.list failed");
+            return Err(repo_error_to_response(e, &state).await);
+        }
+    };
+    let mut found: Vec<kokkak_domain::CategoryJobMainRow> = page
+        .items
+        .into_iter()
+        .filter(|r| r.category_job_main_guid == guid)
+        .collect();
+    match found.len() {
+        0 => {
+            let locale = current_locale();
+            let msg = tr("err_category_job_main.not_found", &locale, &[guid.as_str()]);
+            let envelope: ApiResponse<()> = ApiResponse {
+                success: false,
+                data: None,
+                error: Some(kokkak_common::error::ApiErrorBody {
+                    code: "not_found".into(),
+                    message: msg,
+                }),
+                meta: None,
+            };
+            Err((StatusCode::NOT_FOUND, Json(envelope)).into_response())
+        }
+        _ => {
+            populate_signed_image_urls(&state, &mut found);
+            Ok((StatusCode::OK, ok(found.remove(0))).into_response())
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct CreateCategoryJobMainRequest {
+    pub category_job_main_name: String,
+
+    #[serde(default)]
+    pub category_job_main_icon_style: Option<String>,
+
+    #[serde(default)]
+    pub category_job_main_icon_line: Option<String>,
+
+    #[serde(default)]
+    pub category_job_main_img_path: Option<String>,
+
+    #[serde(default)]
+    pub category_job_main_img_b64: Option<String>,
+
+    #[serde(default)]
+    pub category_job_main_priority: Option<i32>,
+}
+
+impl CreateCategoryJobMainRequest {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.category_job_main_name.trim().is_empty() {
+            return Err("category_job_main_name is required".to_string());
+        }
+        Ok(())
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/category-job-mains",
+    tag = "admin",
+    request_body = CreateCategoryJobMainRequest,
+    responses(
+        (status = 201, description = "Category created", body = kokkak_domain::CategoryJobMainCreateResult),
+        (status = 400, description = "Validation error", body = crate::openapi::ApiError),
+        (status = 401, description = "Not authenticated"),
+        (status = 403, description = "PERMISSION_DENIED", body = crate::openapi::ApiError),
+        (status = 409, description = "CATEGORY_NAME_DUPLICATE", body = crate::openapi::ApiError),
+        (status = 422, description = "Invalid image (decode/encode/store)", body = crate::openapi::ApiError),
+        (status = 500, description = "Internal error", body = crate::openapi::ApiError),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn create_category_job_main_admin(
+    State(state): State<AppState>,
+    user: AuthnUser,
+    Json(req): Json<CreateCategoryJobMainRequest>,
+) -> Result<Response, Response> {
+    if !user
+        .has_permission(
+            kokkak_domain::Permission::CategoryJobMainCreate,
+            &state.permission_checker,
+        )
+        .await
+    {
+        return Err(permission_denied(
+            &state,
+            kokkak_domain::Permission::CategoryJobMainCreate.code(),
+        ));
+    }
+
+    if let Err(msg) = req.validate() {
+        return Err(validation_envelope(&state, &msg));
+    }
+
+    let category_guid = Uuid::now_v7().to_string();
+
+    let img_path = match resolve_b64_category_icon(
+        state.image.clone(),
+        &category_guid,
+        req.category_job_main_img_b64.as_deref(),
+    )
+    .await
+    {
+        Ok(v) => v.or(req.category_job_main_img_path),
+        Err(e) => return Err(image_error_envelope(&state, "category_job_main_img_b64", e)),
+    };
+
+    let input = kokkak_domain::CategoryJobMainCreateInput {
+        category_job_main_name: req.category_job_main_name,
+        category_job_main_icon_style: req.category_job_main_icon_style,
+        category_job_main_icon_line: req.category_job_main_icon_line,
+        category_job_main_img_path: img_path,
+        category_job_main_priority: req.category_job_main_priority,
+        create_by: user.id().to_string(),
+    };
+
+    let result = match state.category_job_main.create(input).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "category_job_main.create failed");
+            return Err(sp_error_to_response(&state, e).await);
+        }
+    };
+
+    Ok((StatusCode::CREATED, created(result)).into_response())
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct UpdateCategoryJobMainRequest {
+    pub category_job_main_name: String,
+
+    #[serde(default)]
+    pub category_job_main_icon_style: Option<String>,
+
+    #[serde(default)]
+    pub category_job_main_icon_line: Option<String>,
+
+    #[serde(default)]
+    pub category_job_main_img_path: Option<String>,
+
+    #[serde(default)]
+    pub category_job_main_img_b64: Option<String>,
+
+    pub category_job_main_status: i32,
+
+    pub category_job_main_priority: i32,
+}
+
+impl UpdateCategoryJobMainRequest {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.category_job_main_name.trim().is_empty() {
+            return Err("category_job_main_name is required".to_string());
+        }
+        if !matches!(self.category_job_main_status, 0 | 1) {
+            return Err("category_job_main_status must be 0 or 1".to_string());
+        }
+        Ok(())
+    }
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/v1/admin/category-job-mains/{guid}",
+    tag = "admin",
+    params(
+        ("guid" = String, Path, description = "Category Job Main GUID (UUID)"),
+    ),
+    request_body = UpdateCategoryJobMainRequest,
+    responses(
+        (status = 200, description = "Category updated", body = kokkak_domain::CategoryJobMainUpdateResult),
+        (status = 400, description = "Validation error", body = crate::openapi::ApiError),
+        (status = 401, description = "Not authenticated"),
+        (status = 403, description = "PERMISSION_DENIED", body = crate::openapi::ApiError),
+        (status = 404, description = "CATEGORY_NOT_FOUND", body = crate::openapi::ApiError),
+        (status = 422, description = "Invalid image (decode/encode/store)", body = crate::openapi::ApiError),
+        (status = 500, description = "Internal error", body = crate::openapi::ApiError),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn update_category_job_main_admin(
+    State(state): State<AppState>,
+    user: AuthnUser,
+    Path(guid): Path<String>,
+    Json(req): Json<UpdateCategoryJobMainRequest>,
+) -> Result<Response, Response> {
+    if !user
+        .has_permission(
+            kokkak_domain::Permission::CategoryJobMainUpdate,
+            &state.permission_checker,
+        )
+        .await
+    {
+        return Err(permission_denied(
+            &state,
+            kokkak_domain::Permission::CategoryJobMainUpdate.code(),
+        ));
+    }
+
+    if let Err(msg) = req.validate() {
+        return Err(validation_envelope(&state, &msg));
+    }
+
+    let img_path = match resolve_b64_category_icon(
+        state.image.clone(),
+        &guid,
+        req.category_job_main_img_b64.as_deref(),
+    )
+    .await
+    {
+        Ok(v) => v.or(req.category_job_main_img_path),
+        Err(e) => return Err(image_error_envelope(&state, "category_job_main_img_b64", e)),
+    };
+
+    let input = kokkak_domain::CategoryJobMainUpdateInput {
+        category_job_main_guid: guid,
+        category_job_main_name: req.category_job_main_name,
+        category_job_main_icon_style: req.category_job_main_icon_style,
+        category_job_main_icon_line: req.category_job_main_icon_line,
+        category_job_main_img_path: img_path,
+        category_job_main_status: req.category_job_main_status,
+        category_job_main_priority: req.category_job_main_priority,
+        update_by: user.id().to_string(),
+    };
+
+    let result = match state.category_job_main.update(input).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "category_job_main.update failed");
+            return Err(sp_error_to_response(&state, e).await);
+        }
+    };
+
+    Ok((StatusCode::OK, ok(result)).into_response())
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/admin/category-job-mains/{guid}",
+    tag = "admin",
+    params(
+        ("guid" = String, Path, description = "Category Job Main GUID (UUID)"),
+    ),
+    responses(
+        (status = 200, description = "Category soft-deleted (cascade)", body = kokkak_domain::CategoryJobMainDeleteResult),
+        (status = 401, description = "Not authenticated"),
+        (status = 403, description = "PERMISSION_DENIED", body = crate::openapi::ApiError),
+        (status = 404, description = "CATEGORY_NOT_FOUND", body = crate::openapi::ApiError),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn delete_category_job_main_admin(
+    State(state): State<AppState>,
+    user: AuthnUser,
+    Path(guid): Path<String>,
+) -> Result<Response, Response> {
+    if !user
+        .has_permission(
+            kokkak_domain::Permission::CategoryJobMainDelete,
+            &state.permission_checker,
+        )
+        .await
+    {
+        return Err(permission_denied(
+            &state,
+            kokkak_domain::Permission::CategoryJobMainDelete.code(),
+        ));
+    }
+
+    let result = match state
+        .category_job_main
+        .delete(&guid, &user.id().to_string())
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "category_job_main.delete failed");
+            return Err(sp_error_to_response(&state, e).await);
+        }
+    };
+
+    Ok((StatusCode::OK, ok(result)).into_response())
+}
+
+async fn resolve_b64_category_icon(
+    processor: Arc<kokkak_infra::image_processor::ImageProcessor>,
+    category_guid: &str,
+    b64: Option<&str>,
+) -> Result<Option<String>, kokkak_infra::image_processor::ImageError> {
+    let Some(s) = b64 else { return Ok(None) };
+    let bytes =
+        decode_base64_payload(s).map_err(kokkak_infra::image_processor::ImageError::Decode)?;
+    let result = processor
+        .process_and_store(
+            &bytes,
+            category_guid,
+            UserImageKind::CategoryJobMainIcon {
+                category_guid: category_guid.to_string(),
+            },
+        )
+        .await?;
+    Ok(Some(result.key.as_str().to_string()))
+}
+
+fn decode_base64_payload(s: &str) -> Result<Vec<u8>, String> {
+    let payload = if let Some(idx) = s.find("base64,") {
+        &s[idx + "base64,".len()..]
+    } else {
+        s
+    };
+    let cleaned: String = payload.chars().filter(|c| !c.is_whitespace()).collect();
+    STANDARD
+        .decode(cleaned.as_bytes())
+        .map_err(|e| e.to_string())
+}
+
+fn populate_signed_image_urls(state: &AppState, items: &mut [kokkak_domain::CategoryJobMainRow]) {
+    for row in items.iter_mut() {
+        if row.category_job_main_img_path.is_empty() {
+            continue;
+        }
+        row.category_job_main_img_url = crate::signed_url::signed_image_url(
+            state.public_base_url.as_ref(),
+            &row.category_job_main_img_path,
+            state.signed_url_secret.as_ref(),
+            state.signed_url_ttl_secs,
+        );
+    }
+}
+
+async fn repo_error_to_response(err: RepoError, state: &AppState) -> Response {
+    use RepoError::*;
+    let (status, code) = match &err {
+        NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
+        Conflict(_) => (StatusCode::CONFLICT, "conflict"),
+        Backend(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
+    };
+    let locale = current_locale();
+    let args: Vec<String> = err.l10n_args();
+    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let message = tr_with_repo(&*state.translation, &locale, err.l10n_key(), &args_ref).await;
+    let envelope: ApiResponse<()> = ApiResponse {
+        success: false,
+        data: None,
+        error: Some(kokkak_common::error::ApiErrorBody {
+            code: code.into(),
+            message,
+        }),
+        meta: None,
+    };
+    (status, Json(envelope)).into_response()
+}
+
+fn image_error_envelope(
+    state: &AppState,
+    field: &str,
+    err: kokkak_infra::image_processor::ImageError,
+) -> Response {
+    let locale = current_locale();
+    tracing::warn!(
+        field = field,
+        error = %err,
+        "category_job_main image upload failed"
+    );
+    let i18n_key = "err_admin_user.image_invalid";
+    let localized = tr(i18n_key, &locale, &[field]);
+    let _ = state;
+    let envelope: ApiResponse<()> = ApiResponse {
+        success: false,
+        data: None,
+        error: Some(kokkak_common::error::ApiErrorBody {
+            code: "validation".into(),
+            message: localized,
+        }),
+        meta: None,
+    };
+    (StatusCode::UNPROCESSABLE_ENTITY, Json(envelope)).into_response()
+}
+
+fn validation_envelope(state: &AppState, msg: &str) -> Response {
+    let locale = current_locale();
+    let _ = state;
+    let envelope: ApiResponse<()> = ApiResponse {
+        success: false,
+        data: None,
+        error: Some(kokkak_common::error::ApiErrorBody {
+            code: "validation".into(),
+            message: tr("err_category_job_main.validation", &locale, &[msg]),
+        }),
+        meta: None,
+    };
+    (StatusCode::BAD_REQUEST, Json(envelope)).into_response()
+}
+
+fn permission_denied(state: &AppState, code: &str) -> Response {
+    let locale = current_locale();
+    let _ = state;
+    let envelope: ApiResponse<()> = ApiResponse {
+        success: false,
+        data: None,
+        error: Some(kokkak_common::error::ApiErrorBody {
+            code: "permission_denied".into(),
+            message: tr("err_auth.permission_denied", &locale, &[code]),
+        }),
+        meta: None,
+    };
+    (StatusCode::FORBIDDEN, Json(envelope)).into_response()
+}
+
+async fn sp_error_to_response(state: &AppState, err: RepoError) -> Response {
+    use RepoError::*;
+    let (status, code) = match &err {
+        NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
+        Conflict(_) => (StatusCode::CONFLICT, "conflict"),
+        Backend(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
+    };
+    let locale = current_locale();
+    let message = tr_with_repo(&*state.translation, &locale, err.l10n_key(), &[]).await;
+    tracing::warn!(
+        repo_error = %err,
+        localized_code = code,
+        "category_job_main repo error"
+    );
+    let envelope: ApiResponse<()> = ApiResponse {
+        success: false,
+        data: None,
+        error: Some(kokkak_common::error::ApiErrorBody {
+            code: code.into(),
+            message,
+        }),
+        meta: None,
+    };
+    (status, Json(envelope)).into_response()
+}

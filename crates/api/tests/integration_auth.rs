@@ -1,5 +1,3 @@
-
-
 use std::sync::Arc;
 
 use axum::{
@@ -40,7 +38,6 @@ async fn make_app() -> (axum::Router, Vec<PathBuf>) {
     let url = match live_url() {
         Some(u) => u,
         None => {
-
             eprintln!("SKIPPED: integration_auth requires KOKKAK_DATABASE__SQLSERVER_URL");
 
             return (axum::Router::new(), vec![]);
@@ -96,6 +93,9 @@ async fn make_app() -> (axum::Router, Vec<PathBuf>) {
         translation,
         mssql_pool: None,
         topology: None,
+        category_job_main: Arc::new(kokkak_infra::db::mssql_category_job_main::MssqlCategoryJobMainRepository::disabled()),
+        category_job_service_main: Arc::new(kokkak_infra::db::mssql_category_job_service_main::MssqlCategoryJobServiceMainRepository::disabled()),
+        category_job_service_sub: Arc::new(kokkak_infra::db::mssql_category_job_service_sub::MssqlCategoryJobServiceSubRepository::disabled()),
     };
     let state: AppState = kokkak_api::build_app_state_with(
         bundle,

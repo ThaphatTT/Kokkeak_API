@@ -1,5 +1,3 @@
-
-
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::Modify;
 use utoipa::OpenApi;
@@ -32,7 +30,26 @@ use crate::handlers;
         handlers::user::get_me,
         handlers::catalog::list_services,
 
-                        handlers::master::list_countries,
+        handlers::category_job_main::list_category_job_mains,
+                handlers::category_job_main::get_category_job_main,
+                handlers::category_job_main::create_category_job_main_admin,
+                handlers::category_job_main::update_category_job_main_admin,
+                handlers::category_job_main::delete_category_job_main_admin,
+
+                handlers::category_job_service_main::list_category_job_service_mains,
+                handlers::category_job_service_main::get_category_job_service_main,
+                handlers::category_job_service_main::create_category_job_service_main_admin,
+                handlers::category_job_service_main::update_category_job_service_main_admin,
+                handlers::category_job_service_main::delete_category_job_service_main_admin,
+
+                handlers::category_job_service_sub::list_category_job_service_subs,
+                handlers::category_job_service_sub::get_category_job_service_sub,
+                handlers::category_job_service_sub::list_category_job_service_sub_images,
+                handlers::category_job_service_sub::create_category_job_service_sub_admin,
+                handlers::category_job_service_sub::update_category_job_service_sub_admin,
+                handlers::category_job_service_sub::delete_category_job_service_sub_admin,
+
+                                handlers::master::list_countries,
                         handlers::master::autocomplete_user_department_team,
                         handlers::master::autocomplete_user_department,
                         handlers::master::autocomplete_master_positions,
@@ -69,6 +86,46 @@ use crate::handlers;
                         handlers::auth::LogoutResponse,
                         handlers::catalog::ListQuery,
                         handlers::catalog::ServiceItem,
+                        handlers::category_job_main::ListCategoryJobMainQuery,
+                        handlers::category_job_main::ListCategoryJobMainMeta,
+                        handlers::category_job_main::ListCategoryJobMainResponse,
+                        handlers::category_job_main::CreateCategoryJobMainRequest,
+                        handlers::category_job_main::UpdateCategoryJobMainRequest,
+                        kokkak_domain::CategoryJobMainRow,
+                        kokkak_domain::CategoryJobMainListInput,
+                        kokkak_domain::CategoryJobMainPage,
+                        kokkak_domain::CategoryJobMainCreateInput,
+                        kokkak_domain::CategoryJobMainUpdateInput,
+                        kokkak_domain::CategoryJobMainCreateResult,
+                        kokkak_domain::CategoryJobMainUpdateResult,
+                        kokkak_domain::CategoryJobMainDeleteResult,
+                                                handlers::category_job_service_main::ListCategoryJobServiceMainQuery,
+                                                                        handlers::category_job_service_main::ListCategoryJobServiceMainResponse,
+                                                                        handlers::category_job_service_main::CreateCategoryJobServiceMainRequest,
+                                                                        handlers::category_job_service_main::UpdateCategoryJobServiceMainRequest,
+                                                                        kokkak_domain::CategoryJobServiceMainRow,
+                                                                        kokkak_domain::CategoryJobServiceMainCreateInput,
+                                                                        kokkak_domain::CategoryJobServiceMainUpdateInput,
+                                                                        kokkak_domain::CategoryJobServiceMainCreateResult,
+                                                                        kokkak_domain::CategoryJobServiceMainUpdateResult,
+                                                                        kokkak_domain::CategoryJobServiceMainDeleteResult,
+                                                handlers::category_job_service_sub::ListCategoryJobServiceSubQuery,
+                                                handlers::category_job_service_sub::ListCategoryJobServiceSubResponse,
+                                                handlers::category_job_service_sub::CreateCategoryJobServiceSubRequest,
+                                                handlers::category_job_service_sub::UpdateCategoryJobServiceSubRequest,
+                                                kokkak_domain::CategoryJobServiceSubRow,
+                                                kokkak_domain::CategoryJobServiceSubImageRow,
+                                                kokkak_domain::CategoryJobServiceSubFeeRow,
+                                                kokkak_domain::CategoryJobServiceSubWarrantyRow,
+                                                kokkak_domain::CategoryJobServiceSubDetailBundle,
+                                                kokkak_domain::CategoryJobServiceSubImageInput,
+                                                kokkak_domain::CategoryJobServiceSubCreateInput,
+                                                kokkak_domain::CategoryJobServiceSubUpdateInput,
+                                                kokkak_domain::CategoryJobServiceSubCreateResult,
+                                                kokkak_domain::CategoryJobServiceSubUpdateResult,
+                                                kokkak_domain::CategoryJobServiceSubDeleteResult,
+                                                kokkak_domain::CategoryJobServiceSubImageCreateResult,
+                                                kokkak_domain::CategoryJobServiceSubImageDeleteResult,
                         handlers::master::CountriesQuery,
                                                 kokkak_domain::MasterDropdownRow,
                                                                                                 handlers::master::AutocompleteUserDepartmentTeamQuery,
@@ -144,7 +201,10 @@ use crate::handlers;
         (name = "catalog", description = "Service category catalog (master data)"),
         (name = "orders", description = "Order lifecycle — requires Idempotency-Key on POST"),
         (name = "payments", description = "Payment intents — requires Idempotency-Key on POST"),
-        (name = "admin", description = "Admin-only endpoints (requires admin JWT)"),
+        (name = "category-job-main", description = "Top-level service category (web/mobile landing page) — read endpoints"),
+                (name = "category-job-service-main", description = "Service items under each main category (web/mobile landing page) — read endpoints"),
+                (name = "category-job-service-sub", description = "Sub-service items (ล้างแอร์ 9,000-12,000 BTU, ซ่อมท่อน้ำรั่ว, etc.) — read endpoints"),
+                (name = "admin", description = "Admin-only endpoints (requires admin JWT)"),
     )
 )]
 pub struct ApiDoc;
@@ -168,7 +228,6 @@ impl Modify for SecurityAddon {
 
 #[derive(Clone, Debug, serde::Serialize, utoipa::ToSchema)]
 pub struct ErrorCodeEntry {
-
     pub code: &'static str,
 
     pub status: u16,
@@ -179,7 +238,6 @@ pub struct ErrorCodeEntry {
 pub fn error_codes_catalog() -> Vec<ErrorCodeEntry> {
     use kokkak_common::error_codes::ErrorCode;
     vec![
-
         (
             ErrorCode::BAD_REQUEST,
             400,
@@ -190,7 +248,6 @@ pub fn error_codes_catalog() -> Vec<ErrorCodeEntry> {
             400,
             "`Idempotency-Key` header is missing or whitespace on a protected endpoint.",
         ),
-
         (
             ErrorCode::UNAUTHORIZED,
             401,
@@ -211,7 +268,6 @@ pub fn error_codes_catalog() -> Vec<ErrorCodeEntry> {
             401,
             "Refresh token rejected (revoked, malformed, or expired).",
         ),
-
         (
             ErrorCode::FORBIDDEN,
             403,
@@ -227,10 +283,8 @@ pub fn error_codes_catalog() -> Vec<ErrorCodeEntry> {
             403,
             "Caller is not a participant of the target chat room.",
         ),
-
         (ErrorCode::NOT_FOUND, 404, "Resource not found."),
         (ErrorCode::ROOM_NOT_FOUND, 404, "Chat room not found."),
-
         (
             ErrorCode::CONFLICT,
             409,
@@ -246,7 +300,6 @@ pub fn error_codes_catalog() -> Vec<ErrorCodeEntry> {
             409,
             "Payment already captured (cannot confirm twice).",
         ),
-
         (ErrorCode::VALIDATION, 422, "Semantic validation failure."),
         (
             ErrorCode::ROLE_NOT_ALLOWED,
@@ -258,9 +311,7 @@ pub fn error_codes_catalog() -> Vec<ErrorCodeEntry> {
             422,
             "Chat message body was empty or too long.",
         ),
-
         (ErrorCode::RATE_LIMITED, 429, "Per-IP rate limit hit."),
-
         (
             ErrorCode::INTERNAL,
             500,
@@ -278,7 +329,6 @@ pub fn error_codes_catalog() -> Vec<ErrorCodeEntry> {
 
 #[derive(Debug, serde::Serialize, utoipa::ToSchema)]
 pub struct ApiError {
-
     pub success: bool,
 
     pub data: Option<serde_json::Value>,
@@ -290,7 +340,6 @@ pub struct ApiError {
 
 #[derive(Debug, serde::Serialize, utoipa::ToSchema)]
 pub struct ApiErrorBody {
-
     pub code: String,
 
     pub message: String,

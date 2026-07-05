@@ -1,5 +1,3 @@
-
-
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
@@ -14,7 +12,6 @@ use bb8_tiberius::ConnectionManager;
 
 #[derive(Debug, thiserror::Error)]
 pub enum MssqlError {
-
     #[error("invalid sqlserver url: {0}")]
     InvalidUrl(String),
 
@@ -33,6 +30,8 @@ pub enum MssqlError {
 
 pub type MssqlPool = Pool<ConnectionManager>;
 
+pub type MssqlClient = tiberius::Client<tokio_util::compat::Compat<tokio::net::TcpStream>>;
+
 pub async fn build_pool(settings: &DatabaseSettings) -> Result<MssqlPool, MssqlError> {
     if !settings.is_configured() {
         return Err(MssqlError::NotConfigured);
@@ -46,6 +45,19 @@ pub async fn build_pool(settings: &DatabaseSettings) -> Result<MssqlPool, MssqlE
         .await
         .map_err(|e| MssqlError::PoolBuild(e.to_string()))?;
     Ok(pool)
+}
+
+pub fn build_disabled_pool() -> MssqlPool {
+    use std::time::Duration;
+    let manager = ConnectionManager::new(Config::default());
+    futures::executor::block_on(async {
+        Pool::builder()
+            .max_size(1)
+            .connection_timeout(Duration::from_secs(0))
+            .build(manager)
+            .await
+            .expect("disabled pool builder should not fail")
+    })
 }
 
 pub async fn ping(pool: &MssqlPool) -> Result<(), MssqlError> {
@@ -72,7 +84,6 @@ pub fn parse_connection_url(raw: &str) -> Result<Config, MssqlError> {
 }
 
 fn parse_connection_url_impl(trimmed: &str) -> Result<Config, MssqlError> {
-
     if let Some(rest) = trimmed.strip_prefix("jdbc:sqlserver://") {
         let jdbc = format!("jdbc:sqlserver://{rest}");
         return Config::from_jdbc_string(&jdbc).map_err(|e| MssqlError::InvalidUrl(e.to_string()));
@@ -93,7 +104,6 @@ fn parse_connection_url_impl(trimmed: &str) -> Result<Config, MssqlError> {
 }
 
 fn adonet_to_tiberius_config(s: &str) -> Result<Config, MssqlError> {
-
     let cfg = Config::from_ado_string(s).map_err(|e| MssqlError::InvalidUrl(e.to_string()))?;
     Ok(cfg)
 }
@@ -107,6 +117,14 @@ pub async fn exec_sp(
         .get()
         .await
         .map_err(|e| RepoError::Backend(format!("acquire: {e}")))?;
+    exec_sp_on(&mut conn, query, params).await
+}
+
+pub async fn exec_sp_on(
+    conn: &mut MssqlClient,
+    query: &str,
+    params: &[&dyn ToSql],
+) -> Result<Vec<tiberius::Row>, RepoError> {
     let rows = conn
         .query(query, params)
         .await
@@ -121,6 +139,70 @@ pub async fn exec_sp(
         out.push(row);
     }
     Ok(out)
+}
+
+pub async fn exec_sp_multi(
+    pool: &MssqlPool,
+    query: &str,
+    params: &[&dyn ToSql],
+) -> Result<Vec<Vec<tiberius::Row>>, RepoError> {
+    let mut conn = pool
+        .get()
+        .await
+        .map_err(|e| RepoError::Backend(format!("acquire: {e}")))?;
+    exec_sp_multi_on(&mut conn, query, params).await
+}
+
+pub async fn exec_sp_multi_on(
+    conn: &mut MssqlClient,
+    query: &str,
+    params: &[&dyn ToSql],
+) -> Result<Vec<Vec<tiberius::Row>>, RepoError> {
+    let mut stream = conn
+        .query(query, params)
+        .await
+        .map_err(|e| RepoError::Backend(e.to_string()))?;
+    let mut sets: Vec<Vec<tiberius::Row>> = vec![Vec::new()];
+    while let Some(item) = stream
+        .try_next()
+        .await
+        .map_err(|e| RepoError::Backend(e.to_string()))?
+    {
+        match item {
+            tiberius::QueryItem::Row(row) => {
+                if let Some(last) = sets.last_mut() {
+                    last.push(row);
+                }
+            }
+            tiberius::QueryItem::Metadata(_) => {
+                sets.push(Vec::new());
+            }
+        }
+    }
+    if sets.last().map(|v| v.is_empty()).unwrap_or(false) {
+        sets.pop();
+    }
+    Ok(sets)
+}
+
+pub async fn begin_tx(conn: &mut MssqlClient) -> Result<(), RepoError> {
+    conn.simple_query("BEGIN TRAN")
+        .await
+        .map_err(|e| RepoError::Backend(format!("BEGIN TRAN: {e}")))?;
+    Ok(())
+}
+
+pub async fn commit_tx(conn: &mut MssqlClient) -> Result<(), RepoError> {
+    conn.simple_query("COMMIT")
+        .await
+        .map_err(|e| RepoError::Backend(format!("COMMIT: {e}")))?;
+    Ok(())
+}
+
+pub async fn rollback_tx(conn: &mut MssqlClient) {
+    if let Err(e) = conn.simple_query("ROLLBACK").await {
+        tracing::warn!(error = %e, "ROLLBACK failed");
+    }
 }
 
 pub fn read_str<'a>(row: &'a tiberius::Row, col: &str) -> Option<&'a str> {
@@ -144,7 +226,6 @@ pub fn read_decimal(row: &tiberius::Row, col: &str) -> Option<rust_decimal::Deci
 }
 
 pub fn read_guid_str(row: &tiberius::Row, col: &str) -> String {
-
     if let Ok(Some(g)) = row.try_get::<tiberius::Uuid, _>(col) {
         return g.to_string();
     }
@@ -157,7 +238,6 @@ pub fn read_guid_str(row: &tiberius::Row, col: &str) -> String {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpError {
-
     None,
 
     NotFound,
@@ -170,7 +250,6 @@ pub enum SpError {
 }
 
 impl SpError {
-
     pub fn from_code(code: i32, _msg: &str) -> Self {
         match code {
             0 => Self::None,

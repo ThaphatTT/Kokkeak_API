@@ -1,5 +1,3 @@
-
-
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -12,19 +10,23 @@ use crate::storage::keys;
 
 pub use crate::storage::keys::UserAttachment as UserAttachmentKind;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UserImageKind {
-
     Profile,
 
     BankBook,
 
     Attachment(UserAttachmentKind),
+
+    CategoryJobMainIcon { category_guid: String },
+
+    CategoryJobServiceMainIcon { service_guid: String },
+
+    CategoryJobServiceSubImage { service_sub_guid: String },
 }
 
 #[derive(Debug, Clone)]
 pub struct ImageProcessorConfig {
-
     pub max_input_bytes: usize,
 
     pub max_dimension_px: u32,
@@ -34,7 +36,6 @@ pub struct ImageProcessorConfig {
 
 #[derive(Debug, Clone)]
 pub struct ProcessedImage {
-
     pub key: kokkak_domain::StorageKey,
 
     pub original_size: usize,
@@ -50,7 +51,6 @@ pub struct ProcessedImage {
 
 #[derive(Debug, Error)]
 pub enum ImageError {
-
     #[error("image too large: {0} bytes (max {1})")]
     TooLarge(usize, usize),
 
@@ -74,7 +74,6 @@ pub struct ImageProcessor {
 }
 
 impl ImageProcessor {
-
     pub fn new(storage: Arc<dyn Storage>, config: ImageProcessorConfig) -> Self {
         Self { storage, config }
     }
@@ -132,6 +131,15 @@ impl ImageProcessor {
             UserImageKind::Profile => keys::user_profile(user_guid, "webp"),
             UserImageKind::BankBook => keys::user_bank_book(user_guid, "webp"),
             UserImageKind::Attachment(a) => keys::user_attachment(user_guid, a, "webp"),
+            UserImageKind::CategoryJobMainIcon { category_guid } => {
+                keys::category_job_main_icon(category_guid, "webp")
+            }
+            UserImageKind::CategoryJobServiceMainIcon { service_guid } => {
+                keys::category_job_service_main_icon(service_guid, "webp")
+            }
+            UserImageKind::CategoryJobServiceSubImage { service_sub_guid } => {
+                keys::category_job_service_sub_image(service_sub_guid, "webp")
+            }
         };
 
         let payload = Bytes::from(webp_buf.clone());
@@ -139,7 +147,6 @@ impl ImageProcessor {
         let webp_size = webp_buf.len();
 
         if webp_size >= bytes.len() {
-
             warn!(
                 original = bytes.len(),
                 webp = webp_size,

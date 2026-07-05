@@ -1,9 +1,11 @@
-
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use kokkak_application::auth::AuthService;
 use kokkak_application::catalog::CatalogService;
+use kokkak_application::category_job_main::CategoryJobMainService;
+use kokkak_application::category_job_service_main::CategoryJobServiceMainService;
+use kokkak_application::category_job_service_sub::CategoryJobServiceSubService;
 use kokkak_application::chat::{BroadcastTransport, ChatService};
 use kokkak_application::master::MasterDropdownService;
 use kokkak_application::order::OrderService;
@@ -43,7 +45,6 @@ trait ChatMembershipBridgeTrait: Send + Sync {
 
 #[derive(Clone)]
 pub struct AppState {
-
     pub auth: Arc<AuthService>,
 
     pub user: Arc<UserService>,
@@ -51,6 +52,12 @@ pub struct AppState {
     pub admin_users: Arc<kokkak_application::admin_user::AdminUserService>,
 
     pub catalog: Arc<CatalogService>,
+
+    pub category_job_main: Arc<CategoryJobMainService>,
+
+    pub category_job_service_main: Arc<CategoryJobServiceMainService>,
+
+    pub category_job_service_sub: Arc<CategoryJobServiceSubService>,
 
     pub master: Arc<MasterDropdownService>,
 
@@ -89,14 +96,12 @@ pub struct AppState {
 
 #[derive(Clone)]
 pub struct ChatHandle {
-
     pub service: Arc<ChatService>,
 
     pub local: Arc<BroadcastTransport>,
 }
 
 impl ChatHandle {
-
     pub async fn list_rooms_for(
         &self,
         user: &kokkak_domain::User,
@@ -161,13 +166,15 @@ impl ChatHandle {
 }
 
 impl AppState {
-
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         auth: Arc<AuthService>,
         user: Arc<UserService>,
         admin_users: Arc<kokkak_application::admin_user::AdminUserService>,
         catalog: Arc<CatalogService>,
+        category_job_main: Arc<CategoryJobMainService>,
+        category_job_service_main: Arc<CategoryJobServiceMainService>,
+        category_job_service_sub: Arc<CategoryJobServiceSubService>,
         master: Arc<MasterDropdownService>,
         orders: Arc<OrderService>,
         chat: ChatHandle,
@@ -190,6 +197,9 @@ impl AppState {
             user: user.clone(),
             admin_users,
             catalog,
+            category_job_main,
+            category_job_service_main,
+            category_job_service_sub,
             master,
             orders,
             chat,
@@ -239,6 +249,9 @@ impl AppState {
             user: user.clone(),
             admin_users,
             catalog,
+            category_job_main: Arc::new(CategoryJobMainService::disabled()),
+            category_job_service_main: Arc::new(CategoryJobServiceMainService::disabled()),
+            category_job_service_sub: Arc::new(CategoryJobServiceSubService::disabled()),
             master,
             orders,
             chat: chat_handle,
