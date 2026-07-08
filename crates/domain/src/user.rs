@@ -116,30 +116,6 @@ pub enum Permission {
 
     BannerDelete,
 
-    CategoryJobMainView,
-
-    CategoryJobMainCreate,
-
-    CategoryJobMainUpdate,
-
-    CategoryJobMainDelete,
-
-    CategoryJobServiceMainView,
-
-    CategoryJobServiceMainCreate,
-
-    CategoryJobServiceMainUpdate,
-
-    CategoryJobServiceMainDelete,
-
-    CategoryJobServiceSubView,
-
-    CategoryJobServiceSubCreate,
-
-    CategoryJobServiceSubUpdate,
-
-    CategoryJobServiceSubDelete,
-
     CompaniesCreate,
 
     CompaniesUpdate,
@@ -163,6 +139,24 @@ pub enum Permission {
     SettingsUpdate,
 
     SettingView,
+
+    #[serde(rename = "WARRANTY_VIEW")]
+    PageWarrantyView,
+
+    WarrantyCreate,
+
+    WarrantyUpdate,
+
+    WarrantyDelete,
+
+    #[serde(rename = "FEE_VIEW")]
+    PageFeeView,
+
+    FeeCreate,
+
+    FeeUpdate,
+
+    FeeDelete,
 }
 
 impl Permission {
@@ -212,21 +206,6 @@ impl Permission {
             Self::BannerUpdate => "BANNER_UPDATE",
             Self::BannerDelete => "BANNER_DELETE",
 
-            Self::CategoryJobMainView => "CATEGORY_JOB_MAIN_VIEW",
-            Self::CategoryJobMainCreate => "CATEGORY_JOB_MAIN_CREATE",
-            Self::CategoryJobMainUpdate => "CATEGORY_JOB_MAIN_UPDATE",
-            Self::CategoryJobMainDelete => "CATEGORY_JOB_MAIN_DELETE",
-
-            Self::CategoryJobServiceMainView => "CATEGORY_JOB_SERVICE_MAIN_VIEW",
-            Self::CategoryJobServiceMainCreate => "CATEGORY_JOB_SERVICE_MAIN_CREATE",
-            Self::CategoryJobServiceMainUpdate => "CATEGORY_JOB_SERVICE_MAIN_UPDATE",
-            Self::CategoryJobServiceMainDelete => "CATEGORY_JOB_SERVICE_MAIN_DELETE",
-
-            Self::CategoryJobServiceSubView => "CATEGORY_JOB_SERVICE_SUB_VIEW",
-            Self::CategoryJobServiceSubCreate => "CATEGORY_JOB_SERVICE_SUB_CREATE",
-            Self::CategoryJobServiceSubUpdate => "CATEGORY_JOB_SERVICE_SUB_UPDATE",
-            Self::CategoryJobServiceSubDelete => "CATEGORY_JOB_SERVICE_SUB_DELETE",
-
             Self::CompaniesCreate => "COMPANIES_CREATE",
             Self::CompaniesUpdate => "COMPANIES_UPDATE",
             Self::CompaniesDelete => "COMPANIES_DELETE",
@@ -242,6 +221,16 @@ impl Permission {
 
             Self::SettingsUpdate => "SETTINGS_UPDATE",
             Self::SettingView => "SETTING_VIEW",
+
+            Self::PageWarrantyView => "WARRANTY_VIEW",
+            Self::WarrantyCreate => "WARRANTY_CREATE",
+            Self::WarrantyUpdate => "WARRANTY_UPDATE",
+            Self::WarrantyDelete => "WARRANTY_DELETE",
+
+            Self::PageFeeView => "FEE_VIEW",
+            Self::FeeCreate => "FEE_CREATE",
+            Self::FeeUpdate => "FEE_UPDATE",
+            Self::FeeDelete => "FEE_DELETE",
         }
     }
 
@@ -291,21 +280,6 @@ impl Permission {
             "BANNER_UPDATE" => Some(Self::BannerUpdate),
             "BANNER_DELETE" => Some(Self::BannerDelete),
 
-            "CATEGORY_JOB_MAIN_VIEW" => Some(Self::CategoryJobMainView),
-            "CATEGORY_JOB_MAIN_CREATE" => Some(Self::CategoryJobMainCreate),
-            "CATEGORY_JOB_MAIN_UPDATE" => Some(Self::CategoryJobMainUpdate),
-            "CATEGORY_JOB_MAIN_DELETE" => Some(Self::CategoryJobMainDelete),
-
-            "CATEGORY_JOB_SERVICE_MAIN_VIEW" => Some(Self::CategoryJobServiceMainView),
-            "CATEGORY_JOB_SERVICE_MAIN_CREATE" => Some(Self::CategoryJobServiceMainCreate),
-            "CATEGORY_JOB_SERVICE_MAIN_UPDATE" => Some(Self::CategoryJobServiceMainUpdate),
-            "CATEGORY_JOB_SERVICE_MAIN_DELETE" => Some(Self::CategoryJobServiceMainDelete),
-
-            "CATEGORY_JOB_SERVICE_SUB_VIEW" => Some(Self::CategoryJobServiceSubView),
-            "CATEGORY_JOB_SERVICE_SUB_CREATE" => Some(Self::CategoryJobServiceSubCreate),
-            "CATEGORY_JOB_SERVICE_SUB_UPDATE" => Some(Self::CategoryJobServiceSubUpdate),
-            "CATEGORY_JOB_SERVICE_SUB_DELETE" => Some(Self::CategoryJobServiceSubDelete),
-
             "COMPANIES_CREATE" => Some(Self::CompaniesCreate),
             "COMPANIES_UPDATE" => Some(Self::CompaniesUpdate),
             "COMPANIES_DELETE" => Some(Self::CompaniesDelete),
@@ -321,6 +295,16 @@ impl Permission {
 
             "SETTINGS_UPDATE" => Some(Self::SettingsUpdate),
             "SETTING_VIEW" => Some(Self::SettingView),
+
+            "WARRANTY_VIEW" => Some(Self::PageWarrantyView),
+            "WARRANTY_CREATE" => Some(Self::WarrantyCreate),
+            "WARRANTY_UPDATE" => Some(Self::WarrantyUpdate),
+            "WARRANTY_DELETE" => Some(Self::WarrantyDelete),
+
+            "FEE_VIEW" => Some(Self::PageFeeView),
+            "FEE_CREATE" => Some(Self::FeeCreate),
+            "FEE_UPDATE" => Some(Self::FeeUpdate),
+            "FEE_DELETE" => Some(Self::FeeDelete),
 
             _ => None,
         }
@@ -617,10 +601,6 @@ mod tests {
             Permission::BannerCreate,
             Permission::BannerUpdate,
             Permission::BannerDelete,
-            Permission::CategoryJobServiceSubView,
-            Permission::CategoryJobServiceSubCreate,
-            Permission::CategoryJobServiceSubUpdate,
-            Permission::CategoryJobServiceSubDelete,
             Permission::CompaniesCreate,
             Permission::CompaniesUpdate,
             Permission::CompaniesDelete,
@@ -633,6 +613,14 @@ mod tests {
             Permission::SocialUpdate,
             Permission::SettingsUpdate,
             Permission::SettingView,
+            Permission::PageWarrantyView,
+            Permission::WarrantyCreate,
+            Permission::WarrantyUpdate,
+            Permission::WarrantyDelete,
+            Permission::PageFeeView,
+            Permission::FeeCreate,
+            Permission::FeeUpdate,
+            Permission::FeeDelete,
         ];
         for p in samples {
             assert_eq!(Permission::from_code(p.code()), Some(p));

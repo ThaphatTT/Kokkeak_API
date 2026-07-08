@@ -8,6 +8,7 @@ pub mod catalog;
 pub mod category_job_main;
 pub mod category_job_service_main;
 pub mod category_job_service_sub;
+pub mod category_job_service_sub_fee;
 pub mod chat;
 pub mod error;
 pub mod health;
@@ -34,14 +35,17 @@ pub use auth::{AuthError, AuthSession, Claims, PublicUser, TokenKind, TokenPair}
 pub use cache::{Cache, CacheError, CacheExt, CacheGroup, CacheKey, InvalidationStream};
 pub use catalog::ServiceCategory;
 pub use category_job_main::{
-    CategoryJobMainCreateInput, CategoryJobMainCreateResult, CategoryJobMainDeleteResult,
-    CategoryJobMainError, CategoryJobMainListInput, CategoryJobMainPage, CategoryJobMainRow,
-    CategoryJobMainUpdateInput, CategoryJobMainUpdateResult,
+    CategoryJobMainAutocompleteInput, CategoryJobMainAutocompleteRow, CategoryJobMainCreateInput,
+    CategoryJobMainCreateResult, CategoryJobMainDeleteResult, CategoryJobMainError,
+    CategoryJobMainListInput, CategoryJobMainPage, CategoryJobMainRow, CategoryJobMainUpdateInput,
+    CategoryJobMainUpdateResult,
 };
 pub use category_job_service_main::{
+    CategoryJobServiceMainAutocompleteInput, CategoryJobServiceMainAutocompleteRow,
     CategoryJobServiceMainCreateInput, CategoryJobServiceMainCreateResult,
-    CategoryJobServiceMainDeleteResult, CategoryJobServiceMainError, CategoryJobServiceMainRow,
-    CategoryJobServiceMainUpdateInput, CategoryJobServiceMainUpdateResult,
+    CategoryJobServiceMainDeleteResult, CategoryJobServiceMainError,
+    CategoryJobServiceMainListInput, CategoryJobServiceMainRow, CategoryJobServiceMainUpdateInput,
+    CategoryJobServiceMainUpdateResult,
 };
 pub use category_job_service_sub::{
     CategoryJobServiceSubCreateInput, CategoryJobServiceSubCreateResult,
@@ -51,6 +55,12 @@ pub use category_job_service_sub::{
     CategoryJobServiceSubImageDeleteResult, CategoryJobServiceSubImageInput,
     CategoryJobServiceSubImageRow, CategoryJobServiceSubRow, CategoryJobServiceSubUpdateInput,
     CategoryJobServiceSubUpdateResult, CategoryJobServiceSubWarrantyRow,
+};
+pub use category_job_service_sub_fee::{
+    CategoryJobServiceSubFeeAdminRow, CategoryJobServiceSubFeeCreateInput,
+    CategoryJobServiceSubFeeCreateResult, CategoryJobServiceSubFeeError,
+    CategoryJobServiceSubFeeListInput, CategoryJobServiceSubFeePage,
+    CategoryJobServiceSubFeeUpdateInput, CategoryJobServiceSubFeeUpdateResult,
 };
 pub use chat::{ChatError, ChatMessage, ChatRoom, MessageId, Participant, RoomId, RoomSummary};
 pub use error::LocalizedError;
@@ -80,7 +90,8 @@ pub use traits::translation::{TranslationError, TranslationRepository};
 pub use traits::user::RepoError;
 pub use traits::user_role::UserRoleRepository;
 pub use traits::{
-    CategoryJobMainRepository, CategoryJobServiceMainRepository, CategoryJobServiceSubRepository,
-    ServiceRepository, UserRepository,
+    CategoryJobMainRepository, CategoryJobServiceMainRepository,
+    CategoryJobServiceSubFeeRepository, CategoryJobServiceSubRepository, ServiceRepository,
+    UserRepository,
 };
 pub use user::{Permission, Role, User, UserListRow, UserStatus};

@@ -2,9 +2,10 @@ use std::sync::Arc;
 
 use kokkak_domain::traits::user::RepoError;
 use kokkak_domain::{
-    CategoryJobMainCreateInput, CategoryJobMainCreateResult, CategoryJobMainDeleteResult,
-    CategoryJobMainListInput, CategoryJobMainPage, CategoryJobMainRepository,
-    CategoryJobMainUpdateInput, CategoryJobMainUpdateResult,
+    CategoryJobMainAutocompleteInput, CategoryJobMainAutocompleteRow, CategoryJobMainCreateInput,
+    CategoryJobMainCreateResult, CategoryJobMainDeleteResult, CategoryJobMainListInput,
+    CategoryJobMainPage, CategoryJobMainRepository, CategoryJobMainUpdateInput,
+    CategoryJobMainUpdateResult,
 };
 
 pub struct CategoryJobMainService {
@@ -54,6 +55,14 @@ impl CategoryJobMainService {
                     "CategoryJobMainService::disabled — repository not wired".into(),
                 ))
             }
+            async fn autocomplete(
+                &self,
+                _input: &CategoryJobMainAutocompleteInput,
+            ) -> Result<Vec<CategoryJobMainAutocompleteRow>, RepoError> {
+                Err(RepoError::Backend(
+                    "CategoryJobMainService::disabled — repository not wired".into(),
+                ))
+            }
         }
         let repo: Arc<dyn CategoryJobMainRepository> = Arc::new(DisabledRepo);
         Self { repo }
@@ -91,6 +100,13 @@ impl CategoryJobMainService {
     ) -> Result<CategoryJobMainDeleteResult, RepoError> {
         self.repo.delete(category_guid, actor_user_guid).await
     }
+
+    pub async fn autocomplete(
+        &self,
+        input: CategoryJobMainAutocompleteInput,
+    ) -> Result<Vec<CategoryJobMainAutocompleteRow>, RepoError> {
+        self.repo.autocomplete(&input).await
+    }
 }
 
 #[cfg(test)]
@@ -104,6 +120,8 @@ mod tests {
     struct MockRepo {
         rows: Mutex<Vec<CategoryJobMainRow>>,
         last_delete: Mutex<Option<(String, String)>>,
+        autocomplete_rows: Mutex<Vec<CategoryJobMainAutocompleteRow>>,
+        last_autocomplete: Mutex<Option<CategoryJobMainAutocompleteInput>>,
     }
 
     #[async_trait::async_trait]
@@ -157,6 +175,13 @@ mod tests {
                 message: "ok".into(),
                 category_job_main_guid: category_guid.to_string(),
             })
+        }
+        async fn autocomplete(
+            &self,
+            input: &CategoryJobMainAutocompleteInput,
+        ) -> Result<Vec<CategoryJobMainAutocompleteRow>, RepoError> {
+            *self.last_autocomplete.lock().unwrap() = Some(input.clone());
+            Ok(self.autocomplete_rows.lock().unwrap().clone())
         }
     }
 
@@ -219,7 +244,10 @@ mod tests {
 
         let create_res = svc
             .create(CategoryJobMainCreateInput {
-                category_job_main_name: "Plumbing".into(),
+                category_job_main_name_la: Some("Plumbing".into()),
+                category_job_main_name_en: Some("Plumbing".into()),
+                category_job_main_name_th: None,
+                category_job_main_name_zh: None,
                 category_job_main_icon_style: Some("solid".into()),
                 category_job_main_icon_line: Some("pipe".into()),
                 category_job_main_img_path: Some("category-job-mains/x/icon/y.webp".into()),
@@ -317,5 +345,64 @@ mod tests {
                 category_job_main_guid: category_guid.to_string(),
             })
         }
+        async fn autocomplete(
+            &self,
+            _input: &CategoryJobMainAutocompleteInput,
+        ) -> Result<Vec<CategoryJobMainAutocompleteRow>, RepoError> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[tokio::test]
+    async fn autocomplete_forwards_filters_and_returns_repo_rows() {
+        let repo = MockRepo {
+            autocomplete_rows: Mutex::new(vec![
+                CategoryJobMainAutocompleteRow {
+                    category_job_main_guid: "11111111-1111-1111-1111-111111111111".into(),
+                    category_job_main_name: "Plumbing".into(),
+                },
+                CategoryJobMainAutocompleteRow {
+                    category_job_main_guid: "22222222-2222-2222-2222-222222222222".into(),
+                    category_job_main_name: "Electrical".into(),
+                },
+            ]),
+            ..Default::default()
+        };
+        let repo: Arc<dyn CategoryJobMainRepository> = Arc::new(repo);
+        let svc = CategoryJobMainService::new(repo);
+
+        let rows = svc
+            .autocomplete(CategoryJobMainAutocompleteInput {
+                keyword: Some("plumb".into()),
+                status: Some(1),
+                locale: Some("la".into()),
+                take: Some(5),
+            })
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].category_job_main_name, "Plumbing");
+        assert_eq!(
+            rows[1].category_job_main_guid,
+            "22222222-2222-2222-2222-222222222222"
+        );
+    }
+
+    #[tokio::test]
+    async fn autocomplete_passes_through_all_none_inputs() {
+        let repo = MockRepo::default();
+        let repo: Arc<dyn CategoryJobMainRepository> = Arc::new(repo);
+        let svc = CategoryJobMainService::new(repo);
+
+        let rows = svc
+            .autocomplete(CategoryJobMainAutocompleteInput {
+                keyword: None,
+                status: None,
+                locale: None,
+                take: None,
+            })
+            .await
+            .unwrap();
+        assert!(rows.is_empty());
     }
 }

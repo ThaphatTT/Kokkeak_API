@@ -31,7 +31,9 @@ impl CategoryJobServiceSubService {
                 &self,
                 _category_job_service_guid: &str,
                 _keyword: Option<&str>,
-                _include_inactive: bool,
+                _status: Option<i32>,
+                _locale: &str,
+                _include_deleted: bool,
             ) -> Result<Vec<CategoryJobServiceSubRow>, RepoError> {
                 Err(RepoError::Backend(
                     "CategoryJobServiceSubService::disabled — repository not wired (set KOKKAK_DATABASE__SQLSERVER_URL)"
@@ -136,10 +138,18 @@ impl CategoryJobServiceSubService {
         &self,
         category_job_service_guid: &str,
         keyword: Option<&str>,
-        include_inactive: bool,
+        status: Option<i32>,
+        locale: &str,
+        include_deleted: bool,
     ) -> Result<Vec<CategoryJobServiceSubRow>, RepoError> {
         self.repo
-            .list(category_job_service_guid, keyword, include_inactive)
+            .list(
+                category_job_service_guid,
+                keyword,
+                status,
+                locale,
+                include_deleted,
+            )
             .await
     }
 
@@ -232,7 +242,9 @@ mod tests {
             &self,
             _category_job_service_guid: &str,
             _keyword: Option<&str>,
-            _include_inactive: bool,
+            _status: Option<i32>,
+            _locale: &str,
+            _include_deleted: bool,
         ) -> Result<Vec<CategoryJobServiceSubRow>, RepoError> {
             Ok(self.rows.lock().unwrap().clone())
         }
@@ -297,13 +309,18 @@ mod tests {
                 category_job_service_sub_category_job_service_main_guid: input
                     .category_job_service_guid
                     .clone(),
+                category_job_service_sub_category_job_service_sub_fee_guid: String::new(),
+                category_job_service_sub_category_job_service_sub_warranty_guid: String::new(),
                 category_job_service_name: "Air Con".into(),
                 category_job_service_sub_name: input.category_job_service_sub_name.clone(),
+                category_job_service_sub_locale: "la".into(),
                 category_job_service_sub_start_price: input.category_job_service_sub_start_price,
                 category_job_service_sub_description: input
                     .category_job_service_sub_description
                     .clone(),
                 category_job_service_sub_status: 1,
+                main_img_path: String::new(),
+                main_img_url: None,
                 category_job_service_sub_create_at: Some(Utc::now()),
                 category_job_service_sub_create_by: input.create_by.clone(),
                 category_job_service_sub_update_at: None,
@@ -460,11 +477,16 @@ mod tests {
         CategoryJobServiceSubRow {
             category_job_service_sub_guid: guid.into(),
             category_job_service_sub_category_job_service_main_guid: main_guid.into(),
+            category_job_service_sub_category_job_service_sub_fee_guid: String::new(),
+            category_job_service_sub_category_job_service_sub_warranty_guid: String::new(),
             category_job_service_name: "Air Con".into(),
             category_job_service_sub_name: name.into(),
+            category_job_service_sub_locale: "la".into(),
             category_job_service_sub_start_price: Decimal::new(900000, 2),
             category_job_service_sub_description: "desc".into(),
             category_job_service_sub_status: 1,
+            main_img_path: String::new(),
+            main_img_url: None,
             category_job_service_sub_create_at: Some(Utc::now()),
             category_job_service_sub_create_by: "admin".into(),
             category_job_service_sub_update_at: None,
@@ -481,7 +503,10 @@ mod tests {
         let repo: Arc<dyn CategoryJobServiceSubRepository> = Arc::new(repo);
         let svc = CategoryJobServiceSubService::new(repo);
 
-        let rows = svc.list("m1", Some("ล้าง"), false).await.unwrap();
+        let rows = svc
+            .list("m1", Some("ล้าง"), Some(1), "la", false)
+            .await
+            .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].category_job_service_sub_name, "ล้างแอร์");
     }

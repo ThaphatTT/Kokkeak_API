@@ -52,12 +52,20 @@ pub fn build(state: AppState) -> Router {
             get(handlers::category_job_main::list_category_job_mains),
         )
         .route(
+            "/api/v1/category-job-mains/autocomplete",
+            get(handlers::category_job_main::autocomplete_category_job_mains),
+        )
+        .route(
             "/api/v1/category-job-mains/:guid",
             get(handlers::category_job_main::get_category_job_main),
         )
         .route(
             "/api/v1/category-job-services",
             get(handlers::category_job_service_main::list_category_job_service_mains),
+        )
+        .route(
+            "/api/v1/category-job-services/autocomplete",
+            get(handlers::category_job_service_main::autocomplete_category_job_service_mains),
         )
         .route(
             "/api/v1/category-job-services/:service_guid",
@@ -177,6 +185,20 @@ pub fn build(state: AppState) -> Router {
         )
         .layer(from_fn(admin_flag(Arc::new(state.clone()))));
 
+    let admin_category_job_service_sub_fee_routes = Router::new()
+        .route(
+            "/api/v1/admin/category-job-service-sub-fees",
+            get(handlers::category_job_service_sub_fee::list_category_job_service_sub_fees_admin)
+                .post(
+                handlers::category_job_service_sub_fee::create_category_job_service_sub_fee_admin,
+            ),
+        )
+        .route(
+            "/api/v1/admin/category-job-service-sub-fees/:guid",
+            put(handlers::category_job_service_sub_fee::update_category_job_service_sub_fee_admin),
+        )
+        .layer(from_fn(admin_flag(Arc::new(state.clone()))));
+
     let admin_users_routes = Router::new()
         .route(
             "/api/v1/admin/users",
@@ -232,6 +254,7 @@ pub fn build(state: AppState) -> Router {
         .merge(admin_category_job_main_routes)
         .merge(admin_category_job_service_main_routes)
         .merge(admin_category_job_service_sub_routes)
+        .merge(admin_category_job_service_sub_fee_routes)
         .merge(admin_users_routes)
         .merge(admin_permissions_routes)
         .merge(permission_page_routes)

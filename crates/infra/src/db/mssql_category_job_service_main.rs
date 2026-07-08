@@ -6,8 +6,9 @@ use kokkak_domain::category_job_service_main::CategoryJobServiceMainError;
 use kokkak_domain::traits::category_job_service_main::CategoryJobServiceMainRepository;
 use kokkak_domain::traits::user::RepoError;
 use kokkak_domain::{
+    CategoryJobServiceMainAutocompleteInput, CategoryJobServiceMainAutocompleteRow,
     CategoryJobServiceMainCreateInput, CategoryJobServiceMainCreateResult,
-    CategoryJobServiceMainDeleteResult, CategoryJobServiceMainRow,
+    CategoryJobServiceMainDeleteResult, CategoryJobServiceMainListInput, CategoryJobServiceMainRow,
     CategoryJobServiceMainUpdateInput, CategoryJobServiceMainUpdateResult,
 };
 
@@ -34,22 +35,24 @@ impl MssqlCategoryJobServiceMainRepository {
 impl CategoryJobServiceMainRepository for MssqlCategoryJobServiceMainRepository {
     async fn list(
         &self,
-        category_job_main_guid: &str,
-        keyword: Option<&str>,
-        include_inactive: bool,
+        input: &CategoryJobServiceMainListInput,
     ) -> Result<Vec<CategoryJobServiceMainRow>, RepoError> {
-        let main_guid = category_job_main_guid;
-        let kw = keyword;
-        let inactive = include_inactive;
+        let main_guid: Option<&str> = input.category_job_main_guid.as_deref();
+        let kw: Option<&str> = input.keyword.as_deref();
+        let status: Option<i32> = input.status;
+        let locale: Option<&str> = input.locale.as_deref();
+        let include_deleted: bool = input.include_deleted;
 
-        let params: &[&dyn ToSql] = &[&main_guid, &kw, &inactive];
+        let params: &[&dyn ToSql] = &[&main_guid, &kw, &status, &locale, &include_deleted];
 
         let rows = exec_sp(
             &self.pool,
             "EXEC dbo.SP_CATEGORY_JOB_SERVICE_MAIN_GET \
-                    @p_category_job_main_guid = @P1, \
-                    @p_keyword = @P2, \
-                    @p_include_inactive = @P3",
+                @p_category_job_main_guid = @P1, \
+                @p_keyword = @P2, \
+                @p_status = @P3, \
+                @p_locale = @P4, \
+                @p_include_deleted = @P5",
             params,
         )
         .await?;
@@ -65,7 +68,10 @@ impl CategoryJobServiceMainRepository for MssqlCategoryJobServiceMainRepository 
         input: &CategoryJobServiceMainCreateInput,
     ) -> Result<CategoryJobServiceMainCreateResult, RepoError> {
         let main_guid = input.category_job_main_guid.as_str();
-        let name = input.category_job_service_name.as_str();
+        let name_la: Option<&str> = input.category_job_service_name_la.as_deref();
+        let name_en: Option<&str> = input.category_job_service_name_en.as_deref();
+        let name_th: Option<&str> = input.category_job_service_name_th.as_deref();
+        let name_zh: Option<&str> = input.category_job_service_name_zh.as_deref();
         let icon_style: Option<&str> = input.category_job_service_icon_style.as_deref();
         let icon_line: Option<&str> = input.category_job_service_icon_line.as_deref();
         let img_path: Option<&str> = input.category_job_service_img_path.as_deref();
@@ -73,7 +79,10 @@ impl CategoryJobServiceMainRepository for MssqlCategoryJobServiceMainRepository 
 
         let params: &[&dyn ToSql] = &[
             &main_guid,
-            &name,
+            &name_la,
+            &name_en,
+            &name_th,
+            &name_zh,
             &icon_style,
             &icon_line,
             &img_path,
@@ -82,20 +91,23 @@ impl CategoryJobServiceMainRepository for MssqlCategoryJobServiceMainRepository 
 
         let rows = exec_sp(
             &self.pool,
-            "EXEC dbo.SP_CATEGORY_JOB_SERVICE_MAIN_CREATE \
+            "EXEC dbo.SP_CATEGORY_JOB_SERVICE_MAIN_INSERT \
                 @p_category_job_main_guid = @P1, \
-                @p_category_job_service_name = @P2, \
-                @p_category_job_service_icon_style = @P3, \
-                @p_category_job_service_icon_line = @P4, \
-                @p_category_job_service_img_path = @P5, \
-                @p_create_by = @P6",
+                @p_name_la = @P2, \
+                @p_name_en = @P3, \
+                @p_name_th = @P4, \
+                @p_name_zh = @P5, \
+                @p_icon_style = @P6, \
+                @p_icon_line = @P7, \
+                @p_img_path = @P8, \
+                @p_create_by = @P9",
             params,
         )
         .await?;
 
         let row = rows.first().ok_or_else(|| {
             RepoError::Backend(
-                "SP_CATEGORY_JOB_SERVICE_MAIN_CREATE returned no row (driver/protocol mismatch)"
+                "SP_CATEGORY_JOB_SERVICE_MAIN_INSERT returned no row (driver/protocol mismatch)"
                     .into(),
             )
         })?;
@@ -249,6 +261,65 @@ impl CategoryJobServiceMainRepository for MssqlCategoryJobServiceMainRepository 
             category_job_service_guid: final_guid,
         })
     }
+
+    async fn autocomplete(
+        &self,
+        input: &CategoryJobServiceMainAutocompleteInput,
+    ) -> Result<Vec<CategoryJobServiceMainAutocompleteRow>, RepoError> {
+        let main_guid: Option<&str> = input.category_job_main_guid.as_deref();
+        let keyword: Option<&str> = input.keyword.as_deref();
+        let status: Option<i32> = input.status;
+        let locale_raw: Option<&str> = input.locale.as_deref();
+        let locale: Option<String> = locale_raw.map(normalize_locale_for_sp);
+        let take: Option<i32> = Some(input.take.unwrap_or(20).clamp(1, 100));
+
+        let locale_param: Option<&str> = locale.as_deref();
+
+        let rows = exec_sp(
+            &self.pool,
+            "EXEC dbo.SP_AUTOCOMPLETE_CATEGORY_JOB_SERVICE_MAIN_GET \
+                        @p_category_job_main_guid = @P1, \
+                        @p_keyword = @P2, \
+                        @p_status = @P3, \
+                        @p_locale = @P4, \
+                        @p_take = @P5",
+            &[
+                &main_guid as &dyn ToSql,
+                &keyword as &dyn ToSql,
+                &status as &dyn ToSql,
+                &locale_param as &dyn ToSql,
+                &take as &dyn ToSql,
+            ],
+        )
+        .await?;
+
+        Ok(rows
+            .iter()
+            .map(row_to_category_job_service_main_autocomplete_row)
+            .collect())
+    }
+}
+
+fn normalize_locale_for_sp(raw: &str) -> String {
+    let primary = raw.split('-').next().unwrap_or("").trim().to_lowercase();
+    if matches!(primary.as_str(), "la" | "en" | "th" | "zh") {
+        return primary;
+    }
+    if matches!(primary.as_str(), "lo") {
+        return "la".to_string();
+    }
+    "la".to_string()
+}
+
+fn row_to_category_job_service_main_autocomplete_row(
+    row: &tiberius::Row,
+) -> CategoryJobServiceMainAutocompleteRow {
+    CategoryJobServiceMainAutocompleteRow {
+        category_job_service_guid: read_guid_str(row, "category_job_service_guid"),
+        category_job_service_name: read_str(row, "category_job_service_name")
+            .unwrap_or("")
+            .to_string(),
+    }
 }
 
 fn row_to_category_job_service_main_row(
@@ -265,6 +336,9 @@ fn row_to_category_job_service_main_row(
             .to_string(),
         category_job_service_name: read_str(row, "category_job_service_name")
             .unwrap_or("")
+            .to_string(),
+        category_job_service_locale: read_str(row, "category_job_service_locale")
+            .unwrap_or("th")
             .to_string(),
         category_job_service_icon_style: read_str(row, "category_job_service_icon_style")
             .unwrap_or("")
@@ -304,6 +378,7 @@ mod tests {
             category_job_service_category_main_guid: "m-1".into(),
             category_job_main_name: "Home Repair".into(),
             category_job_service_name: "Air Con".into(),
+            category_job_service_locale: "th".into(),
             category_job_service_icon_style: "solid".into(),
             category_job_service_icon_line: "snowflake".into(),
             category_job_service_img_path: "category-job-services/s-1/icon/x.webp".into(),

@@ -1,10 +1,7 @@
-
-
 use rust_decimal::Decimal;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdminInsertUserResult {
-
     pub user_guid: String,
 
     pub user_username_guid: String,
@@ -17,14 +14,12 @@ pub struct AdminInsertUserResult {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("SP_USER_INSERT_FULL failed: {code} — {message}")]
 pub struct AdminInsertUserError {
-
     pub code: String,
 
     pub message: String,
 }
 
 impl AdminInsertUserError {
-
     pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             code: code.into(),
@@ -35,21 +30,18 @@ impl AdminInsertUserError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdminUpdateUserResult {
-
     pub user_guid: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("SP_USER_UPDATE_FULL failed: {code} — {message}")]
 pub struct AdminUpdateUserError {
-
     pub code: String,
 
     pub message: String,
 }
 
 impl AdminUpdateUserError {
-
     pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             code: code.into(),
@@ -61,7 +53,6 @@ impl AdminUpdateUserError {
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct DaySchedule {
-
     pub is_working: bool,
 
     pub start_time: Option<chrono::NaiveTime>,
@@ -72,7 +63,6 @@ pub struct DaySchedule {
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct WeeklySchedule {
-
     pub monday: DaySchedule,
 
     pub tuesday: DaySchedule,
@@ -91,7 +81,6 @@ pub struct WeeklySchedule {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[allow(missing_docs)]
 pub struct AdminInsertUserRequest {
-
     pub actor_user_username_guid: String,
 
     pub user_guid: Option<String>,
@@ -188,7 +177,6 @@ pub struct AdminInsertUserRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(missing_docs)]
 pub struct AdminUpdateUserRequest {
-
     pub actor_user_username_guid: String,
 
     pub user_guid: String,
@@ -283,7 +271,6 @@ pub struct AdminUpdateUserRequest {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[allow(missing_docs)]
 pub struct AdminUserListPagingInput {
-
     pub keyword: String,
 
     pub user_status: Option<i32>,
@@ -308,7 +295,6 @@ pub struct AdminUserListPagingInput {
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct UserListPagingRow {
-
     pub total_count: i64,
 
     pub page: i32,
@@ -349,7 +335,6 @@ pub struct UserListPagingRow {
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct AdminUserListPagingPage {
-
     pub items: Vec<UserListPagingRow>,
 
     pub total_count: i64,
@@ -363,9 +348,9 @@ pub struct AdminUserListPagingPage {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[allow(missing_docs)]
 pub struct AdminUserDetailProfileImage {
-
     pub user_img_profile_guid: String,
 
+    #[serde(skip_serializing)]
     pub profile_img_path: String,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -376,7 +361,6 @@ pub struct AdminUserDetailProfileImage {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[allow(missing_docs)]
 pub struct AdminUserDetailCompany {
-
     pub user_company_guid: String,
 
     pub company_guid: String,
@@ -398,7 +382,6 @@ pub struct AdminUserDetailCompany {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[allow(missing_docs)]
 pub struct AdminUserDetailRoles {
-
     pub role_codes: String,
 
     pub role_names: String,
@@ -410,7 +393,6 @@ pub struct AdminUserDetailRoles {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[allow(missing_docs)]
 pub struct AdminUserDetailScope {
-
     pub department_guid: String,
 
     pub department_code: String,
@@ -428,7 +410,6 @@ pub struct AdminUserDetailScope {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[allow(missing_docs)]
 pub struct AdminUserDetailPosition {
-
     pub user_position_guid: String,
 
     pub position_guid: String,
@@ -448,7 +429,6 @@ pub struct AdminUserDetailPosition {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[allow(missing_docs)]
 pub struct AdminUserDetailSalary {
-
     pub user_salary_guid: String,
 
     pub salary_amount: Decimal,
@@ -466,7 +446,6 @@ pub struct AdminUserDetailSalary {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[allow(missing_docs)]
 pub struct AdminUserDetailBankAccount {
-
     pub user_bank_account_guid: String,
 
     pub bank_name: String,
@@ -487,6 +466,7 @@ pub struct AdminUserDetailBankAccount {
 
     pub bank_account_verified_status: i32,
 
+    #[serde(skip_serializing)]
     pub bank_book_img_path: String,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -497,9 +477,9 @@ pub struct AdminUserDetailBankAccount {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[allow(missing_docs)]
 pub struct AdminUserDetailAttachment {
-
     pub user_details_attachment_guid: String,
 
+    #[serde(skip_serializing)]
     pub attachment_path: String,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -510,7 +490,6 @@ pub struct AdminUserDetailAttachment {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[allow(missing_docs)]
 pub struct AdminUserDetailUsername {
-
     pub user_username_guid: String,
 
     pub username: String,
@@ -526,7 +505,6 @@ pub struct AdminUserDetailUsername {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[allow(missing_docs)]
 pub struct AdminUserDetailCountry {
-
     pub country_guid: String,
 
     pub country_code: String,
@@ -538,7 +516,6 @@ pub struct AdminUserDetailCountry {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[allow(missing_docs)]
 pub struct AdminUserDetail {
-
     pub user_guid: String,
     pub user_first_name: String,
     pub user_last_name: String,

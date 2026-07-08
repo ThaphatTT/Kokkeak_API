@@ -34,7 +34,9 @@ pub trait CategoryJobServiceSubRepository: Send + Sync {
         &self,
         category_job_service_guid: &str,
         keyword: Option<&str>,
-        include_inactive: bool,
+        status: Option<i32>,
+        locale: &str,
+        include_deleted: bool,
     ) -> Result<Vec<CategoryJobServiceSubRow>, RepoError>;
 
     async fn detail(

@@ -25,7 +25,26 @@ pub struct ListCategoryJobServiceMainQuery {
 
     pub keyword: Option<String>,
 
-    pub include_inactive: Option<bool>,
+    pub status: Option<i32>,
+
+    pub locale: Option<String>,
+
+    #[serde(default)]
+    pub include_deleted: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
+pub struct AutocompleteCategoryJobServiceMainQuery {
+    #[serde(default)]
+    pub category_job_main_guid: Option<String>,
+
+    pub keyword: Option<String>,
+
+    pub status: Option<i32>,
+
+    pub locale: Option<String>,
+
+    pub take: Option<i32>,
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -50,13 +69,30 @@ pub async fn list_category_job_service_mains(
     State(state): State<AppState>,
     Query(q): Query<ListCategoryJobServiceMainQuery>,
 ) -> Result<Response, Response> {
-    let include_inactive = q.include_inactive.unwrap_or(false);
-    let main_guid = q.category_job_main_guid.as_deref().unwrap_or("");
-    let rows = match state
-        .category_job_service_main
-        .list(main_guid, q.keyword.as_deref(), include_inactive)
-        .await
-    {
+    if let Some(locale) = q.locale.as_deref() {
+        let normalized = locale.to_ascii_lowercase();
+        if !matches!(normalized.as_str(), "la" | "en" | "th" | "zh") {
+            return Err(validation_envelope(
+                &state,
+                "locale must be one of: th, en, la, zh",
+            ));
+        }
+    }
+    if let Some(s) = q.status {
+        if !matches!(s, 0 | 1 | 3) {
+            return Err(validation_envelope(&state, "status must be 0, 1, or 3"));
+        }
+    }
+
+    let input = kokkak_domain::CategoryJobServiceMainListInput {
+        category_job_main_guid: q.category_job_main_guid.clone(),
+        keyword: q.keyword.clone(),
+        status: q.status,
+        locale: q.locale.clone(),
+        include_deleted: q.include_deleted.unwrap_or(false),
+    };
+
+    let rows = match state.category_job_service_main.list(input).await {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(error = %e, "category_job_service_main.list failed");
@@ -70,6 +106,75 @@ pub async fn list_category_job_service_mains(
         items,
     };
     Ok((StatusCode::OK, ok(resp)).into_response())
+}
+
+#[utoipa::path(
+        get,
+        path = "/api/v1/category-job-services/autocomplete",
+        tag = "category-job-service-main",
+        params(AutocompleteCategoryJobServiceMainQuery),
+        responses(
+            (status = 200, description = "Category-job-service-main autocomplete rows (top-N by recency; prefix match on localized name)", body = Vec<kokkak_domain::CategoryJobServiceMainAutocompleteRow>),
+            (status = 401, description = "Not authenticated", body = crate::openapi::ApiError),
+            (status = 422, description = "Validation error (invalid status / locale / take)", body = crate::openapi::ApiError),
+        ),
+        security(("bearer_auth" = []))
+    )]
+pub async fn autocomplete_category_job_service_mains(
+    State(state): State<AppState>,
+    Query(q): Query<AutocompleteCategoryJobServiceMainQuery>,
+) -> Result<Response, Response> {
+    if let Some(locale) = q.locale.as_deref() {
+        let normalized = locale.to_ascii_lowercase();
+        if !matches!(normalized.as_str(), "la" | "lo" | "en" | "th" | "zh") {
+            return Err(validation_envelope(
+                &state,
+                "locale must be one of: th, en, la, lo, zh",
+            ));
+        }
+    }
+    if let Some(s) = q.status {
+        if !matches!(s, 0 | 1) {
+            return Err(validation_envelope(&state, "status must be 0 or 1"));
+        }
+    }
+    if let Some(t) = q.take {
+        if !(1..=100).contains(&t) {
+            return Err(validation_envelope(
+                &state,
+                "take must be between 1 and 100",
+            ));
+        }
+    }
+
+    let locale = q.locale.clone().or_else(|| Some(current_locale()));
+
+    let input = kokkak_domain::CategoryJobServiceMainAutocompleteInput {
+        category_job_main_guid: q.category_job_main_guid.clone(),
+        keyword: q.keyword.clone(),
+        status: q.status,
+        locale,
+        take: q.take,
+    };
+
+    let rows = match state.category_job_service_main.autocomplete(input).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "category_job_service_main.autocomplete failed");
+            return Err(sp_error_to_response(&state, e).await);
+        }
+    };
+
+    Ok((
+        StatusCode::OK,
+        Json(ApiResponse {
+            success: true,
+            data: Some(rows),
+            error: None,
+            meta: None,
+        }),
+    )
+        .into_response())
 }
 
 #[derive(Debug, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
@@ -95,7 +200,14 @@ pub async fn get_category_job_service_main(
     State(state): State<AppState>,
     Path(service_guid): Path<String>,
 ) -> Result<Response, Response> {
-    let rows = match state.category_job_service_main.list("", None, true).await {
+    let input = kokkak_domain::CategoryJobServiceMainListInput {
+        category_job_main_guid: None,
+        keyword: None,
+        status: None,
+        locale: None,
+        include_deleted: true,
+    };
+    let rows = match state.category_job_service_main.list(input).await {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(error = %e, "category_job_service_main.list failed");
@@ -136,7 +248,17 @@ pub async fn get_category_job_service_main(
 pub struct CreateCategoryJobServiceMainRequest {
     pub category_job_main_guid: String,
 
-    pub category_job_service_name: String,
+    #[serde(default)]
+    pub category_job_service_name_la: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_name_en: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_name_th: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_name_zh: Option<String>,
 
     #[serde(default)]
     pub category_job_service_icon_style: Option<String>,
@@ -156,8 +278,19 @@ impl CreateCategoryJobServiceMainRequest {
         if self.category_job_main_guid.trim().is_empty() {
             return Err("category_job_main_guid is required".to_string());
         }
-        if self.category_job_service_name.trim().is_empty() {
-            return Err("category_job_service_name is required".to_string());
+        let any_name = [
+            self.category_job_service_name_la.as_deref(),
+            self.category_job_service_name_en.as_deref(),
+            self.category_job_service_name_th.as_deref(),
+            self.category_job_service_name_zh.as_deref(),
+        ]
+        .iter()
+        .flatten()
+        .any(|s| !s.trim().is_empty());
+        if !any_name {
+            return Err(
+                "at least one of name_la, name_en, name_th, name_zh is required".to_string(),
+            );
         }
         Ok(())
     }
@@ -186,14 +319,14 @@ pub async fn create_category_job_service_main_admin(
 ) -> Result<Response, Response> {
     if !user
         .has_permission(
-            kokkak_domain::Permission::CategoryJobServiceMainCreate,
+            kokkak_domain::Permission::ServiceCreate,
             &state.permission_checker,
         )
         .await
     {
         return Err(permission_denied(
             &state,
-            kokkak_domain::Permission::CategoryJobServiceMainCreate.code(),
+            kokkak_domain::Permission::ServiceCreate.code(),
         ));
     }
 
@@ -222,7 +355,10 @@ pub async fn create_category_job_service_main_admin(
 
     let input = kokkak_domain::CategoryJobServiceMainCreateInput {
         category_job_main_guid: req.category_job_main_guid,
-        category_job_service_name: req.category_job_service_name,
+        category_job_service_name_la: req.category_job_service_name_la,
+        category_job_service_name_en: req.category_job_service_name_en,
+        category_job_service_name_th: req.category_job_service_name_th,
+        category_job_service_name_zh: req.category_job_service_name_zh,
         category_job_service_icon_style: req.category_job_service_icon_style,
         category_job_service_icon_line: req.category_job_service_icon_line,
         category_job_service_img_path: img_path,
@@ -303,14 +439,14 @@ pub async fn update_category_job_service_main_admin(
 ) -> Result<Response, Response> {
     if !user
         .has_permission(
-            kokkak_domain::Permission::CategoryJobServiceMainUpdate,
+            kokkak_domain::Permission::ServiceUpdate,
             &state.permission_checker,
         )
         .await
     {
         return Err(permission_denied(
             &state,
-            kokkak_domain::Permission::CategoryJobServiceMainUpdate.code(),
+            kokkak_domain::Permission::ServiceUpdate.code(),
         ));
     }
 
@@ -379,14 +515,14 @@ pub async fn delete_category_job_service_main_admin(
 ) -> Result<Response, Response> {
     if !user
         .has_permission(
-            kokkak_domain::Permission::CategoryJobServiceMainDelete,
+            kokkak_domain::Permission::ServiceDelete,
             &state.permission_checker,
         )
         .await
     {
         return Err(permission_denied(
             &state,
-            kokkak_domain::Permission::CategoryJobServiceMainDelete.code(),
+            kokkak_domain::Permission::ServiceDelete.code(),
         ));
     }
 

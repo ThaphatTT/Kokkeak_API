@@ -31,6 +31,17 @@ pub struct ListCategoryJobMainQuery {
     pub page_size: Option<u32>,
 }
 
+#[derive(Debug, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
+pub struct AutocompleteCategoryJobMainQuery {
+    pub keyword: Option<String>,
+
+    pub status: Option<i32>,
+
+    pub locale: Option<String>,
+
+    pub take: Option<i32>,
+}
+
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct ListCategoryJobMainMeta {
     pub total_count: i64,
@@ -108,6 +119,74 @@ pub async fn list_category_job_mains(
 }
 
 #[utoipa::path(
+        get,
+        path = "/api/v1/category-job-mains/autocomplete",
+        tag = "category-job-main",
+        params(AutocompleteCategoryJobMainQuery),
+        responses(
+            (status = 200, description = "Category-job-main autocomplete rows (top-N by priority then recency)", body = Vec<kokkak_domain::CategoryJobMainAutocompleteRow>),
+            (status = 401, description = "Not authenticated", body = crate::openapi::ApiError),
+            (status = 422, description = "Validation error (invalid status / locale / take)", body = crate::openapi::ApiError),
+        ),
+        security(("bearer_auth" = []))
+    )]
+pub async fn autocomplete_category_job_mains(
+    State(state): State<AppState>,
+    Query(q): Query<AutocompleteCategoryJobMainQuery>,
+) -> Result<Response, Response> {
+    if let Some(locale) = q.locale.as_deref() {
+        let normalized = locale.to_ascii_lowercase();
+        if !matches!(normalized.as_str(), "la" | "lo" | "en" | "th" | "zh") {
+            return Err(validation_envelope(
+                &state,
+                "locale must be one of: th, en, la, lo, zh",
+            ));
+        }
+    }
+    if let Some(s) = q.status {
+        if !matches!(s, 0 | 1) {
+            return Err(validation_envelope(&state, "status must be 0 or 1"));
+        }
+    }
+    if let Some(t) = q.take {
+        if !(1..=100).contains(&t) {
+            return Err(validation_envelope(
+                &state,
+                "take must be between 1 and 100",
+            ));
+        }
+    }
+
+    let locale = q.locale.clone().or_else(|| Some(current_locale()));
+
+    let input = kokkak_domain::CategoryJobMainAutocompleteInput {
+        keyword: q.keyword.clone(),
+        status: q.status,
+        locale,
+        take: q.take,
+    };
+
+    let rows = match state.category_job_main.autocomplete(input).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "category_job_main.autocomplete failed");
+            return Err(repo_error_to_response(e, &state).await);
+        }
+    };
+
+    Ok((
+        StatusCode::OK,
+        Json(ApiResponse {
+            success: true,
+            data: Some(rows),
+            error: None,
+            meta: None,
+        }),
+    )
+        .into_response())
+}
+
+#[utoipa::path(
     get,
     path = "/api/v1/category-job-mains/{guid}",
     tag = "category-job-main",
@@ -168,7 +247,17 @@ pub async fn get_category_job_main(
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct CreateCategoryJobMainRequest {
-    pub category_job_main_name: String,
+    #[serde(default)]
+    pub category_job_main_name_la: Option<String>,
+
+    #[serde(default)]
+    pub category_job_main_name_en: Option<String>,
+
+    #[serde(default)]
+    pub category_job_main_name_th: Option<String>,
+
+    #[serde(default)]
+    pub category_job_main_name_zh: Option<String>,
 
     #[serde(default)]
     pub category_job_main_icon_style: Option<String>,
@@ -188,8 +277,19 @@ pub struct CreateCategoryJobMainRequest {
 
 impl CreateCategoryJobMainRequest {
     pub fn validate(&self) -> Result<(), String> {
-        if self.category_job_main_name.trim().is_empty() {
-            return Err("category_job_main_name is required".to_string());
+        let any_name = [
+            self.category_job_main_name_la.as_deref(),
+            self.category_job_main_name_en.as_deref(),
+            self.category_job_main_name_th.as_deref(),
+            self.category_job_main_name_zh.as_deref(),
+        ]
+        .iter()
+        .flatten()
+        .any(|s| !s.trim().is_empty());
+        if !any_name {
+            return Err(
+                "at least one of name_la, name_en, name_th, name_zh is required".to_string(),
+            );
         }
         Ok(())
     }
@@ -218,14 +318,14 @@ pub async fn create_category_job_main_admin(
 ) -> Result<Response, Response> {
     if !user
         .has_permission(
-            kokkak_domain::Permission::CategoryJobMainCreate,
+            kokkak_domain::Permission::ServiceCreate,
             &state.permission_checker,
         )
         .await
     {
         return Err(permission_denied(
             &state,
-            kokkak_domain::Permission::CategoryJobMainCreate.code(),
+            kokkak_domain::Permission::ServiceCreate.code(),
         ));
     }
 
@@ -247,7 +347,10 @@ pub async fn create_category_job_main_admin(
     };
 
     let input = kokkak_domain::CategoryJobMainCreateInput {
-        category_job_main_name: req.category_job_main_name,
+        category_job_main_name_la: req.category_job_main_name_la,
+        category_job_main_name_en: req.category_job_main_name_en,
+        category_job_main_name_th: req.category_job_main_name_th,
+        category_job_main_name_zh: req.category_job_main_name_zh,
         category_job_main_icon_style: req.category_job_main_icon_style,
         category_job_main_icon_line: req.category_job_main_icon_line,
         category_job_main_img_path: img_path,
@@ -326,14 +429,14 @@ pub async fn update_category_job_main_admin(
 ) -> Result<Response, Response> {
     if !user
         .has_permission(
-            kokkak_domain::Permission::CategoryJobMainUpdate,
+            kokkak_domain::Permission::ServiceUpdate,
             &state.permission_checker,
         )
         .await
     {
         return Err(permission_denied(
             &state,
-            kokkak_domain::Permission::CategoryJobMainUpdate.code(),
+            kokkak_domain::Permission::ServiceUpdate.code(),
         ));
     }
 
@@ -396,14 +499,14 @@ pub async fn delete_category_job_main_admin(
 ) -> Result<Response, Response> {
     if !user
         .has_permission(
-            kokkak_domain::Permission::CategoryJobMainDelete,
+            kokkak_domain::Permission::ServiceDelete,
             &state.permission_checker,
         )
         .await
     {
         return Err(permission_denied(
             &state,
-            kokkak_domain::Permission::CategoryJobMainDelete.code(),
+            kokkak_domain::Permission::ServiceDelete.code(),
         ));
     }
 

@@ -23,7 +23,20 @@ pub struct ListCategoryJobServiceSubQuery {
 
     pub keyword: Option<String>,
 
-    pub include_inactive: Option<bool>,
+    pub status: Option<i32>,
+
+    pub include_deleted: Option<bool>,
+}
+
+fn normalize_locale_for_sp(raw: &str) -> String {
+    let primary = raw.split('-').next().unwrap_or("").trim().to_lowercase();
+    if matches!(primary.as_str(), "la" | "en" | "th" | "zh") {
+        return primary;
+    }
+    if matches!(primary.as_str(), "lo") {
+        return "la".to_string();
+    }
+    "la".to_string()
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -48,11 +61,20 @@ pub async fn list_category_job_service_subs(
     State(state): State<AppState>,
     Query(q): Query<ListCategoryJobServiceSubQuery>,
 ) -> Result<Response, Response> {
-    let include_inactive = q.include_inactive.unwrap_or(false);
     let main_guid = q.category_job_service_guid.as_deref().unwrap_or("");
-    let rows = match state
+    let status = q.status;
+    let include_deleted = q.include_deleted.unwrap_or(false);
+    let locale = normalize_locale_for_sp(&current_locale());
+
+    let mut rows = match state
         .category_job_service_sub
-        .list(main_guid, q.keyword.as_deref(), include_inactive)
+        .list(
+            main_guid,
+            q.keyword.as_deref(),
+            status,
+            &locale,
+            include_deleted,
+        )
         .await
     {
         Ok(r) => r,
@@ -61,6 +83,19 @@ pub async fn list_category_job_service_subs(
             return Err(sp_error_to_response(&state, e).await);
         }
     };
+
+    for row in rows.iter_mut() {
+        if row.main_img_path.is_empty() {
+            continue;
+        }
+        row.main_img_url = crate::signed_url::signed_image_url(
+            state.public_base_url.as_ref(),
+            &row.main_img_path,
+            state.signed_url_secret.as_ref(),
+            state.signed_url_ttl_secs,
+        );
+    }
+
     let resp = ListCategoryJobServiceSubResponse {
         total: rows.len(),
         items: rows,
@@ -184,14 +219,14 @@ pub async fn create_category_job_service_sub_admin(
 ) -> Result<Response, Response> {
     if !user
         .has_permission(
-            kokkak_domain::Permission::CategoryJobServiceSubCreate,
+            kokkak_domain::Permission::ServiceCreate,
             &state.permission_checker,
         )
         .await
     {
         return Err(permission_denied(
             &state,
-            kokkak_domain::Permission::CategoryJobServiceSubCreate.code(),
+            kokkak_domain::Permission::ServiceCreate.code(),
         ));
     }
     if let Err(msg) = req.validate() {
@@ -352,14 +387,14 @@ pub async fn update_category_job_service_sub_admin(
 ) -> Result<Response, Response> {
     if !user
         .has_permission(
-            kokkak_domain::Permission::CategoryJobServiceSubUpdate,
+            kokkak_domain::Permission::ServiceUpdate,
             &state.permission_checker,
         )
         .await
     {
         return Err(permission_denied(
             &state,
-            kokkak_domain::Permission::CategoryJobServiceSubUpdate.code(),
+            kokkak_domain::Permission::ServiceUpdate.code(),
         ));
     }
     if let Err(msg) = req.validate() {
@@ -514,14 +549,14 @@ pub async fn delete_category_job_service_sub_admin(
 ) -> Result<Response, Response> {
     if !user
         .has_permission(
-            kokkak_domain::Permission::CategoryJobServiceSubDelete,
+            kokkak_domain::Permission::ServiceDelete,
             &state.permission_checker,
         )
         .await
     {
         return Err(permission_denied(
             &state,
-            kokkak_domain::Permission::CategoryJobServiceSubDelete.code(),
+            kokkak_domain::Permission::ServiceDelete.code(),
         ));
     }
     let result = match state

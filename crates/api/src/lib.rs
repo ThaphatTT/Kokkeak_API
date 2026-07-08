@@ -26,6 +26,7 @@ use kokkak_application::catalog::CatalogService;
 use kokkak_application::category_job_main::CategoryJobMainService;
 use kokkak_application::category_job_service_main::CategoryJobServiceMainService;
 use kokkak_application::category_job_service_sub::CategoryJobServiceSubService;
+use kokkak_application::category_job_service_sub_fee::CategoryJobServiceSubFeeService;
 use kokkak_application::chat::{BroadcastTransport, ChatService, ChatTransport};
 use kokkak_application::master::MasterDropdownService;
 use kokkak_application::order::OrderService;
@@ -83,6 +84,14 @@ impl kokkak_domain::CategoryJobMainRepository for MssqlCategoryJobMainRepository
             "category_job_main repo not wired in build_app_state".into(),
         ))
     }
+    async fn autocomplete(
+        &self,
+        _input: &kokkak_domain::CategoryJobMainAutocompleteInput,
+    ) -> Result<Vec<kokkak_domain::CategoryJobMainAutocompleteRow>, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_main repo not wired in build_app_state".into(),
+        ))
+    }
 }
 
 #[allow(dead_code)]
@@ -92,9 +101,7 @@ struct MssqlCategoryJobServiceMainRepositoryNoop;
 impl kokkak_domain::CategoryJobServiceMainRepository for MssqlCategoryJobServiceMainRepositoryNoop {
     async fn list(
         &self,
-        _category_job_main_guid: &str,
-        _keyword: Option<&str>,
-        _include_inactive: bool,
+        _input: &kokkak_domain::CategoryJobServiceMainListInput,
     ) -> Result<Vec<kokkak_domain::CategoryJobServiceMainRow>, kokkak_domain::RepoError> {
         Err(kokkak_domain::RepoError::Backend(
             "category_job_service_main repo not wired in build_app_state (set KOKKAK_DATABASE__SQLSERVER_URL)"
@@ -126,6 +133,15 @@ impl kokkak_domain::CategoryJobServiceMainRepository for MssqlCategoryJobService
             "category_job_service_main repo not wired in build_app_state".into(),
         ))
     }
+    async fn autocomplete(
+        &self,
+        _input: &kokkak_domain::CategoryJobServiceMainAutocompleteInput,
+    ) -> Result<Vec<kokkak_domain::CategoryJobServiceMainAutocompleteRow>, kokkak_domain::RepoError>
+    {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_service_main repo not wired in build_app_state".into(),
+        ))
+    }
 }
 
 #[allow(dead_code)]
@@ -137,7 +153,9 @@ impl kokkak_domain::CategoryJobServiceSubRepository for MssqlCategoryJobServiceS
         &self,
         _category_job_service_guid: &str,
         _keyword: Option<&str>,
-        _include_inactive: bool,
+        _status: Option<i32>,
+        _locale: &str,
+        _include_deleted: bool,
     ) -> Result<Vec<kokkak_domain::CategoryJobServiceSubRow>, kokkak_domain::RepoError> {
         Err(kokkak_domain::RepoError::Backend(
             "category_job_service_sub repo not wired in build_app_state (set KOKKAK_DATABASE__SQLSERVER_URL)"
@@ -223,6 +241,42 @@ impl kokkak_domain::CategoryJobServiceSubRepository for MssqlCategoryJobServiceS
     }
 }
 
+#[allow(dead_code)]
+struct MssqlCategoryJobServiceSubFeeRepositoryNoop;
+
+#[async_trait::async_trait]
+impl kokkak_domain::CategoryJobServiceSubFeeRepository
+    for MssqlCategoryJobServiceSubFeeRepositoryNoop
+{
+    async fn list(
+        &self,
+        _input: &kokkak_domain::CategoryJobServiceSubFeeListInput,
+    ) -> Result<kokkak_domain::CategoryJobServiceSubFeePage, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_service_sub_fee repo not wired in build_app_state (set KOKKAK_DATABASE__SQLSERVER_URL)"
+                .into(),
+        ))
+    }
+    async fn create(
+        &self,
+        _input: &kokkak_domain::CategoryJobServiceSubFeeCreateInput,
+    ) -> Result<kokkak_domain::CategoryJobServiceSubFeeCreateResult, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+                "category_job_service_sub_fee repo not wired in build_app_state (set KOKKAK_DATABASE__SQLSERVER_URL)"
+                    .into(),
+            ))
+    }
+    async fn update(
+        &self,
+        _input: &kokkak_domain::CategoryJobServiceSubFeeUpdateInput,
+    ) -> Result<kokkak_domain::CategoryJobServiceSubFeeUpdateResult, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+                "category_job_service_sub_fee repo not wired in build_app_state (set KOKKAK_DATABASE__SQLSERVER_URL)"
+                    .into(),
+            ))
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn build_app_state_with(
     bundle: RepoBundle,
@@ -267,6 +321,9 @@ pub fn build_app_state_with(
     ));
     let category_job_service_sub = Arc::new(CategoryJobServiceSubService::new(
         bundle.category_job_service_sub.clone(),
+    ));
+    let category_job_service_sub_fee = Arc::new(CategoryJobServiceSubFeeService::new(
+        bundle.category_job_service_sub_fee.clone(),
     ));
     let orders = Arc::new(OrderService::new(bundle.orders.clone()));
     let local: Arc<BroadcastTransport> = Arc::new(BroadcastTransport::default());
@@ -334,6 +391,7 @@ pub fn build_app_state_with(
         category_job_main,
         category_job_service_main,
         category_job_service_sub,
+        category_job_service_sub_fee,
         master,
         orders,
         chat,
@@ -392,6 +450,7 @@ pub fn build_app_state(
         category_job_main: Arc::new(MssqlCategoryJobMainRepositoryNoop),
         category_job_service_main: Arc::new(MssqlCategoryJobServiceMainRepositoryNoop),
         category_job_service_sub: Arc::new(MssqlCategoryJobServiceSubRepositoryNoop),
+        category_job_service_sub_fee: Arc::new(MssqlCategoryJobServiceSubFeeRepositoryNoop),
         mssql_pool: backend_marker,
         topology: None,
     };
@@ -437,6 +496,7 @@ pub fn build_app_state_json(
         category_job_main: Arc::new(MssqlCategoryJobMainRepositoryNoop),
         category_job_service_main: Arc::new(MssqlCategoryJobServiceMainRepositoryNoop),
         category_job_service_sub: Arc::new(MssqlCategoryJobServiceSubRepositoryNoop),
+        category_job_service_sub_fee: Arc::new(MssqlCategoryJobServiceSubFeeRepositoryNoop),
         mssql_pool: backend_marker,
         topology: None,
     };

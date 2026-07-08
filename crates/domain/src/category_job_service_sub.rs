@@ -9,15 +9,28 @@ pub struct CategoryJobServiceSubRow {
 
     pub category_job_service_sub_category_job_service_main_guid: String,
 
+    pub category_job_service_sub_category_job_service_sub_fee_guid: String,
+
+    pub category_job_service_sub_category_job_service_sub_warranty_guid: String,
+
     pub category_job_service_name: String,
 
     pub category_job_service_sub_name: String,
+
+    #[serde(skip_serializing)]
+    pub category_job_service_sub_locale: String,
 
     pub category_job_service_sub_start_price: Decimal,
 
     pub category_job_service_sub_description: String,
 
     pub category_job_service_sub_status: i32,
+
+    #[serde(default, skip_serializing)]
+    pub main_img_path: String,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main_img_url: Option<String>,
 
     pub category_job_service_sub_create_at: Option<DateTime<Utc>>,
 
@@ -39,6 +52,7 @@ pub struct CategoryJobServiceSubImageRow {
 
     pub category_job_service_sub_img_priority: i32,
 
+    #[serde(skip_serializing)]
     pub category_job_service_sub_img_path: String,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -264,6 +278,17 @@ mod tests {
         assert_eq!(r.category_job_service_sub_guid, "");
         assert_eq!(r.category_job_service_sub_status, 0);
         assert_eq!(r.category_job_service_sub_start_price, Decimal::ZERO);
+        assert_eq!(r.category_job_service_sub_locale, "");
+        assert_eq!(r.main_img_path, "");
+        assert!(r.main_img_url.is_none());
+        assert_eq!(
+            r.category_job_service_sub_category_job_service_sub_fee_guid,
+            ""
+        );
+        assert_eq!(
+            r.category_job_service_sub_category_job_service_sub_warranty_guid,
+            ""
+        );
     }
 
     #[test]

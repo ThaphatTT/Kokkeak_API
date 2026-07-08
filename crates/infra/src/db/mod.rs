@@ -6,6 +6,7 @@ pub mod mssql_catalog;
 pub mod mssql_category_job_main;
 pub mod mssql_category_job_service_main;
 pub mod mssql_category_job_service_sub;
+pub mod mssql_category_job_service_sub_fee;
 pub mod mssql_chat;
 pub mod mssql_master;
 pub mod mssql_order;

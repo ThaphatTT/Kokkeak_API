@@ -46,20 +46,26 @@ impl CategoryJobServiceSubRepository for MssqlCategoryJobServiceSubRepository {
         &self,
         category_job_service_guid: &str,
         keyword: Option<&str>,
-        include_inactive: bool,
+        status: Option<i32>,
+        locale: &str,
+        include_deleted: bool,
     ) -> Result<Vec<CategoryJobServiceSubRow>, RepoError> {
         let main_guid = category_job_service_guid;
         let kw = keyword;
-        let inactive = include_inactive;
+        let status_param: Option<i32> = status;
+        let loc = locale;
+        let inc_deleted = include_deleted;
 
-        let params: &[&dyn ToSql] = &[&main_guid, &kw, &inactive];
+        let params: &[&dyn ToSql] = &[&main_guid, &kw, &status_param, &loc, &inc_deleted];
 
         let rows = exec_sp(
             &self.pool,
             "EXEC dbo.SP_CATEGORY_JOB_SERVICE_SUB_GET \
                 @p_category_job_service_guid = @P1, \
                 @p_keyword = @P2, \
-                @p_include_inactive = @P3",
+                @p_status = @P3, \
+                @p_locale = @P4, \
+                @p_include_deleted = @P5",
             params,
         )
         .await?;
@@ -714,10 +720,21 @@ fn row_to_sub_row(row: &tiberius::Row) -> CategoryJobServiceSubRow {
             row,
             "category_job_service_sub_category_job_service_main_guid",
         ),
+        category_job_service_sub_category_job_service_sub_fee_guid: read_guid_str(
+            row,
+            "category_job_service_sub_category_job_service_sub_fee_guid",
+        ),
+        category_job_service_sub_category_job_service_sub_warranty_guid: read_guid_str(
+            row,
+            "category_job_service_sub_category_job_service_sub_warranty_guid",
+        ),
         category_job_service_name: read_str(row, "category_job_service_name")
             .unwrap_or("")
             .to_string(),
         category_job_service_sub_name: read_str(row, "category_job_service_sub_name")
+            .unwrap_or("")
+            .to_string(),
+        category_job_service_sub_locale: read_str(row, "category_job_service_sub_locale")
             .unwrap_or("")
             .to_string(),
         category_job_service_sub_start_price: read_decimal(
@@ -729,6 +746,8 @@ fn row_to_sub_row(row: &tiberius::Row) -> CategoryJobServiceSubRow {
             .to_string(),
         category_job_service_sub_status: read_i32(row, "category_job_service_sub_status")
             .unwrap_or(0),
+        main_img_path: read_str(row, "main_img_path").unwrap_or("").to_string(),
+        main_img_url: None,
         category_job_service_sub_create_at: {
             row.get::<DateTime<Utc>, _>("category_job_service_sub_create_at")
         },
@@ -830,11 +849,16 @@ mod tests {
         let row = CategoryJobServiceSubRow {
             category_job_service_sub_guid: "s-1".into(),
             category_job_service_sub_category_job_service_main_guid: "m-1".into(),
+            category_job_service_sub_category_job_service_sub_fee_guid: "fee-1".into(),
+            category_job_service_sub_category_job_service_sub_warranty_guid: "w-1".into(),
             category_job_service_name: "Air Con".into(),
             category_job_service_sub_name: "ล้างแอร์ 9000-12000 BTU".into(),
+            category_job_service_sub_locale: "la".into(),
             category_job_service_sub_start_price: Decimal::new(900000, 2),
             category_job_service_sub_description: "ล้างแอร์ตามมาตรฐาน".into(),
             category_job_service_sub_status: 1,
+            main_img_path: "category-job-service-subs/s-1/image/x.webp".into(),
+            main_img_url: None,
             category_job_service_sub_create_at: Some(Utc::now()),
             category_job_service_sub_create_by: "admin".into(),
             category_job_service_sub_update_at: Some(Utc::now()),
@@ -844,6 +868,15 @@ mod tests {
         assert_eq!(
             row.category_job_service_sub_start_price,
             Decimal::new(900000, 2)
+        );
+        assert_eq!(row.category_job_service_sub_locale, "la");
+        assert_eq!(
+            row.category_job_service_sub_category_job_service_sub_fee_guid,
+            "fee-1"
+        );
+        assert_eq!(
+            row.category_job_service_sub_category_job_service_sub_warranty_guid,
+            "w-1"
         );
     }
 }

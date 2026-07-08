@@ -1,11 +1,9 @@
-
-
 use std::time::Duration;
 
 use axum::{
     body::Body,
     extract::ConnectInfo,
-    http::{header, HeaderValue, Method, Request, StatusCode},
+    http::{header, HeaderName, HeaderValue, Method, Request, StatusCode},
     response::IntoResponse,
     routing::get,
     Router,
@@ -46,7 +44,12 @@ fn app_with_cors(allow_origins: &[&str]) -> Router {
                     Method::DELETE,
                     Method::OPTIONS,
                 ])
-                .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
+                .allow_headers([
+                    header::CONTENT_TYPE,
+                    header::AUTHORIZATION,
+                    HeaderName::from_static("x-request-id"),
+                    HeaderName::from_static("idempotency-key"),
+                ])
                 .allow_credentials(true),
         );
     }
@@ -54,7 +57,6 @@ fn app_with_cors(allow_origins: &[&str]) -> Router {
 }
 
 fn app_with_compression() -> Router {
-
     const BODY: &str = "x";
     let body = BODY.repeat(1024);
 
@@ -107,8 +109,40 @@ async fn cors_preflight_from_allowed_origin_returns_acao_header() {
 }
 
 #[tokio::test]
-async fn cors_simple_request_from_disallowed_origin_lacks_acao_header() {
+async fn cors_preflight_includes_idempotency_key_in_allow_headers() {
+    let app = app_with_cors(&["https://app.example.com"]);
 
+    let req = Request::builder()
+        .method(Method::OPTIONS)
+        .uri("/echo")
+        .header(header::ORIGIN, "https://app.example.com")
+        .header(header::ACCESS_CONTROL_REQUEST_METHOD, "PATCH")
+        .header(
+            header::ACCESS_CONTROL_REQUEST_HEADERS,
+            "content-type,idempotency-key",
+        )
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let allowed_headers = resp
+        .headers()
+        .get(header::ACCESS_CONTROL_ALLOW_HEADERS)
+        .map(|v| v.to_str().unwrap_or("").to_string())
+        .unwrap_or_default();
+    assert!(
+        allowed_headers
+            .split(',')
+            .any(|h| h.trim().eq_ignore_ascii_case("idempotency-key")),
+        "preflight ACAH must include `idempotency-key` for protected POSTs \
+         and idempotent PATCH/DELETE; got `{}`",
+        allowed_headers,
+    );
+}
+
+#[tokio::test]
+async fn cors_simple_request_from_disallowed_origin_lacks_acao_header() {
     let app = app_with_cors(&[]);
 
     let req = Request::builder()
@@ -197,7 +231,6 @@ async fn timeout_fast_handler_completes_normally() {
 
 #[tokio::test]
 async fn timeout_slow_handler_returns_408_or_500() {
-
     let app = app_with_timeout(1);
 
     let req = Request::builder().uri("/slow").body(Body::empty()).unwrap();
@@ -238,7 +271,6 @@ fn request_with_ip(path: &str, ip: [u8; 4]) -> Request<Body> {
 
 #[tokio::test]
 async fn rate_limit_burst_then_429() {
-
     let app = app_with_rate_limit(1, 2);
 
     let resp1 = app
@@ -269,7 +301,6 @@ async fn rate_limit_burst_then_429() {
 
 #[tokio::test]
 async fn rate_limit_distinct_ips_have_independent_buckets() {
-
     let app = app_with_rate_limit(1, 1);
 
     let a1 = app
@@ -299,7 +330,6 @@ async fn rate_limit_distinct_ips_have_independent_buckets() {
 
 #[tokio::test]
 async fn rate_limit_429_includes_x_ratelimit_after_header() {
-
     let app = app_with_rate_limit(1, 1);
 
     let _ = app
@@ -332,7 +362,6 @@ fn app_with_body_limit(limit_bytes: usize) -> Router {
         .route(
             "/echo",
             get(|| async { (StatusCode::OK, "ok") }).post(|body: axum::body::Bytes| async move {
-
                 (StatusCode::OK, format!("{}", body.len()))
             }),
         )
@@ -341,7 +370,6 @@ fn app_with_body_limit(limit_bytes: usize) -> Router {
 
 #[tokio::test]
 async fn body_limit_within_limit_passes_through() {
-
     let app = app_with_body_limit(2 * 1024);
     let body = vec![b'x'; 1024];
     let req = Request::builder()
@@ -356,7 +384,6 @@ async fn body_limit_within_limit_passes_through() {
 
 #[tokio::test]
 async fn body_limit_oversized_request_returns_413() {
-
     let app = app_with_body_limit(1024);
     let body = vec![b'x'; 4 * 1024];
     let req = Request::builder()
@@ -405,7 +432,6 @@ fn app_with_load_shed(cap: usize) -> Router {
         .route(
             "/slow",
             get(|| async {
-
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 (StatusCode::OK, "ok")
             }),
@@ -418,7 +444,6 @@ fn app_with_load_shed(cap: usize) -> Router {
 
 #[tokio::test]
 async fn load_shed_under_cap_succeeds() {
-
     let app = app_with_load_shed(2);
     let req = Request::builder().uri("/slow").body(Body::empty()).unwrap();
     let resp = app.oneshot(req).await.unwrap();
@@ -427,7 +452,6 @@ async fn load_shed_under_cap_succeeds() {
 
 #[tokio::test]
 async fn load_shed_over_cap_returns_503() {
-
     let app = app_with_load_shed(1);
 
     let req1 = Request::builder().uri("/slow").body(Body::empty()).unwrap();

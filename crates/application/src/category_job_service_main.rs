@@ -2,9 +2,10 @@ use std::sync::Arc;
 
 use kokkak_domain::traits::user::RepoError;
 use kokkak_domain::{
+    CategoryJobServiceMainAutocompleteInput, CategoryJobServiceMainAutocompleteRow,
     CategoryJobServiceMainCreateInput, CategoryJobServiceMainCreateResult,
-    CategoryJobServiceMainDeleteResult, CategoryJobServiceMainRepository,
-    CategoryJobServiceMainRow, CategoryJobServiceMainUpdateInput,
+    CategoryJobServiceMainDeleteResult, CategoryJobServiceMainListInput,
+    CategoryJobServiceMainRepository, CategoryJobServiceMainRow, CategoryJobServiceMainUpdateInput,
     CategoryJobServiceMainUpdateResult,
 };
 
@@ -23,9 +24,7 @@ impl CategoryJobServiceMainService {
         impl CategoryJobServiceMainRepository for DisabledRepo {
             async fn list(
                 &self,
-                _category_job_main_guid: &str,
-                _keyword: Option<&str>,
-                _include_inactive: bool,
+                _input: &CategoryJobServiceMainListInput,
             ) -> Result<Vec<CategoryJobServiceMainRow>, RepoError> {
                 Err(RepoError::Backend(
                     "CategoryJobServiceMainService::disabled — repository not wired (set KOKKAK_DATABASE__SQLSERVER_URL)"
@@ -57,6 +56,14 @@ impl CategoryJobServiceMainService {
                     "CategoryJobServiceMainService::disabled — repository not wired".into(),
                 ))
             }
+            async fn autocomplete(
+                &self,
+                _input: &CategoryJobServiceMainAutocompleteInput,
+            ) -> Result<Vec<CategoryJobServiceMainAutocompleteRow>, RepoError> {
+                Err(RepoError::Backend(
+                    "CategoryJobServiceMainService::disabled — repository not wired".into(),
+                ))
+            }
         }
         let repo: Arc<dyn CategoryJobServiceMainRepository> = Arc::new(DisabledRepo);
         Self { repo }
@@ -68,13 +75,9 @@ impl CategoryJobServiceMainService {
 
     pub async fn list(
         &self,
-        category_job_main_guid: &str,
-        keyword: Option<&str>,
-        include_inactive: bool,
+        input: CategoryJobServiceMainListInput,
     ) -> Result<Vec<CategoryJobServiceMainRow>, RepoError> {
-        self.repo
-            .list(category_job_main_guid, keyword, include_inactive)
-            .await
+        self.repo.list(&input).await
     }
 
     pub async fn create(
@@ -98,6 +101,13 @@ impl CategoryJobServiceMainService {
     ) -> Result<CategoryJobServiceMainDeleteResult, RepoError> {
         self.repo.delete(service_guid, actor_user_guid).await
     }
+
+    pub async fn autocomplete(
+        &self,
+        input: CategoryJobServiceMainAutocompleteInput,
+    ) -> Result<Vec<CategoryJobServiceMainAutocompleteRow>, RepoError> {
+        self.repo.autocomplete(&input).await
+    }
 }
 
 #[cfg(test)]
@@ -110,15 +120,15 @@ mod tests {
     struct MockRepo {
         rows: Mutex<Vec<CategoryJobServiceMainRow>>,
         last_delete: Mutex<Option<(String, String)>>,
+        autocomplete_rows: Mutex<Vec<CategoryJobServiceMainAutocompleteRow>>,
+        last_autocomplete: Mutex<Option<CategoryJobServiceMainAutocompleteInput>>,
     }
 
     #[async_trait::async_trait]
     impl CategoryJobServiceMainRepository for MockRepo {
         async fn list(
             &self,
-            _category_job_main_guid: &str,
-            _keyword: Option<&str>,
-            _include_inactive: bool,
+            _input: &CategoryJobServiceMainListInput,
         ) -> Result<Vec<CategoryJobServiceMainRow>, RepoError> {
             Ok(self.rows.lock().unwrap().clone())
         }
@@ -158,6 +168,13 @@ mod tests {
                 category_job_service_guid: service_guid.to_string(),
             })
         }
+        async fn autocomplete(
+            &self,
+            input: &CategoryJobServiceMainAutocompleteInput,
+        ) -> Result<Vec<CategoryJobServiceMainAutocompleteRow>, RepoError> {
+            *self.last_autocomplete.lock().unwrap() = Some(input.clone());
+            Ok(self.autocomplete_rows.lock().unwrap().clone())
+        }
     }
 
     fn make_row(service_guid: &str, main_guid: &str, name: &str) -> CategoryJobServiceMainRow {
@@ -166,6 +183,7 @@ mod tests {
             category_job_service_category_main_guid: main_guid.into(),
             category_job_main_name: "Home Repair".into(),
             category_job_service_name: name.into(),
+            category_job_service_locale: "th".into(),
             category_job_service_icon_style: "solid".into(),
             category_job_service_icon_line: "snowflake".into(),
             category_job_service_img_path: format!(
@@ -190,9 +208,19 @@ mod tests {
         let repo: Arc<dyn CategoryJobServiceMainRepository> = Arc::new(repo);
         let svc = CategoryJobServiceMainService::new(repo);
 
-        let rows = svc.list("m1", Some("air"), false).await.unwrap();
+        let rows = svc
+            .list(CategoryJobServiceMainListInput {
+                category_job_main_guid: Some("m1".into()),
+                keyword: Some("air".into()),
+                status: None,
+                locale: Some("th".into()),
+                include_deleted: false,
+            })
+            .await
+            .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].category_job_service_name, "Air Con");
+        assert_eq!(rows[0].category_job_service_locale, "th");
     }
 
     #[tokio::test]
@@ -204,7 +232,10 @@ mod tests {
         let create_res = svc
             .create(CategoryJobServiceMainCreateInput {
                 category_job_main_guid: "m-1".into(),
-                category_job_service_name: "Plumbing".into(),
+                category_job_service_name_la: Some("Plumbing".into()),
+                category_job_service_name_en: Some("Plumbing".into()),
+                category_job_service_name_th: Some("Plumbing".into()),
+                category_job_service_name_zh: Some("Plumbing".into()),
                 category_job_service_icon_style: Some("solid".into()),
                 category_job_service_icon_line: Some("pipe".into()),
                 category_job_service_img_path: Some("category-job-services/x/icon/y.webp".into()),
@@ -235,5 +266,60 @@ mod tests {
         let del_res = svc.delete(&created_guid, "admin-1").await.unwrap();
         assert!(del_res.success);
         assert_eq!(del_res.category_job_service_guid, created_guid);
+    }
+
+    #[tokio::test]
+    async fn autocomplete_forwards_filters_and_returns_repo_rows() {
+        let repo = MockRepo {
+            autocomplete_rows: Mutex::new(vec![
+                CategoryJobServiceMainAutocompleteRow {
+                    category_job_service_guid: "11111111-1111-1111-1111-111111111111".into(),
+                    category_job_service_name: "Air Con Clean".into(),
+                },
+                CategoryJobServiceMainAutocompleteRow {
+                    category_job_service_guid: "22222222-2222-2222-2222-222222222222".into(),
+                    category_job_service_name: "Air Con Repair".into(),
+                },
+            ]),
+            ..Default::default()
+        };
+        let repo: Arc<dyn CategoryJobServiceMainRepository> = Arc::new(repo);
+        let svc = CategoryJobServiceMainService::new(repo);
+
+        let rows = svc
+            .autocomplete(CategoryJobServiceMainAutocompleteInput {
+                category_job_main_guid: Some("m1".into()),
+                keyword: Some("air".into()),
+                status: Some(1),
+                locale: Some("la".into()),
+                take: Some(5),
+            })
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].category_job_service_name, "Air Con Clean");
+        assert_eq!(
+            rows[1].category_job_service_guid,
+            "22222222-2222-2222-2222-222222222222"
+        );
+    }
+
+    #[tokio::test]
+    async fn autocomplete_passes_through_all_none_inputs() {
+        let repo = MockRepo::default();
+        let repo: Arc<dyn CategoryJobServiceMainRepository> = Arc::new(repo);
+        let svc = CategoryJobServiceMainService::new(repo);
+
+        let rows = svc
+            .autocomplete(CategoryJobServiceMainAutocompleteInput {
+                category_job_main_guid: None,
+                keyword: None,
+                status: None,
+                locale: None,
+                take: None,
+            })
+            .await
+            .unwrap();
+        assert!(rows.is_empty());
     }
 }

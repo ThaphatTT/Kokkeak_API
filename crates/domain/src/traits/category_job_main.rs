@@ -2,9 +2,9 @@ use async_trait::async_trait;
 
 use super::user::RepoError;
 use crate::category_job_main::{
-    CategoryJobMainCreateInput, CategoryJobMainCreateResult, CategoryJobMainDeleteResult,
-    CategoryJobMainListInput, CategoryJobMainPage, CategoryJobMainUpdateInput,
-    CategoryJobMainUpdateResult,
+    CategoryJobMainAutocompleteInput, CategoryJobMainAutocompleteRow, CategoryJobMainCreateInput,
+    CategoryJobMainCreateResult, CategoryJobMainDeleteResult, CategoryJobMainListInput,
+    CategoryJobMainPage, CategoryJobMainUpdateInput, CategoryJobMainUpdateResult,
 };
 
 #[async_trait]
@@ -29,4 +29,9 @@ pub trait CategoryJobMainRepository: Send + Sync {
         category_guid: &str,
         actor_user_guid: &str,
     ) -> Result<CategoryJobMainDeleteResult, RepoError>;
+
+    async fn autocomplete(
+        &self,
+        input: &CategoryJobMainAutocompleteInput,
+    ) -> Result<Vec<CategoryJobMainAutocompleteRow>, RepoError>;
 }

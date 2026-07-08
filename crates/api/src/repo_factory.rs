@@ -4,16 +4,17 @@ use std::sync::Arc;
 use kokkak_application::order::OrderService;
 use kokkak_common::config::DatabaseTopologySettings;
 use kokkak_domain::{
-    CategoryJobMainRepository, CategoryJobServiceMainRepository, CategoryJobServiceSubRepository,
-    ChatRepository, MasterDropdownRepository, OrderRepository, PaymentRepository,
-    PermissionUserRepository, ServiceRepository, TranslationRepository, UserRepository,
-    UserRoleRepository,
+    CategoryJobMainRepository, CategoryJobServiceMainRepository,
+    CategoryJobServiceSubFeeRepository, CategoryJobServiceSubRepository, ChatRepository,
+    MasterDropdownRepository, OrderRepository, PaymentRepository, PermissionUserRepository,
+    ServiceRepository, TranslationRepository, UserRepository, UserRoleRepository,
 };
 use kokkak_infra::cache::translation_cache::CachedTranslationRepository;
 use kokkak_infra::db::mssql_catalog::MssqlServiceRepository;
 use kokkak_infra::db::mssql_category_job_main::MssqlCategoryJobMainRepository;
 use kokkak_infra::db::mssql_category_job_service_main::MssqlCategoryJobServiceMainRepository;
 use kokkak_infra::db::mssql_category_job_service_sub::MssqlCategoryJobServiceSubRepository;
+use kokkak_infra::db::mssql_category_job_service_sub_fee::MssqlCategoryJobServiceSubFeeRepository;
 use kokkak_infra::db::mssql_chat::MssqlChatRepository;
 use kokkak_infra::db::mssql_master::MssqlMasterDropdownRepository;
 use kokkak_infra::db::mssql_order::MssqlOrderRepository;
@@ -59,6 +60,8 @@ pub struct RepoBundle {
     pub category_job_service_main: Arc<dyn CategoryJobServiceMainRepository>,
 
     pub category_job_service_sub: Arc<dyn CategoryJobServiceSubRepository>,
+
+    pub category_job_service_sub_fee: Arc<dyn CategoryJobServiceSubFeeRepository>,
 
     pub mssql_pool: Option<kokkak_infra::db::mssql::MssqlPool>,
     pub topology: Option<DatabaseTopology>,
@@ -148,6 +151,13 @@ pub async fn from_settings(
                     category_job_service_sub: Arc::new(MssqlCategoryJobServiceSubRepository::new(
                         topo_pool(&topo, DbRole::Master, &primary_pool),
                     )),
+                    category_job_service_sub_fee: Arc::new(
+                        MssqlCategoryJobServiceSubFeeRepository::new(topo_pool(
+                            &topo,
+                            DbRole::Master,
+                            &primary_pool,
+                        )),
+                    ),
                     mssql_pool: Some(primary_pool),
                     topology: Some(topo),
                 })

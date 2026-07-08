@@ -1,5 +1,3 @@
-
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -46,7 +44,6 @@ async fn metrics_handler() -> impl IntoResponse {
 }
 
 fn main() {
-
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     let env_file = std::env::var("KOKKAK_ENV_FILE")
@@ -77,7 +74,6 @@ fn main() {
 }
 
 async fn run(settings: Settings) {
-
     i18n::init_i18n("en");
 
     telemetry::init_tracing(settings.log.format);
@@ -190,9 +186,7 @@ async fn run(settings: Settings) {
         "signed-URL route mounted (HMAC-SHA256, time-limited)"
     );
     #[allow(unused_imports)]
-    {
-
-    }
+    {}
 
     let cors = build_cors_layer(&settings.middleware.cors_allow_origins);
     let app = match cors {
@@ -245,7 +239,6 @@ async fn run(settings: Settings) {
                 })
             }
             RateLimitBackend::Redis => {
-
                 const REDIS_WINDOW_SECS: u64 = 1;
                 let pool = build_rate_limit_pool(&settings).unwrap_or_else(|err| {
                     eprintln!("[kokkak-api] rate limit redis pool build failed: {err}");
@@ -341,7 +334,6 @@ async fn run(settings: Settings) {
     tracing::info!("settings Extension wired (extractors can read feature flags)");
 
     if settings.tls.enabled {
-
         let cert_path = std::path::PathBuf::from(settings.tls.cert_path_or_empty());
         let key_path = std::path::PathBuf::from(settings.tls.key_path_or_empty());
         let tls_config = build_rustls_config(&cert_path, &key_path).unwrap_or_else(|err| {
@@ -410,7 +402,6 @@ async fn run(settings: Settings) {
                     );
                     let tls_handle_for_reload = tls_handle.clone();
                     tokio::spawn(async move {
-
                         let _watcher = watcher;
 
                         let _ = rx.borrow_and_update();
@@ -434,7 +425,6 @@ async fn run(settings: Settings) {
                     });
                 }
                 Err(err) => {
-
                     tracing::error!(
                         error = %err,
                         "cert watcher init failed; auto-reload disabled (service still serves with current cert)"
@@ -455,12 +445,10 @@ async fn run(settings: Settings) {
             tls_config,
         )
         .handle(tls_handle)
-
         .serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>())
         .await
         .expect("TLS server error");
     } else {
-
         let listener = tokio::net::TcpListener::bind(&settings.server.addr)
             .await
             .unwrap_or_else(|err| {
@@ -543,7 +531,6 @@ async fn build_health_registry(settings: &Settings) -> HealthRegistry {
     }
 
     if settings.database.is_configured() {
-
         tracing::debug!(
             "sqlserver_url is set; /readyz will report sqlserver once the topology is built"
         );
@@ -615,6 +602,7 @@ fn build_cors_layer(allow_origins: &[String]) -> Option<CorsLayer> {
                 axum::http::header::CONTENT_TYPE,
                 axum::http::header::AUTHORIZATION,
                 axum::http::HeaderName::from_static("x-request-id"),
+                axum::http::HeaderName::from_static("idempotency-key"),
             ])
             .allow_credentials(true),
     )

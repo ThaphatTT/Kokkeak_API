@@ -12,10 +12,14 @@ pub struct CategoryJobServiceMainRow {
 
     pub category_job_service_name: String,
 
+    #[serde(skip_serializing)]
+    pub category_job_service_locale: String,
+
     pub category_job_service_icon_style: String,
 
     pub category_job_service_icon_line: String,
 
+    #[serde(skip_serializing)]
     pub category_job_service_img_path: String,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -36,10 +40,39 @@ pub struct CategoryJobServiceMainRow {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CategoryJobServiceMainListInput {
+    #[serde(default)]
+    pub category_job_main_guid: Option<String>,
+
+    #[serde(default)]
+    pub keyword: Option<String>,
+
+    #[serde(default)]
+    pub status: Option<i32>,
+
+    #[serde(default)]
+    pub locale: Option<String>,
+
+    #[serde(default)]
+    pub include_deleted: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CategoryJobServiceMainCreateInput {
     pub category_job_main_guid: String,
 
-    pub category_job_service_name: String,
+    #[serde(default)]
+    pub category_job_service_name_la: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_name_en: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_name_th: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_name_zh: Option<String>,
 
     #[serde(default)]
     pub category_job_service_icon_style: Option<String>,
@@ -114,6 +147,28 @@ pub struct CategoryJobServiceMainDeleteResult {
     pub category_job_service_guid: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CategoryJobServiceMainAutocompleteInput {
+    pub category_job_main_guid: Option<String>,
+
+    pub keyword: Option<String>,
+
+    pub status: Option<i32>,
+
+    pub locale: Option<String>,
+
+    pub take: Option<i32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CategoryJobServiceMainAutocompleteRow {
+    pub category_job_service_guid: String,
+
+    pub category_job_service_name: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("SP_CATEGORY_JOB_SERVICE_MAIN failed: {code} — {message}")]
 pub struct CategoryJobServiceMainError {
@@ -134,7 +189,7 @@ impl CategoryJobServiceMainError {
 
     pub const CODE_NOT_FOUND: &'static str = "SERVICE_NOT_FOUND";
 
-    pub const CODE_MAIN_NOT_FOUND: &'static str = "CATEGORY_NOT_FOUND";
+    pub const CODE_MAIN_NOT_FOUND: &'static str = "MAIN_NOT_FOUND";
 
     pub const CODE_INVALID_STATUS: &'static str = "INVALID_STATUS";
 
@@ -162,7 +217,10 @@ mod tests {
     fn create_input_carries_main_guid_and_actor() {
         let i = CategoryJobServiceMainCreateInput {
             category_job_main_guid: "m-1".into(),
-            category_job_service_name: "Air Con Repair".into(),
+            category_job_service_name_la: Some("Air Con Repair".into()),
+            category_job_service_name_en: Some("Air Con Repair".into()),
+            category_job_service_name_th: Some("Air Con Repair".into()),
+            category_job_service_name_zh: Some("Air Con Repair".into()),
             category_job_service_icon_style: Some("solid".into()),
             category_job_service_icon_line: Some("snowflake".into()),
             category_job_service_img_path: Some("category-job-services/m-1/icon/x.webp".into()),
@@ -181,7 +239,7 @@ mod tests {
         );
         assert_eq!(
             CategoryJobServiceMainError::CODE_MAIN_NOT_FOUND,
-            "CATEGORY_NOT_FOUND"
+            "MAIN_NOT_FOUND"
         );
         assert!(CategoryJobServiceMainError::is_success_code("SUCCESS"));
         assert!(!CategoryJobServiceMainError::is_success_code("OTHER"));

@@ -8,12 +8,14 @@ pub struct CategoryJobMainRow {
 
     pub category_job_main_name: String,
 
+    #[serde(skip_serializing)]
     pub category_job_main_locale: String,
 
     pub category_job_main_icon_style: String,
 
     pub category_job_main_icon_line: String,
 
+    #[serde(skip_serializing)]
     pub category_job_main_img_path: String,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -66,7 +68,17 @@ pub struct CategoryJobMainPage {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CategoryJobMainCreateInput {
-    pub category_job_main_name: String,
+    #[serde(default)]
+    pub category_job_main_name_la: Option<String>,
+
+    #[serde(default)]
+    pub category_job_main_name_en: Option<String>,
+
+    #[serde(default)]
+    pub category_job_main_name_th: Option<String>,
+
+    #[serde(default)]
+    pub category_job_main_name_zh: Option<String>,
 
     #[serde(default)]
     pub category_job_main_icon_style: Option<String>,
@@ -130,6 +142,26 @@ pub struct CategoryJobMainUpdateResult {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category_job_main_guid: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CategoryJobMainAutocompleteInput {
+    pub keyword: Option<String>,
+
+    pub status: Option<i32>,
+
+    pub locale: Option<String>,
+
+    pub take: Option<i32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CategoryJobMainAutocompleteRow {
+    pub category_job_main_guid: String,
+
+    pub category_job_main_name: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
