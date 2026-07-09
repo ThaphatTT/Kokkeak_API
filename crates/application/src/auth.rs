@@ -1,10 +1,9 @@
-
-
 use std::sync::Arc;
 
 use chrono::Utc;
 use kokkak_domain::{
-    AuthError, Claims, PublicUser, Role, TokenKind, TokenPair, User, UserRepository, UserStatus,
+    AuthError, Claims, CreateSession, PublicUser, Role, SessionInfo, SessionStore, TokenKind,
+    TokenPair, User, UserRepository, UserStatus,
 };
 use uuid::Uuid;
 
@@ -13,7 +12,6 @@ use crate::rate_limit::RateLimitDecision;
 
 #[derive(Debug, Clone)]
 pub struct RegisterInput {
-
     pub username: String,
 
     pub password: String,
@@ -27,7 +25,6 @@ pub struct RegisterInput {
 
 #[derive(Debug, Clone)]
 pub struct LoginInput {
-
     pub username: String,
 
     pub password: String,
@@ -39,7 +36,6 @@ pub struct LoginInput {
 
 #[derive(Debug, Clone)]
 pub struct AuthOutcome {
-
     pub user: PublicUser,
 
     pub tokens: TokenPair,
@@ -49,18 +45,17 @@ pub struct AuthService {
     users: Arc<dyn UserRepository>,
     hasher: Arc<dyn PasswordHasherPort>,
     jwt: Arc<dyn JwtIssuerPort>,
-
+    sessions: Arc<dyn SessionStore>,
     audit: Arc<dyn crate::audit::AuditLogger>,
-
     login_rl: Arc<dyn crate::rate_limit::LoginRateLimiter>,
 }
 
 impl AuthService {
-
     pub fn new(
         users: Arc<dyn UserRepository>,
         hasher: Arc<dyn PasswordHasherPort>,
         jwt: Arc<dyn JwtIssuerPort>,
+        sessions: Arc<dyn SessionStore>,
         audit: Arc<dyn crate::audit::AuditLogger>,
         login_rl: Arc<dyn crate::rate_limit::LoginRateLimiter>,
     ) -> Self {
@@ -68,6 +63,7 @@ impl AuthService {
             users,
             hasher,
             jwt,
+            sessions,
             audit,
             login_rl,
         }
@@ -134,7 +130,18 @@ impl AuthService {
                 return Err(AuthError::Backend(other.to_string()));
             }
         }
-        let tokens = self.issue_pair(user.id, &user.roles, "mobile")?;
+        let (tokens, refresh_jti) = self.issue_pair(user.id, &user.roles, "mobile")?;
+        let _ = self
+            .sessions
+            .create(&CreateSession {
+                jti: refresh_jti,
+                user_id: user.id,
+                scope: "mobile".into(),
+                device: "register".into(),
+                ip: String::new(),
+                ttl_secs: self.jwt.refresh_ttl_secs(),
+            })
+            .await;
         self.audit.log(
             AuditEvent::new("auth.register.success")
                 .with_username(&user.username)
@@ -227,7 +234,18 @@ impl AuthService {
             self.login_rl.reset(&username, ip_addr);
         }
 
-        let tokens = self.issue_pair(user.id, &user.roles, &input.scope)?;
+        let (tokens, refresh_jti) = self.issue_pair(user.id, &user.roles, &input.scope)?;
+        let _ = self
+            .sessions
+            .create(&CreateSession {
+                jti: refresh_jti,
+                user_id: user.id,
+                scope: input.scope.clone(),
+                device: "login".into(),
+                ip: ip.map(|i| i.to_string()).unwrap_or_default(),
+                ttl_secs: self.jwt.refresh_ttl_secs(),
+            })
+            .await;
         tracing::debug!(
             event = "auth.login.success",
             user_id = %user.id,
@@ -246,11 +264,7 @@ impl AuthService {
         })
     }
 
-    pub async fn refresh(
-        &self,
-        refresh_token: &str,
-        scope: &str,
-    ) -> Result<AuthOutcome, AuthError> {
+    pub async fn refresh(&self, refresh_token: &str) -> Result<AuthOutcome, AuthError> {
         let claims = self.jwt.verify(refresh_token)?;
         if claims.kind != TokenKind::Refresh {
             self.audit.log(
@@ -259,6 +273,17 @@ impl AuthService {
                     .with_context("detail", "not a refresh token"),
             );
             return Err(AuthError::InvalidToken("not a refresh token".into()));
+        }
+        let scope = claims.scope.clone();
+        let old_jti = claims.jti.clone();
+        let existing = self.sessions.get(claims.sub, &old_jti).await?;
+        if existing.is_none() {
+            self.audit.log(
+                AuditEvent::new("auth.refresh.failure")
+                    .with_reason("revoked")
+                    .with_context("detail", "session not found in store"),
+            );
+            return Err(AuthError::InvalidToken("session revoked".into()));
         }
         let user = self
             .users
@@ -277,7 +302,22 @@ impl AuthService {
             );
             return Err(AuthError::InvalidCredentials);
         }
-        let tokens = self.issue_pair(user.id, &user.roles, scope)?;
+        let _ = self.sessions.revoke(claims.sub, &old_jti).await;
+        let (tokens, refresh_jti) = self.issue_pair(user.id, &user.roles, &scope)?;
+        let _ = self
+            .sessions
+            .create(&CreateSession {
+                jti: refresh_jti,
+                user_id: user.id,
+                scope: scope.clone(),
+                device: existing
+                    .as_ref()
+                    .map(|s| s.device.clone())
+                    .unwrap_or_default(),
+                ip: existing.as_ref().map(|s| s.ip.clone()).unwrap_or_default(),
+                ttl_secs: self.jwt.refresh_ttl_secs(),
+            })
+            .await;
         tracing::debug!(
             event = "auth.refresh.success",
             user_id = %user.id,
@@ -287,7 +327,7 @@ impl AuthService {
             AuditEvent::new("auth.refresh.success")
                 .with_username(&user.username)
                 .with_user_id(user.id)
-                .with_context("scope", scope.to_string()),
+                .with_context("scope", scope.clone()),
         );
         Ok(AuthOutcome {
             user: PublicUser::from(&user),
@@ -295,27 +335,41 @@ impl AuthService {
         })
     }
 
+    pub async fn logout(&self, user_id: Uuid, jti: &str) -> Result<(), AuthError> {
+        self.sessions.revoke(user_id, jti).await
+    }
+
+    pub async fn revoke_all(&self, user_id: Uuid) -> Result<u64, AuthError> {
+        self.sessions.revoke_all(user_id).await
+    }
+
+    pub async fn list_sessions(&self, user_id: Uuid) -> Result<Vec<SessionInfo>, AuthError> {
+        self.sessions.list(user_id).await
+    }
+
     fn issue_pair(
         &self,
         user_id: Uuid,
         roles: &[Role],
         scope: &str,
-    ) -> Result<TokenPair, AuthError> {
-        let access = self.jwt.issue_access(user_id, roles, scope)?;
-        let refresh = self.jwt.issue_refresh(user_id, roles, scope)?;
-        Ok(TokenPair {
-            access_token: access,
-            refresh_token: refresh,
-            access_ttl_secs: self.jwt.access_ttl_secs(),
-            refresh_ttl_secs: self.jwt.refresh_ttl_secs(),
-            token_type: "Bearer",
-        })
+    ) -> Result<(TokenPair, String), AuthError> {
+        let (access, _access_jti) = self.jwt.issue_access(user_id, roles, scope)?;
+        let (refresh, refresh_jti) = self.jwt.issue_refresh(user_id, roles, scope)?;
+        Ok((
+            TokenPair {
+                access_token: access,
+                refresh_token: refresh,
+                access_ttl_secs: self.jwt.access_ttl_secs(),
+                refresh_ttl_secs: self.jwt.refresh_ttl_secs(),
+                token_type: "Bearer",
+            },
+            refresh_jti,
+        ))
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 enum LoginFailureReason {
-
     UserNotFound,
 
     WrongPassword,
@@ -328,7 +382,6 @@ enum LoginFailureReason {
 }
 
 impl LoginFailureReason {
-
     fn as_str(&self) -> &'static str {
         match self {
             Self::UserNotFound => "user_not_found",
@@ -384,7 +437,6 @@ fn build_login_failure_event(
 }
 
 pub trait PasswordHasherPort: Send + Sync {
-
     fn hash(&self, password: &str) -> Result<String, AuthError>;
 
     fn verify(&self, password: &str, hash: &str) -> Result<(), AuthError>;
@@ -393,16 +445,19 @@ pub trait PasswordHasherPort: Send + Sync {
 }
 
 pub trait JwtIssuerPort: Send + Sync {
-
-    fn issue_access(&self, user_id: Uuid, roles: &[Role], scope: &str)
-        -> Result<String, AuthError>;
+    fn issue_access(
+        &self,
+        user_id: Uuid,
+        roles: &[Role],
+        scope: &str,
+    ) -> Result<(String, String), AuthError>;
 
     fn issue_refresh(
         &self,
         user_id: Uuid,
         roles: &[Role],
         scope: &str,
-    ) -> Result<String, AuthError>;
+    ) -> Result<(String, String), AuthError>;
 
     fn verify(&self, token: &str) -> Result<Claims, AuthError>;
 
@@ -496,7 +551,6 @@ mod tests {
             self.0.verify(password, hash)
         }
         fn dummy_hash(&self) -> &str {
-
             self.0.dummy_hash()
         }
     }
@@ -508,7 +562,7 @@ mod tests {
             user_id: Uuid,
             roles: &[Role],
             scope: &str,
-        ) -> Result<String, AuthError> {
+        ) -> Result<(String, String), AuthError> {
             self.0.issue_access(user_id, roles, scope)
         }
         fn issue_refresh(
@@ -516,7 +570,7 @@ mod tests {
             user_id: Uuid,
             roles: &[Role],
             scope: &str,
-        ) -> Result<String, AuthError> {
+        ) -> Result<(String, String), AuthError> {
             self.0.issue_refresh(user_id, roles, scope)
         }
         fn verify(&self, token: &str) -> Result<Claims, AuthError> {
@@ -547,6 +601,7 @@ mod tests {
             repo.clone() as Arc<dyn UserRepository>,
             Arc::new(TestHasher(PasswordHasherImpl::new())),
             Arc::new(TestJwt(jwt)),
+            Arc::new(kokkak_domain::NoopSessionStore),
             Arc::new(crate::audit::TestAuditLogger::default()),
             Arc::new(crate::rate_limit::AllowAllLoginRateLimiter),
         );
@@ -658,10 +713,7 @@ mod tests {
             })
             .await
             .unwrap();
-        let out = svc
-            .refresh(&registered.tokens.refresh_token, "mobile")
-            .await
-            .unwrap();
+        let out = svc.refresh(&registered.tokens.refresh_token).await.unwrap();
 
         assert!(!out.tokens.access_token.is_empty());
         assert!(!out.tokens.refresh_token.is_empty());
@@ -682,7 +734,7 @@ mod tests {
             .await
             .unwrap();
         let err = svc
-            .refresh(&registered.tokens.access_token, "mobile")
+            .refresh(&registered.tokens.access_token)
             .await
             .unwrap_err();
         assert!(matches!(err, AuthError::InvalidToken(_)));
@@ -722,7 +774,6 @@ mod tests {
 
     #[tokio::test]
     async fn login_unknown_user_returns_generic_invalid_credentials() {
-
         let svc = make_service().await;
         let err = svc
             .login(LoginInput {
@@ -741,7 +792,6 @@ mod tests {
 
     #[tokio::test]
     async fn login_suspended_user_returns_generic_invalid_credentials() {
-
         let (svc, repo) = make_service_with_repo().await;
         svc.register(RegisterInput {
             username: "alice".into(),
@@ -820,7 +870,6 @@ mod tests {
 
     #[tokio::test]
     async fn login_always_calls_verify_for_constant_time() {
-
         let verify_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let count_for_hasher = verify_count.clone();
         let hasher: Arc<dyn PasswordHasherPort> = Arc::new(CountingHasher {
@@ -992,7 +1041,6 @@ mod tests {
 
     #[tokio::test]
     async fn login_without_ip_skips_rate_limit_check() {
-
         let audit = Arc::new(crate::audit::TestAuditLogger::default());
         let repo: Arc<dyn UserRepository> = Arc::new(MockUserRepository::default());
         let settings = kokkak_common::config::AuthSettings {
@@ -1032,7 +1080,6 @@ mod tests {
 
     #[tokio::test]
     async fn successful_login_resets_rate_limit_counter() {
-
         let audit = Arc::new(crate::audit::TestAuditLogger::default());
         let repo: Arc<dyn UserRepository> = Arc::new(MockUserRepository::default());
         let settings = kokkak_common::config::AuthSettings {
@@ -1086,7 +1133,6 @@ mod tests {
     }
 
     impl MockUserRepository {
-
         fn update_status(&self, username: &str, status: UserStatus) {
             let key = username.trim().to_lowercase();
             let id = {

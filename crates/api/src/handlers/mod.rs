@@ -5,6 +5,7 @@ pub mod category_job_main;
 pub mod category_job_service_main;
 pub mod category_job_service_sub;
 pub mod category_job_service_sub_fee;
+pub mod category_job_service_sub_warranty;
 pub mod chat;
 pub mod health;
 pub mod master;

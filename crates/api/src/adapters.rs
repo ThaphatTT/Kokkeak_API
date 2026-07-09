@@ -1,5 +1,3 @@
-
-
 use std::sync::Arc;
 
 use kokkak_application::auth::{JwtIssuerPort, PasswordHasherPort};
@@ -54,7 +52,7 @@ impl JwtIssuerPort for JwtIssuerAdapter {
         user_id: Uuid,
         roles: &[Role],
         scope: &str,
-    ) -> Result<String, AuthError> {
+    ) -> Result<(String, String), AuthError> {
         self.inner.issue_access(user_id, roles, scope)
     }
     fn issue_refresh(
@@ -62,7 +60,7 @@ impl JwtIssuerPort for JwtIssuerAdapter {
         user_id: Uuid,
         roles: &[Role],
         scope: &str,
-    ) -> Result<String, AuthError> {
+    ) -> Result<(String, String), AuthError> {
         self.inner.issue_refresh(user_id, roles, scope)
     }
     fn verify(&self, token: &str) -> Result<Claims, AuthError> {

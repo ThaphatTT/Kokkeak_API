@@ -27,6 +27,7 @@ use kokkak_application::category_job_main::CategoryJobMainService;
 use kokkak_application::category_job_service_main::CategoryJobServiceMainService;
 use kokkak_application::category_job_service_sub::CategoryJobServiceSubService;
 use kokkak_application::category_job_service_sub_fee::CategoryJobServiceSubFeeService;
+use kokkak_application::category_job_service_sub_warranty::CategoryJobServiceSubWarrantyService;
 use kokkak_application::chat::{BroadcastTransport, ChatService, ChatTransport};
 use kokkak_application::master::MasterDropdownService;
 use kokkak_application::order::OrderService;
@@ -275,6 +276,75 @@ impl kokkak_domain::CategoryJobServiceSubFeeRepository
                     .into(),
             ))
     }
+    async fn delete(
+        &self,
+        _input: &kokkak_domain::CategoryJobServiceSubFeeDeleteInput,
+    ) -> Result<kokkak_domain::CategoryJobServiceSubFeeDeleteResult, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+                "category_job_service_sub_fee repo not wired in build_app_state (set KOKKAK_DATABASE__SQLSERVER_URL)"
+                    .into(),
+            ))
+    }
+    async fn autocomplete(
+        &self,
+        _input: &kokkak_domain::CategoryJobServiceSubFeeAutocompleteInput,
+    ) -> Result<Vec<kokkak_domain::CategoryJobServiceSubFeeAutocompleteRow>, kokkak_domain::RepoError>
+    {
+        Err(kokkak_domain::RepoError::Backend(
+                "category_job_service_sub_fee repo not wired in build_app_state (set KOKKAK_DATABASE__SQLSERVER_URL)"
+                    .into(),
+            ))
+    }
+}
+
+struct MssqlCategoryJobServiceSubWarrantyRepositoryNoop;
+
+#[async_trait::async_trait]
+impl kokkak_domain::CategoryJobServiceSubWarrantyRepository
+    for MssqlCategoryJobServiceSubWarrantyRepositoryNoop
+{
+    async fn list(
+        &self,
+        _input: &kokkak_domain::CategoryJobServiceSubWarrantyListInput,
+    ) -> Result<kokkak_domain::CategoryJobServiceSubWarrantyPage, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_service_sub_warranty repo not wired in build_app_state (set KOKKAK_DATABASE__SQLSERVER_URL)"
+                .into(),
+        ))
+    }
+
+    async fn create(
+        &self,
+        _input: &kokkak_domain::CategoryJobServiceSubWarrantyCreateInput,
+    ) -> Result<kokkak_domain::CategoryJobServiceSubWarrantyCreateResult, kokkak_domain::RepoError>
+    {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_service_sub_warranty repo not wired in build_app_state (set KOKKAK_DATABASE__SQLSERVER_URL)"
+                .into(),
+        ))
+    }
+
+    async fn update(
+        &self,
+        _input: &kokkak_domain::CategoryJobServiceSubWarrantyUpdateInput,
+    ) -> Result<kokkak_domain::CategoryJobServiceSubWarrantyUpdateResult, kokkak_domain::RepoError>
+    {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_service_sub_warranty repo not wired in build_app_state (set KOKKAK_DATABASE__SQLSERVER_URL)"
+                .into(),
+        ))
+    }
+
+    async fn delete(
+        &self,
+        _input: &kokkak_domain::CategoryJobServiceSubWarrantyDeleteInput,
+    ) -> Result<kokkak_domain::CategoryJobServiceSubWarrantyDeleteResult, kokkak_domain::RepoError>
+    {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_service_sub_warranty repo not wired in build_app_state (set KOKKAK_DATABASE__SQLSERVER_URL)"
+                .into(),
+        ))
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -287,6 +357,7 @@ pub fn build_app_state_with(
     public_base_url: Arc<str>,
     signed_url_secret: Arc<str>,
     signed_url_ttl_secs: u32,
+    redis_pool: Option<deadpool_redis::Pool>,
 ) -> AppState {
     let audit: Arc<dyn AuditLogger> = match build_audit_logger() {
         Ok(l) => Arc::new(l),
@@ -302,10 +373,18 @@ pub fn build_app_state_with(
 
     let login_rl: Arc<dyn LoginRateLimiter> = Arc::new(InMemoryLoginRateLimiter::new());
 
+    let session_store: Arc<dyn kokkak_domain::SessionStore> = match redis_pool {
+        Some(pool) => Arc::new(kokkak_infra::auth::session_store::RedisSessionStore::new(
+            pool,
+        )),
+        None => Arc::new(kokkak_domain::NoopSessionStore),
+    };
+
     let auth = Arc::new(AuthService::new(
         bundle.users.clone(),
         Arc::new(PasswordHasherAdapter::new()),
         Arc::new(JwtIssuerAdapter::new(jwt.clone())),
+        session_store,
         audit,
         login_rl,
     ));
@@ -324,6 +403,9 @@ pub fn build_app_state_with(
     ));
     let category_job_service_sub_fee = Arc::new(CategoryJobServiceSubFeeService::new(
         bundle.category_job_service_sub_fee.clone(),
+    ));
+    let category_job_service_sub_warranty = Arc::new(CategoryJobServiceSubWarrantyService::new(
+        bundle.category_job_service_sub_warranty.clone(),
     ));
     let orders = Arc::new(OrderService::new(bundle.orders.clone()));
     let local: Arc<BroadcastTransport> = Arc::new(BroadcastTransport::default());
@@ -392,6 +474,7 @@ pub fn build_app_state_with(
         category_job_service_main,
         category_job_service_sub,
         category_job_service_sub_fee,
+        category_job_service_sub_warranty,
         master,
         orders,
         chat,
@@ -451,6 +534,9 @@ pub fn build_app_state(
         category_job_service_main: Arc::new(MssqlCategoryJobServiceMainRepositoryNoop),
         category_job_service_sub: Arc::new(MssqlCategoryJobServiceSubRepositoryNoop),
         category_job_service_sub_fee: Arc::new(MssqlCategoryJobServiceSubFeeRepositoryNoop),
+        category_job_service_sub_warranty: Arc::new(
+            MssqlCategoryJobServiceSubWarrantyRepositoryNoop,
+        ),
         mssql_pool: backend_marker,
         topology: None,
     };
@@ -463,6 +549,7 @@ pub fn build_app_state(
         Arc::from(""),
         Arc::from(""),
         600,
+        None,
     )
 }
 
@@ -497,6 +584,9 @@ pub fn build_app_state_json(
         category_job_service_main: Arc::new(MssqlCategoryJobServiceMainRepositoryNoop),
         category_job_service_sub: Arc::new(MssqlCategoryJobServiceSubRepositoryNoop),
         category_job_service_sub_fee: Arc::new(MssqlCategoryJobServiceSubFeeRepositoryNoop),
+        category_job_service_sub_warranty: Arc::new(
+            MssqlCategoryJobServiceSubWarrantyRepositoryNoop,
+        ),
         mssql_pool: backend_marker,
         topology: None,
     };
@@ -511,5 +601,6 @@ pub fn build_app_state_json(
         Arc::from(""),
         Arc::from(""),
         600,
+        None,
     )
 }

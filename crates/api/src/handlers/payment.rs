@@ -1,5 +1,3 @@
-
-
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -16,7 +14,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::middleware::auth::{assert_role, AuthnUser};
+use crate::middleware::auth::{assert_role, assert_scope, AuthnUser};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -339,7 +337,7 @@ pub struct ListPayoutsQuery {
 
 #[utoipa::path(
     get,
-    path = "/api/v1/admin/payouts",
+    path = "/api/v1/payouts",
     tag = "admin",
     params(ListPayoutsQuery),
     responses(
@@ -355,6 +353,7 @@ pub async fn list_payouts_admin(
     Query(q): Query<ListPayoutsQuery>,
 ) -> Result<Response, Response> {
     let locale = current_locale();
+    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(Permission::FinanceExport, &state.permission_checker)
@@ -396,7 +395,7 @@ pub async fn list_payouts_admin(
 
 #[utoipa::path(
     post,
-    path = "/api/v1/admin/payouts/{id}/pay",
+    path = "/api/v1/payouts/{id}/pay",
     tag = "admin",
     params(
         ("id" = Uuid, Path, description = "Payout id"),
@@ -415,6 +414,7 @@ pub async fn mark_payout_paid_admin(
     Path(id): Path<Uuid>,
 ) -> Result<Response, Response> {
     let locale = current_locale();
+    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(Permission::FinanceEscrowRelease, &state.permission_checker)

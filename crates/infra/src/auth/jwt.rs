@@ -1,5 +1,3 @@
-
-
 use chrono::Utc;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use uuid::Uuid;
@@ -28,7 +26,6 @@ impl std::fmt::Debug for JwtService {
 }
 
 impl JwtService {
-
     pub fn new(settings: &AuthSettings) -> Result<Self, AuthError> {
         if settings.jwt_secret.is_empty() {
             return Err(AuthError::Backend(
@@ -50,7 +47,7 @@ impl JwtService {
         user_id: Uuid,
         roles: &[Role],
         scope: &str,
-    ) -> Result<String, AuthError> {
+    ) -> Result<(String, String), AuthError> {
         self.issue(
             user_id,
             roles,
@@ -65,7 +62,7 @@ impl JwtService {
         user_id: Uuid,
         roles: &[Role],
         scope: &str,
-    ) -> Result<String, AuthError> {
+    ) -> Result<(String, String), AuthError> {
         self.issue(
             user_id,
             roles,
@@ -82,8 +79,9 @@ impl JwtService {
         scope: &str,
         kind: TokenKind,
         ttl_secs: i64,
-    ) -> Result<String, AuthError> {
+    ) -> Result<(String, String), AuthError> {
         let now = Utc::now().timestamp();
+        let jti = Uuid::new_v4().to_string();
         let claims = Claims {
             sub: user_id,
             iss: self.issuer.clone(),
@@ -92,13 +90,15 @@ impl JwtService {
             kind,
             roles: roles.to_vec(),
             scope: scope.to_string(),
+            jti: jti.clone(),
         };
-        encode(
+        let token = encode(
             &Header::new(jsonwebtoken::Algorithm::HS256),
             &claims,
             &self.encoding,
         )
-        .map_err(|e| AuthError::Backend(format!("jwt encode: {e}")))
+        .map_err(|e| AuthError::Backend(format!("jwt encode: {e}")))?;
+        Ok((token, jti))
     }
 
     pub fn verify(&self, token: &str) -> Result<Claims, AuthError> {
@@ -151,14 +151,16 @@ mod tests {
         let s = settings("test-secret-please-change-me");
         let svc = JwtService::new(&s).unwrap();
         let user_id = Uuid::new_v4();
-        let token = svc
+        let (token, jti) = svc
             .issue_access(user_id, &[Role::Customer], "mobile")
             .unwrap();
+        assert!(!jti.is_empty());
         let claims = svc.verify(&token).unwrap();
         assert_eq!(claims.sub, user_id);
         assert_eq!(claims.kind, TokenKind::Access);
         assert_eq!(claims.scope, "mobile");
         assert_eq!(claims.roles, vec![Role::Customer]);
+        assert_eq!(claims.jti, jti);
     }
 
     #[test]
@@ -166,8 +168,8 @@ mod tests {
         let s = settings("test-secret-please-change-me");
         let svc = JwtService::new(&s).unwrap();
         let user_id = Uuid::new_v4();
-        let access = svc.issue_access(user_id, &[Role::Admin], "admin").unwrap();
-        let refresh = svc.issue_refresh(user_id, &[Role::Admin], "admin").unwrap();
+        let (access, _) = svc.issue_access(user_id, &[Role::Admin], "admin").unwrap();
+        let (refresh, _) = svc.issue_refresh(user_id, &[Role::Admin], "admin").unwrap();
         let a = svc.verify(&access).unwrap();
         let r = svc.verify(&refresh).unwrap();
         assert_eq!(a.kind, TokenKind::Access);
@@ -178,7 +180,7 @@ mod tests {
     fn tampered_token_fails() {
         let s = settings("test-secret-please-change-me");
         let svc = JwtService::new(&s).unwrap();
-        let token = svc
+        let (token, _) = svc
             .issue_access(Uuid::new_v4(), &[Role::Customer], "x")
             .unwrap();
         let mut tampered = token.clone();
@@ -198,7 +200,7 @@ mod tests {
         };
         let svc1 = JwtService::new(&s1).unwrap();
         let svc2 = JwtService::new(&s2).unwrap();
-        let token = svc1
+        let (token, _) = svc1
             .issue_access(Uuid::new_v4(), &[Role::Customer], "x")
             .unwrap();
         let err = svc2.verify(&token).unwrap_err();

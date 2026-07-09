@@ -1,5 +1,3 @@
-
-
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -17,12 +15,11 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::error::{ApiError, IntoLocalizedResponse};
-use crate::middleware::auth::AuthnUser;
+use crate::middleware::auth::{assert_scope, AuthnUser};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct ListUsersQuery {
-
     pub after: Option<String>,
 
     pub limit: Option<u32>,
@@ -33,12 +30,13 @@ pub async fn list_users_permission(
     user: AuthnUser,
     Query(q): Query<ListUsersQuery>,
 ) -> Result<Response, Response> {
+    let locale = current_locale();
+    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(Permission::PagePermissionsView, &state.permission_checker)
         .await
     {
-        let locale = current_locale();
         let code_str = Permission::PagePermissionsView.code();
         let localized = tr("err_auth.permission_denied", &locale, &[code_str]);
         return Err(ApiError::from(AppError::Localized {
@@ -73,12 +71,13 @@ pub async fn list_user_permissions_permission(
     user: AuthnUser,
     Path(guid): Path<Uuid>,
 ) -> Result<Response, Response> {
+    let locale = current_locale();
+    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(Permission::PagePermissionsView, &state.permission_checker)
         .await
     {
-        let locale = current_locale();
         let code_str = Permission::PagePermissionsView.code();
         let localized = tr("err_auth.permission_denied", &locale, &[code_str]);
         return Err(ApiError::from(AppError::Localized {
@@ -122,14 +121,12 @@ pub const MAX_BULK_PERMISSION_OVERRIDE_UPDATES: usize = 500;
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct UpdatePermissionOverridesRequest {
-
     #[serde(default)]
     pub items: Vec<PermissionOverrideUpdateItem>,
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct UpdatePermissionOverridesResponse {
-
     pub total: usize,
 
     pub updated: usize,
@@ -160,12 +157,13 @@ pub async fn update_permission_overrides(
     user: AuthnUser,
     Json(req): Json<UpdatePermissionOverridesRequest>,
 ) -> Result<Response, Response> {
+    let locale = current_locale();
+    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(Permission::PermissionsUpdate, &state.permission_checker)
         .await
     {
-        let locale = current_locale();
         let code_str = Permission::PermissionsUpdate.code();
         let localized = tr("err_auth.permission_denied", &locale, &[code_str]);
         return Err(ApiError::from(AppError::Localized {

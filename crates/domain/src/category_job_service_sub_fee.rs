@@ -95,6 +95,10 @@ impl CategoryJobServiceSubFeeError {
     pub const CODE_HEADER_TOO_LONG: &'static str = "HEADER_TOO_LONG";
 
     pub const CODE_UPDATE_ERROR: &'static str = "UPDATE_ERROR";
+
+    pub const CODE_DELETE_SUCCESS: &'static str = "DELETE_SUCCESS";
+
+    pub const CODE_DELETE_ERROR: &'static str = "DELETE_ERROR";
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -193,6 +197,61 @@ pub struct CategoryJobServiceSubFeeUpdateResult {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category_job_service_sub_fee_guid: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CategoryJobServiceSubFeeDeleteInput {
+    pub category_job_service_sub_fee_guid: String,
+
+    pub update_by: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CategoryJobServiceSubFeeDeleteResult {
+    pub success: bool,
+
+    pub code: String,
+
+    pub message: String,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category_job_service_sub_fee_guid: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CategoryJobServiceSubFeeAutocompleteInput {
+    pub category_job_service_sub_fee_guid: Option<String>,
+
+    pub keyword: Option<String>,
+
+    pub status: Option<i32>,
+
+    pub locale: Option<String>,
+
+    pub limit: Option<i32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CategoryJobServiceSubFeeAutocompleteRow {
+    pub category_job_service_sub_fee_guid: String,
+
+    pub category_job_service_sub_fee_header: String,
+
+    pub category_job_service_sub_fee_description: String,
+
+    pub category_job_service_sub_fee_price: Decimal,
+
+    pub category_job_service_sub_fee_status: i32,
+
+    pub category_job_service_sub_fee_icon: String,
+
+    pub value: String,
+
+    pub label: String,
 }
 
 #[cfg(test)]

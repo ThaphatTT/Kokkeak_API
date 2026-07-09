@@ -1,5 +1,3 @@
-
-
 use kokkak_api::openapi::ApiDoc;
 use std::collections::BTreeMap;
 use utoipa::openapi::path::PathItemType;
@@ -17,7 +15,6 @@ async fn spec_root_conforms_to_openapi_3() {
 
 #[tokio::test]
 async fn spec_documents_all_critical_paths() {
-
     let spec = ApiDoc::openapi();
     let paths: Vec<&str> = spec.paths.paths.keys().map(|s| s.as_str()).collect();
 
@@ -35,9 +32,9 @@ async fn spec_documents_all_critical_paths() {
         "/api/v1/orders/assigned",
         "/api/v1/payments",
         "/api/v1/payments/me",
-        "/api/v1/admin/users",
-        "/api/v1/admin/users/{guid}/permissions",
-        "/api/v1/admin/payouts",
+        "/api/v1/users",
+        "/api/v1/users/{guid}/permissions",
+        "/api/v1/payouts",
     ] {
         assert!(
             paths.contains(&required),
@@ -48,7 +45,6 @@ async fn spec_documents_all_critical_paths() {
 
 #[tokio::test]
 async fn spec_documents_idempotency_key_header_on_protected_posts() {
-
     let spec = ApiDoc::openapi();
     for path in [
         "/api/v1/orders",
@@ -74,7 +70,6 @@ async fn spec_documents_idempotency_key_header_on_protected_posts() {
 
 #[tokio::test]
 async fn spec_documents_bearer_auth() {
-
     let spec = ApiDoc::openapi();
     let schemes: BTreeMap<String, _> = spec
         .components
@@ -89,7 +84,6 @@ async fn spec_documents_bearer_auth() {
 
 #[tokio::test]
 async fn spec_documents_domain_entities() {
-
     let spec = ApiDoc::openapi();
     let schemas: BTreeMap<String, _> = spec
         .components
@@ -121,7 +115,6 @@ async fn spec_documents_domain_entities() {
 
 #[tokio::test]
 async fn spec_documents_error_envelope() {
-
     let spec = ApiDoc::openapi();
     let schemas: BTreeMap<String, _> = spec
         .components
@@ -140,7 +133,6 @@ async fn spec_documents_error_envelope() {
 
 #[tokio::test]
 async fn error_codes_catalog_includes_all_published_codes() {
-
     use kokkak_api::openapi::error_codes_catalog;
 
     let catalog = error_codes_catalog();
@@ -169,7 +161,6 @@ async fn error_codes_catalog_status_matches_semantics() {
     use kokkak_api::openapi::error_codes_catalog;
     let catalog = error_codes_catalog();
     for entry in catalog {
-
         let valid_range = (400..500).contains(&entry.status) || (500..600).contains(&entry.status);
         assert!(
             valid_range,

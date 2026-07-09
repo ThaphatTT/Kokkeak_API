@@ -9,7 +9,7 @@ use kokkak_common::response::{created, ok, ApiResponse};
 use kokkak_domain::LocalizedError;
 use serde::{Deserialize, Serialize};
 
-use crate::middleware::auth::AuthnUser;
+use crate::middleware::auth::{assert_scope, AuthnUser};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
@@ -36,6 +36,24 @@ pub struct ListCategoryJobServiceSubFeeQuery {
     pub page_size: Option<u32>,
 }
 
+#[derive(Debug, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
+pub struct AutocompleteCategoryJobServiceSubFeeQuery {
+    #[serde(default)]
+    pub category_job_service_sub_fee_guid: Option<String>,
+
+    #[serde(default)]
+    pub keyword: Option<String>,
+
+    #[serde(default)]
+    pub status: Option<i32>,
+
+    #[serde(default)]
+    pub locale: Option<String>,
+
+    #[serde(default)]
+    pub limit: Option<i32>,
+}
+
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct ListCategoryJobServiceSubFeeMeta {
     pub total_count: i64,
@@ -58,7 +76,7 @@ pub struct ListCategoryJobServiceSubFeeResponse {
 
 #[utoipa::path(
     get,
-    path = "/api/v1/admin/category-job-service-sub-fees",
+    path = "/api/v1/category-job-service-sub-fees",
     tag = "category-job-service-sub-fee",
     params(ListCategoryJobServiceSubFeeQuery),
     responses(
@@ -73,6 +91,9 @@ pub async fn list_category_job_service_sub_fees_admin(
     user: AuthnUser,
     Query(q): Query<ListCategoryJobServiceSubFeeQuery>,
 ) -> Result<Response, Response> {
+    let locale = current_locale();
+    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+
     if !user
         .has_permission(
             kokkak_domain::Permission::PageServiceView,
@@ -124,6 +145,81 @@ pub async fn list_category_job_service_sub_fees_admin(
         },
     };
     Ok((StatusCode::OK, ok(resp)).into_response())
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/category-job-service-sub-fees/autocomplete",
+    tag = "category-job-service-sub-fee",
+    params(AutocompleteCategoryJobServiceSubFeeQuery),
+    responses(
+        (status = 200, description = "Sub-service fee autocomplete rows", body = Vec<kokkak_domain::CategoryJobServiceSubFeeAutocompleteRow>),
+        (status = 401, description = "Not authenticated", body = crate::openapi::ApiError),
+        (status = 422, description = "Validation error", body = crate::openapi::ApiError),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn autocomplete_category_job_service_sub_fees(
+    State(state): State<AppState>,
+    Query(q): Query<AutocompleteCategoryJobServiceSubFeeQuery>,
+) -> Result<Response, Response> {
+    if let Some(locale) = q.locale.as_deref() {
+        let normalized = locale.to_ascii_lowercase();
+        if !matches!(normalized.as_str(), "la" | "lo" | "en" | "th" | "zh") {
+            return Err(validation_envelope(
+                &state,
+                "locale must be one of: th, en, la, lo, zh",
+            ));
+        }
+    }
+    if let Some(s) = q.status {
+        if !matches!(s, 0 | 1) {
+            return Err(validation_envelope(&state, "status must be 0 or 1"));
+        }
+    }
+    if let Some(l) = q.limit {
+        if !(1..=100).contains(&l) {
+            return Err(validation_envelope(
+                &state,
+                "limit must be between 1 and 100",
+            ));
+        }
+    }
+
+    let locale = q.locale.clone().or_else(|| Some(current_locale()));
+
+    let input = kokkak_domain::CategoryJobServiceSubFeeAutocompleteInput {
+        category_job_service_sub_fee_guid: q
+            .category_job_service_sub_fee_guid
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        keyword: q
+            .keyword
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        status: q.status,
+        locale,
+        limit: q.limit,
+    };
+
+    let rows = match state.category_job_service_sub_fee.autocomplete(input).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "category_job_service_sub_fee.autocomplete failed");
+            return Err(repo_error_to_response(&state, e).await);
+        }
+    };
+
+    Ok((
+        StatusCode::OK,
+        Json(ApiResponse {
+            success: true,
+            data: Some(rows),
+            error: None,
+            meta: None,
+        }),
+    )
+        .into_response())
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -184,7 +280,7 @@ impl CreateCategoryJobServiceSubFeeRequest {
 
 #[utoipa::path(
     post,
-    path = "/api/v1/admin/category-job-service-sub-fees",
+    path = "/api/v1/category-job-service-sub-fees",
     tag = "category-job-service-sub-fee",
     request_body = CreateCategoryJobServiceSubFeeRequest,
     responses(
@@ -202,6 +298,9 @@ pub async fn create_category_job_service_sub_fee_admin(
     user: AuthnUser,
     Json(req): Json<CreateCategoryJobServiceSubFeeRequest>,
 ) -> Result<Response, Response> {
+    let locale = current_locale();
+    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+
     if !user
         .has_permission(
             kokkak_domain::Permission::ServiceCreate,
@@ -269,7 +368,7 @@ pub async fn create_category_job_service_sub_fee_admin(
         return Ok((StatusCode::CREATED, created(result)).into_response());
     }
 
-    let (status, code_str) = match result.code.as_str() {
+    let (status, _code_str) = match result.code.as_str() {
         "DUPLICATE_GUID" => (StatusCode::CONFLICT, "conflict"),
         _ => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
     };
@@ -362,7 +461,7 @@ impl UpdateCategoryJobServiceSubFeeRequest {
 
 #[utoipa::path(
         put,
-        path = "/api/v1/admin/category-job-service-sub-fees/{guid}",
+        path = "/api/v1/category-job-service-sub-fees/{guid}",
         tag = "category-job-service-sub-fee",
         params(
             ("guid" = String, Path, description = "Category Job Service Sub Fee GUID (UUID)"),
@@ -384,6 +483,9 @@ pub async fn update_category_job_service_sub_fee_admin(
     Path(guid): Path<String>,
     Json(req): Json<UpdateCategoryJobServiceSubFeeRequest>,
 ) -> Result<Response, Response> {
+    let locale = current_locale();
+    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+
     if !user
         .has_permission(
             kokkak_domain::Permission::ServiceUpdate,
@@ -487,6 +589,69 @@ pub async fn update_category_job_service_sub_fee_admin(
         "INVALID_STATUS" | "INVALID_PRICE" | "PRICE_OUT_OF_RANGE" | "HEADER_TOO_LONG" => {
             StatusCode::UNPROCESSABLE_ENTITY
         }
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    let envelope: ApiResponse<()> = ApiResponse {
+        success: false,
+        data: None,
+        error: Some(kokkak_common::error::ApiErrorBody {
+            code: result.code.clone(),
+            message: result.message.clone(),
+        }),
+        meta: None,
+    };
+    Ok((status, Json(envelope)).into_response())
+}
+
+pub async fn delete_category_job_service_sub_fee_admin(
+    State(state): State<AppState>,
+    user: AuthnUser,
+    Path(guid): Path<String>,
+) -> Result<Response, Response> {
+    let locale = current_locale();
+    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+
+    if !user
+        .has_permission(
+            kokkak_domain::Permission::ServiceDelete,
+            &state.permission_checker,
+        )
+        .await
+    {
+        return Err(permission_denied(
+            &state,
+            kokkak_domain::Permission::ServiceDelete.code(),
+        ));
+    }
+
+    let guid = guid.trim().to_string();
+    if guid.is_empty() {
+        return Err(validation_envelope(
+            &state,
+            "category_job_service_sub_fee_guid is required",
+        ));
+    }
+
+    let actor = user.id().to_string();
+    let input = kokkak_domain::CategoryJobServiceSubFeeDeleteInput {
+        category_job_service_sub_fee_guid: guid,
+        update_by: actor,
+    };
+
+    let result = match state.category_job_service_sub_fee.delete(input).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "category_job_service_sub_fee.delete failed");
+            return Err(repo_error_to_response(&state, e).await);
+        }
+    };
+
+    if result.success {
+        return Ok((StatusCode::OK, ok(result)).into_response());
+    }
+
+    let status = match result.code.as_str() {
+        "NOT_FOUND" | "GUID_REQUIRED" => StatusCode::NOT_FOUND,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
     let envelope: ApiResponse<()> = ApiResponse {

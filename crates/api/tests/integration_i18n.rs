@@ -109,6 +109,7 @@ async fn make_app() -> (axum::Router, Arc<MssqlTranslationRepository>) {
         Arc::from(""),
         Arc::from(""),
         600,
+        None,
     );
     let app = build_router(state);
     (app, repo)

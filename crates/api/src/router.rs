@@ -38,7 +38,15 @@ pub fn build(state: AppState) -> Router {
     let auth_routes = Router::new()
         .route("/api/v1/auth/login", post(handlers::auth::login))
         .route("/api/v1/auth/refresh", post(handlers::auth::refresh))
+        .layer(from_fn(auth_flag(Arc::new(state.clone()))));
+
+    let auth_protected_routes = Router::new()
         .route("/api/v1/auth/logout", post(handlers::auth::logout))
+        .route("/api/v1/auth/sessions", get(handlers::auth::list_sessions))
+        .route(
+            "/api/v1/auth/sessions/{jti}",
+            axum::routing::delete(handlers::auth::revoke_session),
+        )
         .layer(from_fn(auth_flag(Arc::new(state.clone()))));
 
     let protected_routes = Router::new()
@@ -82,6 +90,14 @@ pub fn build(state: AppState) -> Router {
         .route(
             "/api/v1/category-job-service-subs/:sub_guid/images",
             get(handlers::category_job_service_sub::list_category_job_service_sub_images),
+        )
+        .route(
+            "/api/v1/category-job-service-sub-fees/autocomplete",
+            get(handlers::category_job_service_sub_fee::autocomplete_category_job_service_sub_fees),
+        )
+        .route(
+            "/api/v1/category-job-service-sub-warranties",
+            get(handlers::category_job_service_sub_warranty::list_category_job_service_sub_warranties),
         )
         .route(
             "/api/v1/master/countries",
@@ -136,100 +152,93 @@ pub fn build(state: AppState) -> Router {
         )
         .layer(from_fn(payments_flag(Arc::new(state.clone()))));
 
-    let admin_payout_routes = Router::new()
+    let admin_routes = Router::new()
         .route(
-            "/api/v1/admin/payouts",
+            "/api/v1/payouts",
             get(handlers::payment::list_payouts_admin),
         )
         .route(
-            "/api/v1/admin/payouts/:id/pay",
+            "/api/v1/payouts/:id/pay",
             post(handlers::payment::mark_payout_paid_admin),
         )
-        .layer(from_fn(admin_flag(Arc::new(state.clone()))));
-
-    let admin_category_job_main_routes = Router::new()
         .route(
-            "/api/v1/admin/category-job-mains",
+            "/api/v1/category-job-mains",
             post(handlers::category_job_main::create_category_job_main_admin),
         )
         .route(
-            "/api/v1/admin/category-job-mains/:guid",
+            "/api/v1/category-job-mains/:guid",
             put(handlers::category_job_main::update_category_job_main_admin)
                 .delete(handlers::category_job_main::delete_category_job_main_admin),
         )
-        .layer(from_fn(admin_flag(Arc::new(state.clone()))));
-
-    let admin_category_job_service_main_routes = Router::new()
         .route(
-            "/api/v1/admin/category-job-services",
+            "/api/v1/category-job-services",
             post(handlers::category_job_service_main::create_category_job_service_main_admin),
         )
         .route(
-            "/api/v1/admin/category-job-services/:service_guid",
+            "/api/v1/category-job-services/:service_guid",
             put(handlers::category_job_service_main::update_category_job_service_main_admin)
                 .delete(
                     handlers::category_job_service_main::delete_category_job_service_main_admin,
                 ),
         )
-        .layer(from_fn(admin_flag(Arc::new(state.clone()))));
-
-    let admin_category_job_service_sub_routes = Router::new()
         .route(
-            "/api/v1/admin/category-job-service-subs",
+            "/api/v1/category-job-service-subs",
             post(handlers::category_job_service_sub::create_category_job_service_sub_admin),
         )
         .route(
-            "/api/v1/admin/category-job-service-subs/:sub_guid",
+            "/api/v1/category-job-service-subs/:sub_guid",
             put(handlers::category_job_service_sub::update_category_job_service_sub_admin)
                 .delete(handlers::category_job_service_sub::delete_category_job_service_sub_admin),
         )
-        .layer(from_fn(admin_flag(Arc::new(state.clone()))));
-
-    let admin_category_job_service_sub_fee_routes = Router::new()
         .route(
-            "/api/v1/admin/category-job-service-sub-fees",
+            "/api/v1/category-job-service-sub-fees",
             get(handlers::category_job_service_sub_fee::list_category_job_service_sub_fees_admin)
                 .post(
                 handlers::category_job_service_sub_fee::create_category_job_service_sub_fee_admin,
             ),
         )
         .route(
-            "/api/v1/admin/category-job-service-sub-fees/:guid",
-            put(handlers::category_job_service_sub_fee::update_category_job_service_sub_fee_admin),
+            "/api/v1/category-job-service-sub-fees/:guid",
+            put(handlers::category_job_service_sub_fee::update_category_job_service_sub_fee_admin)
+                .delete(
+                handlers::category_job_service_sub_fee::delete_category_job_service_sub_fee_admin,
+            ),
         )
-        .layer(from_fn(admin_flag(Arc::new(state.clone()))));
-
-    let admin_users_routes = Router::new()
         .route(
-            "/api/v1/admin/users",
+            "/api/v1/category-job-service-sub-warranties",
+            post(handlers::category_job_service_sub_warranty::create_category_job_service_sub_warranty_admin),
+        )
+        .route(
+            "/api/v1/category-job-service-sub-warranties/:guid",
+            put(handlers::category_job_service_sub_warranty::update_category_job_service_sub_warranty_admin)
+                .delete(
+                    handlers::category_job_service_sub_warranty::delete_category_job_service_sub_warranty_admin,
+                ),
+        )
+        .route(
+            "/api/v1/users",
             post(handlers::admin::create_user_admin).get(handlers::admin::list_users_admin),
         )
         .route(
-            "/api/v1/admin/users/full",
+            "/api/v1/users/full",
             post(handlers::admin::admin_insert_user_full),
         )
         .route(
-            "/api/v1/admin/users/:guid/permissions",
+            "/api/v1/users/:guid/permissions",
             get(handlers::admin::list_user_permissions_admin),
         )
         .route(
-            "/api/v1/admin/users/:guid/detail",
+            "/api/v1/users/:guid/detail",
             get(handlers::admin::get_user_detail_full_admin),
         )
         .route(
-            "/api/v1/admin/users/:guid/full",
+            "/api/v1/users/:guid/full",
             put(handlers::admin::admin_update_user_full),
         )
-        .layer(from_fn(admin_flag(Arc::new(state.clone()))));
-
-    let admin_permissions_routes = Router::new()
         .route(
-            "/api/v1/admin/permissions",
+            "/api/v1/permissions",
             get(handlers::admin::list_permissions).post(handlers::admin::update_permissions_admin),
         )
-        .layer(from_fn(admin_flag(Arc::new(state.clone()))));
-
-    let permission_page_routes = Router::new()
         .route(
             "/api/v1/permission/users",
             get(handlers::permission::list_users_permission),
@@ -247,17 +256,11 @@ pub fn build(state: AppState) -> Router {
     Router::new()
         .merge(health_routes)
         .merge(auth_routes)
+        .merge(auth_protected_routes)
         .merge(protected_routes)
         .merge(chat_routes)
         .merge(payment_routes)
-        .merge(admin_payout_routes)
-        .merge(admin_category_job_main_routes)
-        .merge(admin_category_job_service_main_routes)
-        .merge(admin_category_job_service_sub_routes)
-        .merge(admin_category_job_service_sub_fee_routes)
-        .merge(admin_users_routes)
-        .merge(admin_permissions_routes)
-        .merge(permission_page_routes)
+        .merge(admin_routes)
         .merge(idempotent_routes)
         .merge(openapi_routes::<AppState>(state.settings.environment))
         .with_state(state)

@@ -164,6 +164,24 @@ async fn run(settings: Settings) {
     );
 
     let settings_arc = Arc::new(settings.clone());
+
+    let session_redis_pool = if settings.redis.is_configured() {
+        let cfg = deadpool_redis::Config::from_url(&settings.redis.url);
+        match cfg.create_pool(Some(deadpool_redis::Runtime::Tokio1)) {
+            Ok(pool) => {
+                tracing::info!("session store: Redis-backed");
+                Some(pool)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "session store: Redis pool build failed — falling back to no-op");
+                None
+            }
+        }
+    } else {
+        tracing::info!("session store: no-op (KOKKAK_REDIS__URL not set)");
+        None
+    };
+
     let state = build_app_state_with(
         bundle,
         jwt,
@@ -173,6 +191,7 @@ async fn run(settings: Settings) {
         public_base_url.clone(),
         signed_url_secret.clone(),
         signed_url_ttl_secs,
+        session_redis_pool,
     );
 
     let mut app = build_router(state.clone()).route("/metrics", get(metrics_handler));

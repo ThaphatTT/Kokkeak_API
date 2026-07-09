@@ -1,5 +1,3 @@
-
-
 use axum::{
     extract::State,
     http::StatusCode,
@@ -18,11 +16,11 @@ use validator::Validate;
 
 use crate::error::{ApiError, IntoLocalizedResponse};
 use crate::extractors::{ClientIp, ValidatedJson};
+use crate::middleware::auth::AuthnUser;
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize, Validate, utoipa::ToSchema)]
 pub struct RegisterRequest {
-
     #[validate(length(min = 3, max = 64, message = "username must be 3-64 characters"))]
     pub username: String,
 
@@ -90,7 +88,6 @@ pub async fn register(
     State(state): State<AppState>,
     ValidatedJson(req): ValidatedJson<RegisterRequest>,
 ) -> Result<Response, Response> {
-
     apply_login_language(req.language.as_deref());
 
     let role = match parse_public_register_role(req.role.as_deref()) {
@@ -126,7 +123,6 @@ pub async fn register(
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum PublicRoleError {
-
     Restricted(Role),
 
     Unknown(String),
@@ -176,7 +172,6 @@ pub async fn login(
 
     ValidatedJson(req): ValidatedJson<LoginRequest>,
 ) -> Result<Response, Response> {
-
     apply_login_language(req.language.as_deref());
 
     let input = LoginInput {
@@ -212,11 +207,8 @@ fn parse_login_language(language: Option<&str>) -> Option<String> {
 
 #[derive(Debug, Deserialize, Validate, utoipa::ToSchema)]
 pub struct RefreshRequest {
-
     #[validate(length(min = 20, max = 4096, message = "refresh_token length invalid"))]
     pub refresh_token: String,
-    #[validate(length(max = 16, message = "scope must be 16 characters or fewer"))]
-    pub scope: Option<String>,
 
     #[validate(length(max = 8, message = "language must be 8 characters or fewer"))]
     pub language: Option<String>,
@@ -237,11 +229,9 @@ pub async fn refresh(
     State(state): State<AppState>,
     ValidatedJson(req): ValidatedJson<RefreshRequest>,
 ) -> Result<Response, Response> {
-
     apply_login_language(req.language.as_deref());
 
-    let scope = req.scope.unwrap_or_else(|| "mobile".into());
-    let outcome = match state.auth.refresh(&req.refresh_token, &scope).await {
+    let outcome = match state.auth.refresh(&req.refresh_token).await {
         Ok(o) => o,
         Err(e) => return Err(ApiError::from(e).into_localized_response(&state).await),
     };
@@ -261,9 +251,10 @@ pub struct LogoutResponse {
         (status = 200, description = "Logged out", body = LogoutResponse),
     )
 )]
-pub async fn logout() -> Response {
-
+pub async fn logout(State(state): State<AppState>, user: AuthnUser) -> Response {
     let _ = current_locale();
+    let jti = user.session().jti.clone();
+    let _ = state.auth.logout(user.id(), &jti).await;
     (
         StatusCode::OK,
         Json(ApiResponse {
@@ -274,6 +265,43 @@ pub async fn logout() -> Response {
         }),
     )
         .into_response()
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/auth/sessions",
+    tag = "auth",
+    responses(
+        (status = 200, description = "Active sessions", body = Vec<kokkak_domain::SessionInfo>),
+    )
+)]
+pub async fn list_sessions(State(state): State<AppState>, user: AuthnUser) -> Response {
+    let _ = current_locale();
+    match state.auth.list_sessions(user.id()).await {
+        Ok(sessions) => ok(sessions),
+        Err(e) => {
+            tracing::warn!(error = %e, "list_sessions failed");
+            ok(Vec::<kokkak_domain::SessionInfo>::new())
+        }
+    }
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/auth/sessions/{jti}",
+    tag = "auth",
+    responses(
+        (status = 200, description = "Session revoked", body = LogoutResponse),
+    )
+)]
+pub async fn revoke_session(
+    State(state): State<AppState>,
+    user: AuthnUser,
+    axum::extract::Path(jti): axum::extract::Path<String>,
+) -> Response {
+    let _ = current_locale();
+    let _ = state.auth.logout(user.id(), &jti).await;
+    ok(LogoutResponse { logged_out: true })
 }
 
 fn ok<T: Serialize>(data: T) -> Response {
@@ -413,7 +441,6 @@ mod tests {
 
     #[test]
     fn login_request_accepts_short_password_login() {
-
         assert!(valid_login().validate().is_ok());
     }
 
@@ -426,7 +453,6 @@ mod tests {
 
     #[test]
     fn login_request_accepts_language_codes_within_length() {
-
         for lang in ["th", "en", "lo", "zh", "en-US", "th-TH", "zh-CN"] {
             let mut r = valid_login();
             r.language = Some(lang.into());
@@ -443,7 +469,6 @@ mod tests {
 
     #[test]
     fn parse_login_language_accepts_supported_codes() {
-
         assert_eq!(parse_login_language(Some("th")), Some("th".into()));
         assert_eq!(parse_login_language(Some("en")), Some("en".into()));
         assert_eq!(parse_login_language(Some("lo")), Some("lo".into()));
@@ -460,7 +485,6 @@ mod tests {
 
     #[test]
     fn parse_login_language_rejects_unsupported_codes() {
-
         assert_eq!(parse_login_language(Some("fr")), None);
         assert_eq!(parse_login_language(Some("de")), None);
         assert_eq!(parse_login_language(Some("ja")), None);
@@ -470,9 +494,7 @@ mod tests {
 
     fn valid_refresh() -> RefreshRequest {
         RefreshRequest {
-
             refresh_token: "x".repeat(150),
-            scope: None,
             language: None,
         }
     }

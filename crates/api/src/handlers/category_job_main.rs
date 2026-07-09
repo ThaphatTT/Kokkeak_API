@@ -15,7 +15,7 @@ use kokkak_infra::image_processor::UserImageKind;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::middleware::auth::AuthnUser;
+use crate::middleware::auth::{assert_scope, AuthnUser};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
@@ -297,7 +297,7 @@ impl CreateCategoryJobMainRequest {
 
 #[utoipa::path(
     post,
-    path = "/api/v1/admin/category-job-mains",
+    path = "/api/v1/category-job-mains",
     tag = "admin",
     request_body = CreateCategoryJobMainRequest,
     responses(
@@ -316,6 +316,9 @@ pub async fn create_category_job_main_admin(
     user: AuthnUser,
     Json(req): Json<CreateCategoryJobMainRequest>,
 ) -> Result<Response, Response> {
+    let locale = current_locale();
+    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+
     if !user
         .has_permission(
             kokkak_domain::Permission::ServiceCreate,
@@ -404,7 +407,7 @@ impl UpdateCategoryJobMainRequest {
 
 #[utoipa::path(
     put,
-    path = "/api/v1/admin/category-job-mains/{guid}",
+    path = "/api/v1/category-job-mains/{guid}",
     tag = "admin",
     params(
         ("guid" = String, Path, description = "Category Job Main GUID (UUID)"),
@@ -427,6 +430,9 @@ pub async fn update_category_job_main_admin(
     Path(guid): Path<String>,
     Json(req): Json<UpdateCategoryJobMainRequest>,
 ) -> Result<Response, Response> {
+    let locale = current_locale();
+    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+
     if !user
         .has_permission(
             kokkak_domain::Permission::ServiceUpdate,
@@ -479,7 +485,7 @@ pub async fn update_category_job_main_admin(
 
 #[utoipa::path(
     delete,
-    path = "/api/v1/admin/category-job-mains/{guid}",
+    path = "/api/v1/category-job-mains/{guid}",
     tag = "admin",
     params(
         ("guid" = String, Path, description = "Category Job Main GUID (UUID)"),
@@ -497,6 +503,9 @@ pub async fn delete_category_job_main_admin(
     user: AuthnUser,
     Path(guid): Path<String>,
 ) -> Result<Response, Response> {
+    let locale = current_locale();
+    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+
     if !user
         .has_permission(
             kokkak_domain::Permission::ServiceDelete,

@@ -13,7 +13,7 @@ use kokkak_domain::{LocalizedError, RepoError, StorageKey};
 use kokkak_infra::image_processor::UserImageKind;
 use serde::{Deserialize, Serialize};
 
-use crate::middleware::auth::AuthnUser;
+use crate::middleware::auth::{assert_scope, AuthnUser};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
@@ -198,7 +198,7 @@ impl CreateCategoryJobServiceSubRequest {
 
 #[utoipa::path(
     post,
-    path = "/api/v1/admin/category-job-service-subs",
+    path = "/api/v1/category-job-service-subs",
     tag = "admin",
     request_body = CreateCategoryJobServiceSubRequest,
     responses(
@@ -217,6 +217,9 @@ pub async fn create_category_job_service_sub_admin(
     user: AuthnUser,
     Json(req): Json<CreateCategoryJobServiceSubRequest>,
 ) -> Result<Response, Response> {
+    let locale = current_locale();
+    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+
     if !user
         .has_permission(
             kokkak_domain::Permission::ServiceCreate,
@@ -362,7 +365,7 @@ impl UpdateCategoryJobServiceSubRequest {
 
 #[utoipa::path(
     put,
-    path = "/api/v1/admin/category-job-service-subs/{sub_guid}",
+    path = "/api/v1/category-job-service-subs/{sub_guid}",
     tag = "admin",
     params(
         ("sub_guid" = String, Path, description = "Category Job Service Sub GUID (UUID)"),
@@ -385,6 +388,9 @@ pub async fn update_category_job_service_sub_admin(
     Path(sub_guid): Path<String>,
     Json(req): Json<UpdateCategoryJobServiceSubRequest>,
 ) -> Result<Response, Response> {
+    let locale = current_locale();
+    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+
     if !user
         .has_permission(
             kokkak_domain::Permission::ServiceUpdate,
@@ -529,7 +535,7 @@ pub async fn update_category_job_service_sub_admin(
 
 #[utoipa::path(
     delete,
-    path = "/api/v1/admin/category-job-service-subs/{sub_guid}",
+    path = "/api/v1/category-job-service-subs/{sub_guid}",
     tag = "admin",
     params(
         ("sub_guid" = String, Path, description = "Category Job Service Sub GUID (UUID)"),
@@ -547,6 +553,9 @@ pub async fn delete_category_job_service_sub_admin(
     user: AuthnUser,
     Path(sub_guid): Path<String>,
 ) -> Result<Response, Response> {
+    let locale = current_locale();
+    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+
     if !user
         .has_permission(
             kokkak_domain::Permission::ServiceDelete,

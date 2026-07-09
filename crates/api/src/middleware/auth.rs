@@ -1,9 +1,11 @@
-
+use std::sync::Arc;
 
 use axum::{
     extract::FromRequestParts,
+    extract::Request,
     http::request::Parts,
     http::{header, StatusCode},
+    middleware::Next,
     response::{IntoResponse, Response},
     Json,
 };
@@ -20,7 +22,6 @@ use crate::state::AppState;
 pub struct AuthnUser(pub AuthSession);
 
 impl AuthnUser {
-
     pub fn session(&self) -> &AuthSession {
         &self.0
     }
@@ -35,6 +36,10 @@ impl AuthnUser {
 
     pub fn has_role(&self, role: Role) -> bool {
         self.0.has_role(role)
+    }
+
+    pub fn has_scope(&self, scope: &str) -> bool {
+        self.0.scope == scope
     }
 
     pub async fn has_permission(&self, code: Permission, checker: &PermissionChecker) -> bool {
@@ -99,6 +104,7 @@ impl FromRequestParts<AppState> for AuthnUser {
             roles: claims.roles,
             expires_at,
             scope: claims.scope,
+            jti: claims.jti,
         };
         Ok(AuthnUser(session))
     }
@@ -136,5 +142,67 @@ pub fn assert_role(user: &AuthnUser, role: Role, message: String) -> Result<(), 
         Ok(())
     } else {
         Err(forbidden(message))
+    }
+}
+
+pub fn assert_scope(user: &AuthnUser, scope: &str, message: String) -> Result<(), Response> {
+    if user.has_scope(scope) {
+        Ok(())
+    } else {
+        Err(forbidden(message))
+    }
+}
+
+pub fn require_scope(
+    state: Arc<AppState>,
+    required_scope: &'static str,
+) -> impl Fn(Request, Next) -> std::pin::Pin<Box<dyn std::future::Future<Output = Response> + Send>>
+       + Clone
+       + Send
+       + Sync
+       + 'static {
+    move |req, next| {
+        let state = state.clone();
+        Box::pin(async move {
+            let locale = current_locale();
+            let (mut parts, body) = req.into_parts();
+
+            let auth_header = parts
+                .headers
+                .get(header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok());
+            let token = match auth_header {
+                Some(s) if s.starts_with("Bearer ") => &s[7..],
+                _ => {
+                    return unauthorized(
+                        tr("err_auth.missing_header", &locale, &[]),
+                        "unauthorized",
+                    );
+                }
+            };
+
+            let claims = match state.jwt.verify(token) {
+                Ok(c) => c,
+                Err(AuthError::TokenExpired) => {
+                    return unauthorized(
+                        tr("err_auth.token_expired", &locale, &[]),
+                        "token_expired",
+                    );
+                }
+                Err(e) => {
+                    return unauthorized(
+                        tr("err_auth.invalid_token", &locale, &[&e.to_string()]),
+                        "invalid_token",
+                    );
+                }
+            };
+
+            if claims.scope != required_scope {
+                return forbidden(tr("err_auth.forbidden", &locale, &[]));
+            }
+
+            let req = Request::from_parts(parts, body);
+            next.run(req).await
+        })
     }
 }

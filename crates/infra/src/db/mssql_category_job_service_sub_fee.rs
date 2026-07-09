@@ -5,8 +5,10 @@ use tiberius::ToSql;
 use kokkak_domain::traits::category_job_service_sub_fee::CategoryJobServiceSubFeeRepository;
 use kokkak_domain::traits::user::RepoError;
 use kokkak_domain::{
-    CategoryJobServiceSubFeeAdminRow, CategoryJobServiceSubFeeCreateInput,
-    CategoryJobServiceSubFeeCreateResult, CategoryJobServiceSubFeeListInput,
+    CategoryJobServiceSubFeeAdminRow, CategoryJobServiceSubFeeAutocompleteInput,
+    CategoryJobServiceSubFeeAutocompleteRow, CategoryJobServiceSubFeeCreateInput,
+    CategoryJobServiceSubFeeCreateResult, CategoryJobServiceSubFeeDeleteInput,
+    CategoryJobServiceSubFeeDeleteResult, CategoryJobServiceSubFeeListInput,
     CategoryJobServiceSubFeePage, CategoryJobServiceSubFeeUpdateInput,
     CategoryJobServiceSubFeeUpdateResult,
 };
@@ -41,6 +43,43 @@ fn normalize_locale(raw: Option<&str>) -> String {
         };
     }
     "la".to_string()
+}
+
+fn row_to_fee_autocomplete_row(row: &tiberius::Row) -> CategoryJobServiceSubFeeAutocompleteRow {
+    let guid = read_str(row, "category_job_service_sub_fee_guid")
+        .unwrap_or("")
+        .to_string();
+    let header = read_str(row, "category_job_service_sub_fee_header")
+        .unwrap_or("")
+        .to_string();
+    let value = read_str(row, "value").unwrap_or("").to_string();
+    let label = read_str(row, "label").unwrap_or("").to_string();
+    CategoryJobServiceSubFeeAutocompleteRow {
+        category_job_service_sub_fee_guid: guid,
+        category_job_service_sub_fee_header: header.clone(),
+        category_job_service_sub_fee_description: read_str(
+            row,
+            "category_job_service_sub_fee_description",
+        )
+        .unwrap_or("")
+        .to_string(),
+        category_job_service_sub_fee_price: row
+            .get::<rust_decimal::Decimal, _>("category_job_service_sub_fee_price")
+            .unwrap_or(rust_decimal::Decimal::ZERO),
+        category_job_service_sub_fee_status: read_i32(row, "category_job_service_sub_fee_status")
+            .unwrap_or(0),
+        category_job_service_sub_fee_icon: read_str(row, "category_job_service_sub_fee_icon")
+            .unwrap_or("")
+            .to_string(),
+        value: if value.is_empty() {
+            read_str(row, "category_job_service_sub_fee_guid")
+                .unwrap_or("")
+                .to_string()
+        } else {
+            value
+        },
+        label: if label.is_empty() { header } else { label },
+    }
 }
 
 fn row_to_fee_row(row: &tiberius::Row) -> CategoryJobServiceSubFeeAdminRow {
@@ -319,5 +358,79 @@ impl CategoryJobServiceSubFeeRepository for MssqlCategoryJobServiceSubFeeReposit
             message,
             category_job_service_sub_fee_guid: out_guid,
         })
+    }
+
+    async fn delete(
+        &self,
+        input: &CategoryJobServiceSubFeeDeleteInput,
+    ) -> Result<CategoryJobServiceSubFeeDeleteResult, RepoError> {
+        let guid = input.category_job_service_sub_fee_guid.as_str();
+        let update_by: &str = input.update_by.as_str();
+
+        let params: &[&dyn ToSql] = &[&guid as &dyn ToSql, &update_by as &dyn ToSql];
+
+        let rows = exec_sp(
+            &self.pool,
+            "EXEC dbo.SP_CATEGORY_JOB_SERVICE_SUB_FEE_DELETE \
+                @p_category_job_service_sub_fee_guid = @P1, \
+                @p_update_by = @P2",
+            params,
+        )
+        .await?;
+
+        let row = rows.first().ok_or_else(|| {
+            RepoError::Backend(
+                "SP_CATEGORY_JOB_SERVICE_SUB_FEE_DELETE returned no result row".into(),
+            )
+        })?;
+
+        let success: bool = row.get::<bool, _>("success").unwrap_or(false);
+        let code = read_str(row, "code").unwrap_or("").to_string();
+        let message = read_str(row, "message").unwrap_or("").to_string();
+        let out_guid = read_str(row, "category_job_service_sub_fee_guid")
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+
+        Ok(CategoryJobServiceSubFeeDeleteResult {
+            success,
+            code,
+            message,
+            category_job_service_sub_fee_guid: out_guid,
+        })
+    }
+
+    async fn autocomplete(
+        &self,
+        input: &CategoryJobServiceSubFeeAutocompleteInput,
+    ) -> Result<Vec<CategoryJobServiceSubFeeAutocompleteRow>, RepoError> {
+        let guid = input
+            .category_job_service_sub_fee_guid
+            .as_deref()
+            .unwrap_or("");
+        let keyword: Option<&str> = input.keyword.as_deref();
+        let status: Option<i32> = input.status;
+        let locale_raw: Option<&str> = input.locale.as_deref();
+        let locale: String = normalize_locale(locale_raw);
+        let limit: Option<i32> = Some(input.limit.unwrap_or(20).clamp(1, 100));
+
+        let rows = exec_sp(
+            &self.pool,
+            "EXEC dbo.SP_CATEGORY_JOB_SERVICE_SUB_FEE_AUTOCOMPLETE \
+                @p_category_job_service_sub_fee_guid = @P1, \
+                @p_keyword = @P2, \
+                @p_locale = @P3, \
+                @p_status = @P4, \
+                @p_limit = @P5",
+            &[
+                &guid as &dyn ToSql,
+                &keyword as &dyn ToSql,
+                &locale as &dyn ToSql,
+                &status as &dyn ToSql,
+                &limit as &dyn ToSql,
+            ],
+        )
+        .await?;
+
+        Ok(rows.iter().map(row_to_fee_autocomplete_row).collect())
     }
 }

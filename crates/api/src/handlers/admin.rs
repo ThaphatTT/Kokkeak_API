@@ -1,5 +1,3 @@
-
-
 use std::sync::Arc;
 
 use axum::{
@@ -19,7 +17,6 @@ use kokkak_common::error_codes::ErrorCode;
 use kokkak_common::i18n::{current_locale, tr};
 use kokkak_common::response::{created, ok, paginated, ApiResponse, PageMeta};
 #[allow(unused_imports)]
-
 use kokkak_domain::{
     AdminInsertUserError, AdminInsertUserResult, AdminUpdateUserError, AdminUpdateUserResult,
     AdminUserDetail, Permission, PermissionUpdateRow, PermissionUserGroup, RepoError, Role,
@@ -33,7 +30,7 @@ use validator::{Validate, ValidationError};
 use crate::error::{ApiError, IntoLocalizedResponse};
 use crate::extractors::ValidatedJson;
 use crate::handlers::auth::AuthResponse;
-use crate::middleware::auth::AuthnUser;
+use crate::middleware::auth::{assert_scope, AuthnUser};
 use crate::state::AppState;
 use kokkak_infra::image_processor::UserImageKind;
 
@@ -54,7 +51,7 @@ pub struct CreateUserRequest {
 
 #[utoipa::path(
     post,
-    path = "/api/v1/admin/users",
+    path = "/api/v1/users",
     tag = "admin",
     request_body = CreateUserRequest,
     responses(
@@ -71,12 +68,13 @@ pub async fn create_user_admin(
     user: AuthnUser,
     ValidatedJson(req): ValidatedJson<CreateUserRequest>,
 ) -> Result<Response, Response> {
+    let locale = current_locale();
+    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(Permission::UsersCreate, &state.permission_checker)
         .await
     {
-        let locale = current_locale();
         let code_str = Permission::UsersCreate.code();
         let localized = tr("err_auth.permission_denied", &locale, &[code_str]);
         return Err(ApiError::from(AppError::Localized {
@@ -112,7 +110,6 @@ pub async fn create_user_admin(
 
 #[derive(Debug, Default, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListUsersQuery {
-
     pub page: Option<u32>,
 
     pub page_size: Option<u32>,
@@ -137,14 +134,13 @@ pub struct ListUsersQuery {
 
 #[derive(Debug, serde::Serialize, utoipa::ToSchema)]
 pub struct ListUsersResponse {
-
     #[serde(flatten)]
     pub page: kokkak_domain::admin_user::AdminUserListPagingPage,
 }
 
 #[utoipa::path(
         get,
-        path = "/api/v1/admin/users",
+        path = "/api/v1/users",
         tag = "admin",
         params(ListUsersQuery),
         responses(
@@ -159,12 +155,13 @@ pub async fn list_users_admin(
     user: AuthnUser,
     Query(q): Query<ListUsersQuery>,
 ) -> Result<Response, Response> {
+    let locale = current_locale();
+    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(Permission::PageUsersView, &state.permission_checker)
         .await
     {
-        let locale = current_locale();
         let code_str = Permission::PageUsersView.code();
         let localized = tr("err_auth.permission_denied", &locale, &[code_str]);
         return Err(ApiError::from(AppError::Localized {
@@ -215,7 +212,7 @@ pub async fn list_users_admin(
 
 #[utoipa::path(
     get,
-    path = "/api/v1/admin/users/{guid}/permissions",
+    path = "/api/v1/users/{guid}/permissions",
     tag = "admin",
     params(
         ("guid" = Uuid, Path, description = "User GUID (36-char UUID)"),
@@ -233,12 +230,13 @@ pub async fn list_user_permissions_admin(
     user: AuthnUser,
     Path(guid): Path<Uuid>,
 ) -> Result<Response, Response> {
+    let locale = current_locale();
+    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(Permission::PagePermissionsView, &state.permission_checker)
         .await
     {
-        let locale = current_locale();
         let code_str = Permission::PagePermissionsView.code();
         let localized = tr("err_auth.permission_denied", &locale, &[code_str]);
         return Err(ApiError::from(AppError::Localized {
@@ -280,7 +278,7 @@ pub async fn list_user_permissions_admin(
 
 #[utoipa::path(
     get,
-    path = "/api/v1/admin/users/{guid}/detail",
+    path = "/api/v1/users/{guid}/detail",
     tag = "admin",
     params(
         ("guid" = Uuid, Path, description = "User GUID (36-char UUID)"),
@@ -298,12 +296,13 @@ pub async fn get_user_detail_full_admin(
     user: AuthnUser,
     Path(guid): Path<Uuid>,
 ) -> Result<Response, Response> {
+    let locale = current_locale();
+    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(Permission::PageUsersView, &state.permission_checker)
         .await
     {
-        let locale = current_locale();
         let code_str = Permission::PageUsersView.code();
         let localized = tr("err_auth.permission_denied", &locale, &[code_str]);
         return Err(ApiError::from(AppError::Localized {
@@ -321,7 +320,6 @@ pub async fn get_user_detail_full_admin(
     {
         Ok(Some(d)) => d,
         Ok(None) => {
-
             let locale = current_locale();
             let localized = tr("err_auth.user_not_found", &locale, &[&guid.to_string()]);
             return Err(ApiError::from(
@@ -379,13 +377,12 @@ fn populate_image_urls(
 
 #[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct PermissionsQuery {
-
     pub mode: String,
 }
 
 #[utoipa::path(
     get,
-    path = "/api/v1/admin/permissions",
+    path = "/api/v1/permissions",
     tag = "admin",
     params(PermissionsQuery),
     responses(
@@ -401,12 +398,13 @@ pub async fn list_permissions(
     user: AuthnUser,
     Query(q): Query<PermissionsQuery>,
 ) -> Result<Response, Response> {
+    let locale = current_locale();
+    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(Permission::PagePermissionsView, &state.permission_checker)
         .await
     {
-        let locale = current_locale();
         let code_str = Permission::PagePermissionsView.code();
         let localized = tr("err_auth.permission_denied", &locale, &[code_str]);
         return Err(ApiError::from(AppError::Localized {
@@ -459,7 +457,6 @@ const MAX_BULK_PERMISSION_UPDATES: u64 = 500;
 
 #[derive(Debug, Deserialize, Serialize, Validate, utoipa::ToSchema)]
 pub struct PermissionUpdateItem {
-
     #[validate(length(min = 36, max = 36, message = "user_role_guid must be a 36-char GUID"))]
     pub user_role_guid: String,
 
@@ -491,7 +488,6 @@ fn is_valid_guid(s: &str) -> bool {
 
 #[derive(Debug, Deserialize, Validate, utoipa::ToSchema)]
 pub struct UpdatePermissionsRequest {
-
     #[validate(length(
         min = 1,
         max = MAX_BULK_PERMISSION_UPDATES,
@@ -506,7 +502,6 @@ pub struct UpdatePermissionsRequest {
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct PermissionUpdateResultItem {
-
     pub user_role_guid: String,
 
     pub user_permission_guid: String,
@@ -539,7 +534,6 @@ impl From<PermissionUpdateRow> for PermissionUpdateResultItem {
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct UpdatePermissionsResponse {
-
     pub total: usize,
 
     pub updated: usize,
@@ -555,7 +549,7 @@ pub struct UpdatePermissionsResponse {
 
 #[utoipa::path(
     post,
-    path = "/api/v1/admin/permissions",
+    path = "/api/v1/permissions",
     tag = "admin",
     request_body = UpdatePermissionsRequest,
     responses(
@@ -572,12 +566,13 @@ pub async fn update_permissions_admin(
     user: AuthnUser,
     ValidatedJson(req): ValidatedJson<UpdatePermissionsRequest>,
 ) -> Result<Response, Response> {
+    let locale = current_locale();
+    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(Permission::PermissionsUpdate, &state.permission_checker)
         .await
     {
-        let locale = current_locale();
         let code_str = Permission::PermissionsUpdate.code();
         let localized = tr("err_auth.permission_denied", &locale, &[code_str]);
         return Err(ApiError::from(AppError::Localized {
@@ -673,7 +668,6 @@ fn validation_envelope(message: &str, index: usize, field: &str) -> Response {
 
 #[derive(Debug, Deserialize, Serialize, Validate, utoipa::ToSchema, Default, Clone)]
 pub struct DayScheduleDto {
-
     pub is_working: bool,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -687,7 +681,6 @@ pub struct DayScheduleDto {
 
 #[derive(Debug, Deserialize, Serialize, Validate, utoipa::ToSchema, Default, Clone)]
 pub struct WeeklyScheduleDto {
-
     #[validate(nested)]
     pub monday: DayScheduleDto,
 
@@ -712,7 +705,6 @@ pub struct WeeklyScheduleDto {
 
 #[derive(Debug, Deserialize, Validate, utoipa::ToSchema)]
 pub struct AdminInsertUserRequest {
-
     #[serde(skip_serializing_if = "Option::is_none")]
     #[validate(length(max = 36, message = "user_guid must be a 36-char UUID"))]
     pub user_guid: Option<String>,
@@ -1060,7 +1052,6 @@ fn validate_user_status(s: i32) -> Result<(), ValidationError> {
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct AdminInsertUserResponse {
-
     pub user_guid: String,
 
     pub user_username_guid: String,
@@ -1084,7 +1075,6 @@ impl From<AdminInsertUserResult> for AdminInsertUserResponse {
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct AdminUpdateUserResponse {
-
     pub user_guid: String,
 }
 
@@ -1098,7 +1088,7 @@ impl From<AdminUpdateUserResult> for AdminUpdateUserResponse {
 
 #[utoipa::path(
     post,
-    path = "/api/v1/admin/users/full",
+    path = "/api/v1/users/full",
     tag = "admin",
     request_body = AdminInsertUserRequest,
     responses(
@@ -1117,13 +1107,13 @@ pub async fn admin_insert_user_full(
     user: AuthnUser,
     ValidatedJson(req): ValidatedJson<AdminInsertUserRequest>,
 ) -> Result<Response, Response> {
+    let locale = current_locale();
+    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(Permission::UsersCreate, &state.permission_checker)
         .await
     {
-        let locale = current_locale();
-
         let code_str = Permission::UsersCreate.code();
         let localized = tr("err_auth.permission_denied", &locale, &[code_str]);
 
@@ -1285,7 +1275,7 @@ pub async fn admin_insert_user_full(
 
 #[utoipa::path(
         put,
-        path = "/api/v1/admin/users/{guid}/full",
+        path = "/api/v1/users/{guid}/full",
         tag = "admin",
         params(
             ("guid" = Uuid, Path, description = "User GUID (36-char UUID)"),
@@ -1309,12 +1299,13 @@ pub async fn admin_update_user_full(
     Path(guid): Path<Uuid>,
     ValidatedJson(req): ValidatedJson<AdminUpdateUserRequest>,
 ) -> Result<Response, Response> {
+    let locale = current_locale();
+    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(Permission::UsersUpdate, &state.permission_checker)
         .await
     {
-        let locale = current_locale();
         let code_str = Permission::UsersUpdate.code();
         let localized = tr("err_auth.permission_denied", &locale, &[code_str]);
         return Err(ApiError::from(AppError::Localized {
@@ -1555,7 +1546,6 @@ fn sp_error_envelope(state: &AppState, err: AdminInsertUserError) -> Response {
 
 fn sp_insert_full_status(sp_code: &str) -> (StatusCode, &'static str, &'static str) {
     match sp_code {
-
         "actor_required" => (
             StatusCode::BAD_REQUEST,
             ErrorCode::ACTOR_REQUIRED,
@@ -1719,7 +1709,6 @@ fn sp_update_error_envelope(state: &AppState, err: AdminUpdateUserError) -> Resp
 
 fn sp_update_full_status(sp_code: &str) -> (StatusCode, &'static str, &'static str) {
     match sp_code {
-
         "actor_required" => (
             StatusCode::BAD_REQUEST,
             ErrorCode::ACTOR_REQUIRED,
@@ -1878,7 +1867,6 @@ mod base64_decode_tests {
 
     #[test]
     fn drops_ascii_whitespace() {
-
         let s = "data:image/png;base64,aGk=\n";
         assert_eq!(decode_base64_payload(s).unwrap(), b"hi");
         let s = "aG k=";
@@ -1887,7 +1875,6 @@ mod base64_decode_tests {
 
     #[test]
     fn rejects_invalid_base64() {
-
         assert!(decode_base64_payload("not!base64$").is_err());
     }
 }
@@ -2113,7 +2100,6 @@ mod admin_insert_full_tests {
 
     #[test]
     fn unknown_code_falls_back_to_500_internal() {
-
         let (status, ec, key) = sp_insert_full_status("SOME_FUTURE_CODE");
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(ec, ErrorCode::INTERNAL);
@@ -2122,7 +2108,6 @@ mod admin_insert_full_tests {
 
     #[test]
     fn username_exists_maps_to_existing_username_taken_catalog_code() {
-
         assert_eq!(
             sp_insert_full_status("username_exists").1,
             ErrorCode::USERNAME_TAKEN

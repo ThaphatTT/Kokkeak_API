@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use kokkak_domain::traits::user::RepoError;
 use kokkak_domain::{
+    CategoryJobServiceSubFeeAutocompleteInput, CategoryJobServiceSubFeeAutocompleteRow,
     CategoryJobServiceSubFeeCreateInput, CategoryJobServiceSubFeeCreateResult,
+    CategoryJobServiceSubFeeDeleteInput, CategoryJobServiceSubFeeDeleteResult,
     CategoryJobServiceSubFeeListInput, CategoryJobServiceSubFeePage,
     CategoryJobServiceSubFeeRepository, CategoryJobServiceSubFeeUpdateInput,
     CategoryJobServiceSubFeeUpdateResult,
@@ -48,6 +50,24 @@ impl CategoryJobServiceSubFeeService {
                         .into(),
                 ))
             }
+            async fn delete(
+                &self,
+                _input: &CategoryJobServiceSubFeeDeleteInput,
+            ) -> Result<CategoryJobServiceSubFeeDeleteResult, RepoError> {
+                Err(RepoError::Backend(
+                    "CategoryJobServiceSubFeeService::disabled — repository not wired (set KOKKAK_DATABASE__SQLSERVER_URL)"
+                        .into(),
+                ))
+            }
+            async fn autocomplete(
+                &self,
+                _input: &CategoryJobServiceSubFeeAutocompleteInput,
+            ) -> Result<Vec<CategoryJobServiceSubFeeAutocompleteRow>, RepoError> {
+                Err(RepoError::Backend(
+                    "CategoryJobServiceSubFeeService::disabled — repository not wired (set KOKKAK_DATABASE__SQLSERVER_URL)"
+                        .into(),
+                ))
+            }
         }
         let repo: Arc<dyn CategoryJobServiceSubFeeRepository> = Arc::new(DisabledRepo);
         Self { repo }
@@ -77,6 +97,20 @@ impl CategoryJobServiceSubFeeService {
     ) -> Result<CategoryJobServiceSubFeeUpdateResult, RepoError> {
         self.repo.update(&input).await
     }
+
+    pub async fn delete(
+        &self,
+        input: CategoryJobServiceSubFeeDeleteInput,
+    ) -> Result<CategoryJobServiceSubFeeDeleteResult, RepoError> {
+        self.repo.delete(&input).await
+    }
+
+    pub async fn autocomplete(
+        &self,
+        input: CategoryJobServiceSubFeeAutocompleteInput,
+    ) -> Result<Vec<CategoryJobServiceSubFeeAutocompleteRow>, RepoError> {
+        self.repo.autocomplete(&input).await
+    }
 }
 
 #[cfg(test)]
@@ -92,8 +126,10 @@ mod tests {
         last_input: Mutex<Option<CategoryJobServiceSubFeeListInput>>,
         last_create_input: Mutex<Option<CategoryJobServiceSubFeeCreateInput>>,
         last_update_input: Mutex<Option<CategoryJobServiceSubFeeUpdateInput>>,
+        last_delete_input: Mutex<Option<CategoryJobServiceSubFeeDeleteInput>>,
         create_result: Mutex<Option<Result<CategoryJobServiceSubFeeCreateResult, RepoError>>>,
         update_result: Mutex<Option<Result<CategoryJobServiceSubFeeUpdateResult, RepoError>>>,
+        delete_result: Mutex<Option<Result<CategoryJobServiceSubFeeDeleteResult, RepoError>>>,
     }
 
     #[async_trait::async_trait]
@@ -150,6 +186,24 @@ mod tests {
                 None => Ok(CategoryJobServiceSubFeeUpdateResult {
                     success: true,
                     code: "UPDATE_SUCCESS".into(),
+                    message: "ok".into(),
+                    category_job_service_sub_fee_guid: Some(
+                        input.category_job_service_sub_fee_guid.clone(),
+                    ),
+                }),
+            }
+        }
+        async fn delete(
+            &self,
+            input: &CategoryJobServiceSubFeeDeleteInput,
+        ) -> Result<CategoryJobServiceSubFeeDeleteResult, RepoError> {
+            *self.last_delete_input.lock().unwrap() = Some(input.clone());
+            let result = self.delete_result.lock().unwrap().clone();
+            match result {
+                Some(r) => r,
+                None => Ok(CategoryJobServiceSubFeeDeleteResult {
+                    success: true,
+                    code: "DELETE_SUCCESS".into(),
                     message: "ok".into(),
                     category_job_service_sub_fee_guid: Some(
                         input.category_job_service_sub_fee_guid.clone(),

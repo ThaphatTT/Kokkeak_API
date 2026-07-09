@@ -1,5 +1,4 @@
-
-
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -9,7 +8,6 @@ use crate::user::{Permission, Role};
 
 #[derive(Debug, Clone, Error)]
 pub enum AuthError {
-
     #[error("invalid credentials")]
     InvalidCredentials,
 
@@ -37,7 +35,6 @@ pub enum AuthError {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
-
     pub sub: Uuid,
 
     pub iss: String,
@@ -51,19 +48,19 @@ pub struct Claims {
     pub roles: Vec<Role>,
 
     pub scope: String,
+
+    pub jti: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TokenKind {
-
     Access,
 
     Refresh,
 }
 
 impl TokenKind {
-
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Access => "access",
@@ -74,7 +71,6 @@ impl TokenKind {
 
 #[derive(Debug, Clone)]
 pub struct AuthSession {
-
     pub user_id: Uuid,
 
     pub roles: Vec<Role>,
@@ -82,10 +78,11 @@ pub struct AuthSession {
     pub expires_at: DateTime<Utc>,
 
     pub scope: String,
+
+    pub jti: String,
 }
 
 impl AuthSession {
-
     pub fn has_role(&self, role: Role) -> bool {
         self.roles.contains(&role)
     }
@@ -100,7 +97,6 @@ impl AuthSession {
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct PublicUser {
-
     pub id: Uuid,
 
     pub username: String,
@@ -135,7 +131,6 @@ impl From<&crate::user::User> for PublicUser {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TokenPair {
-
     pub access_token: String,
 
     pub refresh_token: String,
@@ -145,6 +140,57 @@ pub struct TokenPair {
     pub refresh_ttl_secs: i64,
 
     pub token_type: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct SessionInfo {
+    pub jti: String,
+    pub user_id: Uuid,
+    pub scope: String,
+    pub device: String,
+    pub ip: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateSession {
+    pub jti: String,
+    pub user_id: Uuid,
+    pub scope: String,
+    pub device: String,
+    pub ip: String,
+    pub ttl_secs: i64,
+}
+
+#[async_trait]
+pub trait SessionStore: Send + Sync {
+    async fn create(&self, session: &CreateSession) -> Result<(), AuthError>;
+    async fn get(&self, user_id: Uuid, jti: &str) -> Result<Option<SessionInfo>, AuthError>;
+    async fn revoke(&self, user_id: Uuid, jti: &str) -> Result<(), AuthError>;
+    async fn revoke_all(&self, user_id: Uuid) -> Result<u64, AuthError>;
+    async fn list(&self, user_id: Uuid) -> Result<Vec<SessionInfo>, AuthError>;
+}
+
+pub struct NoopSessionStore;
+
+#[async_trait]
+impl SessionStore for NoopSessionStore {
+    async fn create(&self, _session: &CreateSession) -> Result<(), AuthError> {
+        Ok(())
+    }
+    async fn get(&self, _user_id: Uuid, _jti: &str) -> Result<Option<SessionInfo>, AuthError> {
+        Ok(None)
+    }
+    async fn revoke(&self, _user_id: Uuid, _jti: &str) -> Result<(), AuthError> {
+        Ok(())
+    }
+    async fn revoke_all(&self, _user_id: Uuid) -> Result<u64, AuthError> {
+        Ok(0)
+    }
+    async fn list(&self, _user_id: Uuid) -> Result<Vec<SessionInfo>, AuthError> {
+        Ok(vec![])
+    }
 }
 
 #[cfg(test)]
@@ -168,6 +214,7 @@ mod tests {
             kind: TokenKind::Access,
             roles: vec![Role::Customer, Role::Admin],
             scope: "web".into(),
+            jti: Uuid::new_v4().to_string(),
         };
         let s = serde_json::to_string(&c).unwrap();
         let v: serde_json::Value = serde_json::from_str(&s).unwrap();
@@ -184,6 +231,7 @@ mod tests {
             roles: vec![Role::Admin],
             expires_at: Utc::now(),
             scope: "admin".into(),
+            jti: "test-jti".into(),
         };
         assert!(s.has_role(Role::Admin));
         assert!(s.is_admin());
@@ -216,7 +264,6 @@ mod tests {
 
     #[test]
     fn public_user_exposes_permissions_as_codes() {
-
         let now = Utc::now();
         let u = crate::user::User {
             id: Uuid::new_v4(),

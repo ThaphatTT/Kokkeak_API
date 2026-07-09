@@ -106,6 +106,7 @@ async fn make_app() -> (axum::Router, Vec<PathBuf>) {
         Arc::from(""),
         Arc::from(""),
         600,
+        None,
     );
     (build_router(state), vec![])
 }

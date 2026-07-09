@@ -15,7 +15,7 @@ use kokkak_infra::image_processor::UserImageKind;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::middleware::auth::AuthnUser;
+use crate::middleware::auth::{assert_scope, AuthnUser};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
@@ -298,7 +298,7 @@ impl CreateCategoryJobServiceMainRequest {
 
 #[utoipa::path(
     post,
-    path = "/api/v1/admin/category-job-services",
+    path = "/api/v1/category-job-services",
     tag = "admin",
     request_body = CreateCategoryJobServiceMainRequest,
     responses(
@@ -317,6 +317,9 @@ pub async fn create_category_job_service_main_admin(
     user: AuthnUser,
     Json(req): Json<CreateCategoryJobServiceMainRequest>,
 ) -> Result<Response, Response> {
+    let locale = current_locale();
+    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+
     if !user
         .has_permission(
             kokkak_domain::Permission::ServiceCreate,
@@ -414,7 +417,7 @@ impl UpdateCategoryJobServiceMainRequest {
 
 #[utoipa::path(
     put,
-    path = "/api/v1/admin/category-job-services/{service_guid}",
+    path = "/api/v1/category-job-services/{service_guid}",
     tag = "admin",
     params(
         ("service_guid" = String, Path, description = "Category Job Service GUID (UUID)"),
@@ -437,6 +440,9 @@ pub async fn update_category_job_service_main_admin(
     Path(service_guid): Path<String>,
     Json(req): Json<UpdateCategoryJobServiceMainRequest>,
 ) -> Result<Response, Response> {
+    let locale = current_locale();
+    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+
     if !user
         .has_permission(
             kokkak_domain::Permission::ServiceUpdate,
@@ -495,7 +501,7 @@ pub async fn update_category_job_service_main_admin(
 
 #[utoipa::path(
     delete,
-    path = "/api/v1/admin/category-job-services/{service_guid}",
+    path = "/api/v1/category-job-services/{service_guid}",
     tag = "admin",
     params(
         ("service_guid" = String, Path, description = "Category Job Service GUID (UUID)"),
@@ -513,6 +519,9 @@ pub async fn delete_category_job_service_main_admin(
     user: AuthnUser,
     Path(service_guid): Path<String>,
 ) -> Result<Response, Response> {
+    let locale = current_locale();
+    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+
     if !user
         .has_permission(
             kokkak_domain::Permission::ServiceDelete,

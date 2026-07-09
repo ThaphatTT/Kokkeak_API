@@ -7,6 +7,7 @@ use kokkak_application::category_job_main::CategoryJobMainService;
 use kokkak_application::category_job_service_main::CategoryJobServiceMainService;
 use kokkak_application::category_job_service_sub::CategoryJobServiceSubService;
 use kokkak_application::category_job_service_sub_fee::CategoryJobServiceSubFeeService;
+use kokkak_application::category_job_service_sub_warranty::CategoryJobServiceSubWarrantyService;
 use kokkak_application::chat::{BroadcastTransport, ChatService};
 use kokkak_application::master::MasterDropdownService;
 use kokkak_application::order::OrderService;
@@ -61,6 +62,8 @@ pub struct AppState {
     pub category_job_service_sub: Arc<CategoryJobServiceSubService>,
 
     pub category_job_service_sub_fee: Arc<CategoryJobServiceSubFeeService>,
+
+    pub category_job_service_sub_warranty: Arc<CategoryJobServiceSubWarrantyService>,
 
     pub master: Arc<MasterDropdownService>,
 
@@ -179,6 +182,7 @@ impl AppState {
         category_job_service_main: Arc<CategoryJobServiceMainService>,
         category_job_service_sub: Arc<CategoryJobServiceSubService>,
         category_job_service_sub_fee: Arc<CategoryJobServiceSubFeeService>,
+        category_job_service_sub_warranty: Arc<CategoryJobServiceSubWarrantyService>,
         master: Arc<MasterDropdownService>,
         orders: Arc<OrderService>,
         chat: ChatHandle,
@@ -205,6 +209,7 @@ impl AppState {
             category_job_service_main,
             category_job_service_sub,
             category_job_service_sub_fee,
+            category_job_service_sub_warranty,
             master,
             orders,
             chat,
@@ -258,6 +263,9 @@ impl AppState {
             category_job_service_main: Arc::new(CategoryJobServiceMainService::disabled()),
             category_job_service_sub: Arc::new(CategoryJobServiceSubService::disabled()),
             category_job_service_sub_fee: Arc::new(CategoryJobServiceSubFeeService::disabled()),
+            category_job_service_sub_warranty: Arc::new(
+                CategoryJobServiceSubWarrantyService::disabled(),
+            ),
             master,
             orders,
             chat: chat_handle,

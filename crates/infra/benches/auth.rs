@@ -1,5 +1,3 @@
-
-
 use std::time::Duration;
 
 use criterion::{criterion_group, criterion_main, Criterion};
@@ -17,7 +15,7 @@ fn make_jwt() -> (JwtService, String) {
     };
     let svc = JwtService::new(&settings).expect("jwt service builds");
     let user_guid = uuid::Uuid::new_v4();
-    let token = svc
+    let (token, _) = svc
         .issue_access(user_guid, &[Role::Customer], "USER_READ")
         .expect("token issued");
     (svc, token)

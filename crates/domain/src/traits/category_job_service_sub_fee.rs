@@ -2,7 +2,9 @@ use async_trait::async_trait;
 
 use super::user::RepoError;
 use crate::category_job_service_sub_fee::{
+    CategoryJobServiceSubFeeAutocompleteInput, CategoryJobServiceSubFeeAutocompleteRow,
     CategoryJobServiceSubFeeCreateInput, CategoryJobServiceSubFeeCreateResult,
+    CategoryJobServiceSubFeeDeleteInput, CategoryJobServiceSubFeeDeleteResult,
     CategoryJobServiceSubFeeListInput, CategoryJobServiceSubFeePage,
     CategoryJobServiceSubFeeUpdateInput, CategoryJobServiceSubFeeUpdateResult,
 };
@@ -23,4 +25,14 @@ pub trait CategoryJobServiceSubFeeRepository: Send + Sync {
         &self,
         input: &CategoryJobServiceSubFeeUpdateInput,
     ) -> Result<CategoryJobServiceSubFeeUpdateResult, RepoError>;
+
+    async fn delete(
+        &self,
+        input: &CategoryJobServiceSubFeeDeleteInput,
+    ) -> Result<CategoryJobServiceSubFeeDeleteResult, RepoError>;
+
+    async fn autocomplete(
+        &self,
+        input: &CategoryJobServiceSubFeeAutocompleteInput,
+    ) -> Result<Vec<CategoryJobServiceSubFeeAutocompleteRow>, RepoError>;
 }
