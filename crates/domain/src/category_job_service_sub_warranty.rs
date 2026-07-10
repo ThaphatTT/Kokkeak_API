@@ -187,6 +187,56 @@ pub struct CategoryJobServiceSubWarrantyDeleteResult {
     pub category_job_service_sub_warranty_guid: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CategoryJobServiceSubWarrantyFullDetailRow {
+    pub category_job_service_sub_warranty_guid: String,
+
+    pub category_job_service_sub_warranty_description_la: String,
+
+    pub category_job_service_sub_warranty_description_en: String,
+
+    pub category_job_service_sub_warranty_description_th: String,
+
+    pub category_job_service_sub_warranty_description_zh: String,
+
+    pub category_job_service_sub_warranty_warranty_amount_day: i32,
+
+    pub category_job_service_sub_warranty_status: i32,
+
+    pub category_job_service_sub_warranty_icon: String,
+
+    pub category_job_service_sub_warranty_create_at: Option<DateTime<Utc>>,
+
+    pub category_job_service_sub_warranty_create_by: String,
+
+    pub category_job_service_sub_warranty_update_at: Option<DateTime<Utc>>,
+
+    pub category_job_service_sub_warranty_update_by: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CategoryJobServiceSubWarrantyAutocompleteInput {
+    pub category_job_service_sub_warranty_guid: Option<String>,
+
+    pub keyword: Option<String>,
+
+    pub status: Option<i32>,
+
+    pub locale: Option<String>,
+
+    pub limit: Option<i32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CategoryJobServiceSubWarrantyAutocompleteRow {
+    pub category_job_service_sub_warranty_guid: String,
+
+    pub category_job_service_sub_warranty_name: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

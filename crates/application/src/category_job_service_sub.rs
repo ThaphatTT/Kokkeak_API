@@ -6,6 +6,7 @@ use kokkak_domain::traits::category_job_service_sub::{
 use kokkak_domain::traits::user::RepoError;
 use kokkak_domain::{
     CategoryJobServiceSubCreateInput, CategoryJobServiceSubCreateResult,
+    CategoryJobServiceSubCreateSpInput, CategoryJobServiceSubCreateSpResult,
     CategoryJobServiceSubDeleteResult, CategoryJobServiceSubDetailBundle,
     CategoryJobServiceSubImageCreateInput, CategoryJobServiceSubImageCreateResult,
     CategoryJobServiceSubImageDeleteInput, CategoryJobServiceSubImageDeleteResult,
@@ -124,6 +125,15 @@ impl CategoryJobServiceSubService {
                     "CategoryJobServiceSubService::disabled — repository not wired".into(),
                 ))
             }
+
+            async fn create_via_sp(
+                &self,
+                _input: &CategoryJobServiceSubCreateSpInput,
+            ) -> Result<CategoryJobServiceSubCreateSpResult, RepoError> {
+                Err(RepoError::Backend(
+                    "CategoryJobServiceSubService::disabled — repository not wired".into(),
+                ))
+            }
         }
 
         let repo: Arc<dyn CategoryJobServiceSubRepository> = Arc::new(DisabledRepo);
@@ -219,6 +229,13 @@ impl CategoryJobServiceSubService {
         image_paths: Vec<SubImageForUpdate>,
     ) -> Result<CategoryJobServiceSubUpdateResult, RepoError> {
         self.repo.update_with_images(&input, &image_paths).await
+    }
+
+    pub async fn create_via_sp(
+        &self,
+        input: CategoryJobServiceSubCreateSpInput,
+    ) -> Result<CategoryJobServiceSubCreateSpResult, RepoError> {
+        self.repo.create_via_sp(&input).await
     }
 }
 
@@ -400,6 +417,7 @@ mod tests {
                         .category_job_service_sub_guid
                         .clone(),
                     category_job_service_sub_img_type: input.img_type,
+                    category_job_service_sub_img_type_language: 0,
                     category_job_service_sub_img_priority: input.img_priority,
                     category_job_service_sub_img_path: input.img_path.clone(),
                     category_job_service_sub_img_url: None,
@@ -470,6 +488,52 @@ mod tests {
                 self.create_image(&img_input).await?;
             }
             Ok(update_res)
+        }
+
+        async fn create_via_sp(
+            &self,
+            input: &CategoryJobServiceSubCreateSpInput,
+        ) -> Result<CategoryJobServiceSubCreateSpResult, RepoError> {
+            let guid = input
+                .category_job_service_sub_guid
+                .clone()
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            self.rows.lock().unwrap().push(CategoryJobServiceSubRow {
+                category_job_service_sub_guid: guid.clone(),
+                category_job_service_sub_category_job_service_main_guid: input
+                    .category_job_service_main_guid
+                    .clone(),
+                category_job_service_sub_category_job_service_sub_fee_guid: String::new(),
+                category_job_service_sub_category_job_service_sub_warranty_guid: String::new(),
+                category_job_service_name: String::new(),
+                category_job_service_sub_name: input
+                    .category_job_service_sub_name_la
+                    .clone()
+                    .or_else(|| input.category_job_service_sub_name_en.clone())
+                    .unwrap_or_default(),
+                category_job_service_sub_locale: "la".into(),
+                category_job_service_sub_start_price: input.category_job_service_sub_start_price,
+                category_job_service_sub_description: input
+                    .category_job_service_sub_description_la
+                    .clone()
+                    .unwrap_or_default(),
+                category_job_service_sub_status: input.category_job_service_sub_status,
+                main_img_path: String::new(),
+                main_img_url: None,
+                category_job_service_sub_create_at: Some(Utc::now()),
+                category_job_service_sub_create_by: input.create_by.clone(),
+                category_job_service_sub_update_at: None,
+                category_job_service_sub_update_by: String::new(),
+            });
+            Ok(CategoryJobServiceSubCreateSpResult {
+                success: true,
+                code: "INSERT_SUCCESS".into(),
+                message: "ok".into(),
+                category_job_service_sub_guid: Some(guid),
+                warranty_count: input.warranties.len() as i32,
+                fee_count: input.fees.len() as i32,
+                image_count: input.images.len() as i32,
+            })
         }
     }
 

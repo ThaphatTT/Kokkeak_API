@@ -50,6 +50,8 @@ pub struct CategoryJobServiceSubImageRow {
 
     pub category_job_service_sub_img_type: i32,
 
+    pub category_job_service_sub_img_type_language: i32,
+
     pub category_job_service_sub_img_priority: i32,
 
     #[serde(skip_serializing)]
@@ -237,6 +239,121 @@ pub struct CategoryJobServiceSubImageDeleteResult {
     pub category_job_service_sub_img_guid: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CategoryJobServiceSubCreateSpImageInput {
+    pub img_path: String,
+
+    #[serde(default)]
+    pub img_type: Option<i32>,
+
+    #[serde(default)]
+    pub img_type_language: Option<i32>,
+
+    #[serde(default)]
+    pub priority: Option<i32>,
+
+    #[serde(default, rename = "status")]
+    pub img_status: Option<i32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CategoryJobServiceSubCreateSpWarrantyInput {
+    pub guid: String,
+
+    pub sort_order: i32,
+
+    #[serde(default, rename = "status")]
+    pub map_status: Option<i32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CategoryJobServiceSubCreateSpFeeInput {
+    pub guid: String,
+
+    pub sort_order: i32,
+
+    #[serde(default, rename = "status")]
+    pub map_status: Option<i32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CategoryJobServiceSubCreateSpInput {
+    #[serde(default)]
+    pub category_job_service_sub_guid: Option<String>,
+
+    pub category_job_service_main_guid: String,
+
+    #[serde(default)]
+    pub category_job_service_sub_name_la: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_sub_name_en: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_sub_name_th: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_sub_name_zh: Option<String>,
+
+    pub category_job_service_sub_start_price: Decimal,
+
+    #[serde(default)]
+    pub category_job_service_sub_description_la: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_sub_description_en: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_sub_description_th: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_sub_description_zh: Option<String>,
+
+    #[serde(default = "default_status")]
+    pub category_job_service_sub_status: i32,
+
+    #[serde(default)]
+    pub warranties: Vec<CategoryJobServiceSubCreateSpWarrantyInput>,
+
+    #[serde(default)]
+    pub fees: Vec<CategoryJobServiceSubCreateSpFeeInput>,
+
+    #[serde(default)]
+    pub images: Vec<CategoryJobServiceSubCreateSpImageInput>,
+
+    pub create_by: String,
+}
+
+fn default_status() -> i32 {
+    1
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CategoryJobServiceSubCreateSpResult {
+    pub success: bool,
+
+    pub code: String,
+
+    pub message: String,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category_job_service_sub_guid: Option<String>,
+
+    #[serde(default)]
+    pub warranty_count: i32,
+
+    #[serde(default)]
+    pub fee_count: i32,
+
+    #[serde(default)]
+    pub image_count: i32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("SP_CATEGORY_JOB_SERVICE_SUB failed: {code} — {message}")]
 pub struct CategoryJobServiceSubError {
@@ -292,15 +409,9 @@ mod tests {
     }
 
     #[test]
-    fn image_input_carries_b64_type_priority() {
-        let i = CategoryJobServiceSubImageInput {
-            img_b64: "data:image/png;base64,xxx".into(),
-            img_type: Some(2),
-            img_priority: Some(0),
-        };
-        assert_eq!(i.img_b64, "data:image/png;base64,xxx");
-        assert_eq!(i.img_type, Some(2));
-        assert_eq!(i.img_priority, Some(0));
+    fn image_row_default_includes_language() {
+        let r = CategoryJobServiceSubImageRow::default();
+        assert_eq!(r.category_job_service_sub_img_type_language, 0);
     }
 
     #[test]
@@ -321,5 +432,23 @@ mod tests {
         );
         assert!(CategoryJobServiceSubError::is_success_code("SUCCESS"));
         assert!(!CategoryJobServiceSubError::is_success_code("OTHER"));
+    }
+
+    #[test]
+    fn create_sp_input_default() {
+        let i = CategoryJobServiceSubCreateSpInput::default();
+        assert!(i.category_job_service_sub_guid.is_none());
+        assert!(i.warranties.is_empty());
+        assert!(i.fees.is_empty());
+        assert!(i.images.is_empty());
+        assert_eq!(i.category_job_service_sub_status, 1);
+    }
+
+    #[test]
+    fn create_sp_warranty_input_default() {
+        let w = CategoryJobServiceSubCreateSpWarrantyInput::default();
+        assert!(w.guid.is_empty());
+        assert_eq!(w.sort_order, 0);
+        assert!(w.map_status.is_none());
     }
 }

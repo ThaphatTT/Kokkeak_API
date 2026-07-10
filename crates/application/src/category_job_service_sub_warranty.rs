@@ -2,11 +2,12 @@ use std::sync::Arc;
 
 use kokkak_domain::traits::user::RepoError;
 use kokkak_domain::{
+    CategoryJobServiceSubWarrantyAutocompleteInput, CategoryJobServiceSubWarrantyAutocompleteRow,
     CategoryJobServiceSubWarrantyCreateInput, CategoryJobServiceSubWarrantyCreateResult,
     CategoryJobServiceSubWarrantyDeleteInput, CategoryJobServiceSubWarrantyDeleteResult,
-    CategoryJobServiceSubWarrantyListInput, CategoryJobServiceSubWarrantyPage,
-    CategoryJobServiceSubWarrantyRepository, CategoryJobServiceSubWarrantyUpdateInput,
-    CategoryJobServiceSubWarrantyUpdateResult,
+    CategoryJobServiceSubWarrantyFullDetailRow, CategoryJobServiceSubWarrantyListInput,
+    CategoryJobServiceSubWarrantyPage, CategoryJobServiceSubWarrantyRepository,
+    CategoryJobServiceSubWarrantyUpdateInput, CategoryJobServiceSubWarrantyUpdateResult,
 };
 
 pub struct CategoryJobServiceSubWarrantyService {
@@ -61,6 +62,26 @@ impl CategoryJobServiceSubWarrantyService {
                         .into(),
                 ))
             }
+
+            async fn autocomplete(
+                &self,
+                _input: &CategoryJobServiceSubWarrantyAutocompleteInput,
+            ) -> Result<Vec<CategoryJobServiceSubWarrantyAutocompleteRow>, RepoError> {
+                Err(RepoError::Backend(
+                    "CategoryJobServiceSubWarrantyService::disabled — repository not wired (set KOKKAK_DATABASE__SQLSERVER_URL)"
+                        .into(),
+                ))
+            }
+
+            async fn detail(
+                &self,
+                _category_job_service_sub_warranty_guid: &str,
+            ) -> Result<Option<CategoryJobServiceSubWarrantyFullDetailRow>, RepoError> {
+                Err(RepoError::Backend(
+                    "CategoryJobServiceSubWarrantyService::disabled — repository not wired (set KOKKAK_DATABASE__SQLSERVER_URL)"
+                        .into(),
+                ))
+            }
         }
         let repo: Arc<dyn CategoryJobServiceSubWarrantyRepository> = Arc::new(DisabledRepo);
         Self { repo }
@@ -92,6 +113,22 @@ impl CategoryJobServiceSubWarrantyService {
         input: CategoryJobServiceSubWarrantyDeleteInput,
     ) -> Result<CategoryJobServiceSubWarrantyDeleteResult, RepoError> {
         self.repo.delete(&input).await
+    }
+
+    pub async fn autocomplete(
+        &self,
+        input: CategoryJobServiceSubWarrantyAutocompleteInput,
+    ) -> Result<Vec<CategoryJobServiceSubWarrantyAutocompleteRow>, RepoError> {
+        self.repo.autocomplete(&input).await
+    }
+
+    pub async fn detail(
+        &self,
+        category_job_service_sub_warranty_guid: &str,
+    ) -> Result<Option<CategoryJobServiceSubWarrantyFullDetailRow>, RepoError> {
+        self.repo
+            .detail(category_job_service_sub_warranty_guid)
+            .await
     }
 }
 

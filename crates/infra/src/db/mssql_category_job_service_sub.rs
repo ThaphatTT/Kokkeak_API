@@ -10,6 +10,7 @@ use kokkak_domain::traits::category_job_service_sub::{
 use kokkak_domain::traits::user::RepoError;
 use kokkak_domain::{
     CategoryJobServiceSubCreateInput, CategoryJobServiceSubCreateResult,
+    CategoryJobServiceSubCreateSpInput, CategoryJobServiceSubCreateSpResult,
     CategoryJobServiceSubDeleteResult, CategoryJobServiceSubDetailBundle,
     CategoryJobServiceSubFeeRow, CategoryJobServiceSubImageCreateInput,
     CategoryJobServiceSubImageCreateResult, CategoryJobServiceSubImageDeleteInput,
@@ -519,6 +520,108 @@ impl CategoryJobServiceSubRepository for MssqlCategoryJobServiceSubRepository {
         commit_tx(conn).await?;
         Ok(update_result)
     }
+
+    async fn create_via_sp(
+        &self,
+        input: &CategoryJobServiceSubCreateSpInput,
+    ) -> Result<CategoryJobServiceSubCreateSpResult, RepoError> {
+        let warranties_json = serde_json::to_string(&input.warranties)
+            .map_err(|e| RepoError::Backend(format!("warranties_json serialize: {e}")))?;
+        let fees_json = serde_json::to_string(&input.fees)
+            .map_err(|e| RepoError::Backend(format!("fees_json serialize: {e}")))?;
+        let images_json = serde_json::to_string(&input.images)
+            .map_err(|e| RepoError::Backend(format!("images_json serialize: {e}")))?;
+
+        let sub_guid = input.category_job_service_sub_guid.as_deref();
+        let main_guid = input.category_job_service_main_guid.as_str();
+        let name_la = input.category_job_service_sub_name_la.as_deref();
+        let name_en = input.category_job_service_sub_name_en.as_deref();
+        let name_th = input.category_job_service_sub_name_th.as_deref();
+        let name_zh = input.category_job_service_sub_name_zh.as_deref();
+        let start_price = input.category_job_service_sub_start_price;
+        let desc_la = input.category_job_service_sub_description_la.as_deref();
+        let desc_en = input.category_job_service_sub_description_en.as_deref();
+        let desc_th = input.category_job_service_sub_description_th.as_deref();
+        let desc_zh = input.category_job_service_sub_description_zh.as_deref();
+        let status = input.category_job_service_sub_status;
+        let warranties_json_str = warranties_json.as_str();
+        let fees_json_str = fees_json.as_str();
+        let images_json_str = images_json.as_str();
+        let create_by = input.create_by.as_str();
+
+        let params: &[&dyn ToSql] = &[
+            &sub_guid,
+            &main_guid,
+            &name_la,
+            &name_en,
+            &name_th,
+            &name_zh,
+            &start_price,
+            &desc_la,
+            &desc_en,
+            &desc_th,
+            &desc_zh,
+            &status,
+            &warranties_json_str,
+            &fees_json_str,
+            &images_json_str,
+            &create_by,
+        ];
+
+        let rows = exec_sp(
+            &self.pool,
+            "EXEC dbo.SP_CATEGORY_JOB_SERVICE_SUB_INSERT \
+                @p_category_job_service_sub_guid = @P1, \
+                @p_category_job_service_main_guid = @P2, \
+                @p_category_job_service_sub_name_la = @P3, \
+                @p_category_job_service_sub_name_en = @P4, \
+                @p_category_job_service_sub_name_th = @P5, \
+                @p_category_job_service_sub_name_zh = @P6, \
+                @p_category_job_service_sub_start_price = @P7, \
+                @p_category_job_service_sub_description_la = @P8, \
+                @p_category_job_service_sub_description_en = @P9, \
+                @p_category_job_service_sub_description_th = @P10, \
+                @p_category_job_service_sub_description_zh = @P11, \
+                @p_category_job_service_sub_status = @P12, \
+                @p_warranties_json = @P13, \
+                @p_fees_json = @P14, \
+                @p_images_json = @P15, \
+                @p_create_by = @P16",
+            params,
+        )
+        .await?;
+
+        let row = rows.first().ok_or_else(|| {
+            RepoError::Backend("SP_CATEGORY_JOB_SERVICE_SUB_INSERT returned no row".into())
+        })?;
+
+        let success: bool = row.get::<bool, _>("success").unwrap_or(false);
+        let code = read_str(row, "code").unwrap_or("").to_string();
+        let message = read_str(row, "message").unwrap_or("").to_string();
+
+        if !success {
+            return Err(RepoError::Backend(format!(
+                "SP_CATEGORY_JOB_SERVICE_SUB_INSERT: {code} — {message}"
+            )));
+        }
+
+        Ok(CategoryJobServiceSubCreateSpResult {
+            success,
+            code,
+            message,
+            category_job_service_sub_guid: {
+                let s = read_guid_str(row, "category_job_service_sub_guid");
+                if s.is_empty() {
+                    None
+                } else {
+                    Some(s)
+                }
+            },
+            warranty_count: read_i32(row, "warranty_count").unwrap_or(0),
+            fee_count: read_i32(row, "fee_count").unwrap_or(0),
+            image_count: read_i32(row, "image_count").unwrap_or(0),
+        })
+    }
 }
 
 impl MssqlCategoryJobServiceSubRepository {
@@ -772,6 +875,11 @@ fn row_to_sub_image_row(row: &tiberius::Row) -> CategoryJobServiceSubImageRow {
         ),
         category_job_service_sub_img_type: read_i32(row, "category_job_service_sub_img_type")
             .unwrap_or(0),
+        category_job_service_sub_img_type_language: read_i32(
+            row,
+            "category_job_service_sub_img_type_language",
+        )
+        .unwrap_or(0),
         category_job_service_sub_img_priority: read_i32(
             row,
             "category_job_service_sub_img_priority",

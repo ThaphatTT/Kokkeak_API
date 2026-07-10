@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use super::user::RepoError;
 use crate::category_job_service_sub::{
     CategoryJobServiceSubCreateInput, CategoryJobServiceSubCreateResult,
+    CategoryJobServiceSubCreateSpInput, CategoryJobServiceSubCreateSpResult,
     CategoryJobServiceSubDeleteResult, CategoryJobServiceSubDetailBundle,
     CategoryJobServiceSubImageCreateInput, CategoryJobServiceSubImageCreateResult,
     CategoryJobServiceSubImageDeleteInput, CategoryJobServiceSubImageDeleteResult,
@@ -86,6 +87,11 @@ pub trait CategoryJobServiceSubRepository: Send + Sync {
         input: &CategoryJobServiceSubUpdateInput,
         image_paths: &[SubImageForUpdate],
     ) -> Result<CategoryJobServiceSubUpdateResult, RepoError>;
+
+    async fn create_via_sp(
+        &self,
+        input: &CategoryJobServiceSubCreateSpInput,
+    ) -> Result<CategoryJobServiceSubCreateSpResult, RepoError>;
 }
 
 #[allow(dead_code)]

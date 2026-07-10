@@ -100,15 +100,51 @@ err_admin_user:
   user_not_found: "ไม่พบผู้ใช้หรือผู้ใช้ถูกลบไปแล้ว"
   image_invalid: 'อัปโหลดรูปภาพไม่สำเร็จสำหรับฟิลด์ "{field}"'
 
+err_category_job_main:
+  create_success: "สร้างหมวดหมู่สำเร็จ"
+  update_success: "อัปเดตหมวดหมู่สำเร็จ"
+  delete_success: "ลบหมวดหมู่สำเร็จ"
+  not_found: "ไม่พบหมวดหมู่ {0}"
+  validation: "ข้อมูลหมวดหมู่ไม่ผ่านการตรวจสอบ: {0}"
+  backend: "ระบบจัดการหมวดหมู่ขัดข้อง: {0}"
+
 err_category_job_service_main:
+  create_success: "สร้างบริการสำเร็จ"
+  update_success: "อัปเดตบริการสำเร็จ"
+  delete_success: "ลบบริการสำเร็จ"
   not_found: "ไม่พบบริการ {0}"
   validation: "ข้อมูลบริการไม่ผ่านการตรวจสอบ: {0}"
   backend: "ระบบจัดการบริการขัดข้อง: {0}"
 
 err_category_job_service_sub:
+  create_success: "สร้างบริการย่อยสำเร็จ"
+  update_success: "อัปเดตบริการย่อยสำเร็จ"
+  delete_success: "ลบบริการย่อยสำเร็จ"
   not_found: "ไม่พบบริการย่อย {0}"
   main_not_found: "ไม่พบบริการหลัก {0}"
   name_required: "ต้องระบุชื่อบริการย่อย"
   invalid_status: "สถานะไม่ถูกต้อง (ต้องเป็น 0 หรือ 1)"
   validation: "ข้อมูลบริการย่อยไม่ผ่านการตรวจสอบ: {0}"
   backend: "ระบบจัดการบริการย่อยขัดข้อง: {0}"
+
+err_fee:
+  create_success: "สร้างค่าบริการสำเร็จ"
+  update_success: "อัปเดตค่าบริการสำเร็จ"
+  delete_success: "ลบค่าบริการสำเร็จ"
+  duplicate_guid: "GUID ค่าบริการนี้มีอยู่แล้ว"
+  not_found: "ไม่พบค่าบริการ"
+  guid_required: "ต้องระบุ GUID ค่าบริการ"
+  invalid_status: "สถานะต้องเป็น 0 หรือ 1"
+  invalid_price: "ราคาไม่ถูกต้อง"
+  price_out_of_range: "ราคาต้องอยู่ระหว่าง 0 ถึง 99999999"
+  header_too_long: "หัวข้อต้องไม่เกิน 200 ตัวอักษร"
+  internal: "การทำรายการค่าบริการไม่สำเร็จ"
+
+err_warranty:
+  create_success: "สร้างการรับประกันสำเร็จ"
+  update_success: "อัปเดตการรับประกันสำเร็จ"
+  delete_success: "ลบการรับประกันสำเร็จ"
+  duplicate_guid: "GUID การรับประกันนี้มีอยู่แล้ว"
+  not_found: "ไม่พบการรับประกัน"
+  guid_required: "ต้องระบุ GUID การรับประกัน"
+  internal: "การทำรายการการรับประกันไม่สำเร็จ"

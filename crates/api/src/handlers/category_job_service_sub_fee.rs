@@ -365,19 +365,31 @@ pub async fn create_category_job_service_sub_fee_admin(
     };
 
     if result.success {
-        return Ok((StatusCode::CREATED, created(result)).into_response());
+        let (_, _, i18n_key) = sp_fee_status(&result.code);
+        let locale = current_locale();
+        let localized = tr(i18n_key, &locale, &[]);
+        let resp = ApiResponse {
+            success: true,
+            data: Some(serde_json::json!({
+                "category_job_service_sub_fee_guid": result.category_job_service_sub_fee_guid,
+                "code": result.code,
+                "message": localized,
+            })),
+            error: None,
+            meta: None,
+        };
+        return Ok((StatusCode::CREATED, Json(resp)).into_response());
     }
 
-    let (status, _code_str) = match result.code.as_str() {
-        "DUPLICATE_GUID" => (StatusCode::CONFLICT, "conflict"),
-        _ => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
-    };
+    let (status, code, i18n_key) = sp_fee_status(&result.code);
+    let locale = current_locale();
+    let localized = tr(i18n_key, &locale, &[]);
     let envelope: ApiResponse<()> = ApiResponse {
         success: false,
         data: None,
         error: Some(kokkak_common::error::ApiErrorBody {
-            code: result.code.clone(),
-            message: result.message.clone(),
+            code: code.to_string(),
+            message: localized,
         }),
         meta: None,
     };
@@ -581,22 +593,31 @@ pub async fn update_category_job_service_sub_fee_admin(
     };
 
     if result.success {
-        return Ok((StatusCode::OK, ok(result)).into_response());
+        let (_, _, i18n_key) = sp_fee_status(&result.code);
+        let locale = current_locale();
+        let localized = tr(i18n_key, &locale, &[]);
+        let resp = ApiResponse {
+            success: true,
+            data: Some(serde_json::json!({
+                "category_job_service_sub_fee_guid": result.category_job_service_sub_fee_guid,
+                "code": result.code,
+                "message": localized,
+            })),
+            error: None,
+            meta: None,
+        };
+        return Ok((StatusCode::OK, Json(resp)).into_response());
     }
 
-    let status = match result.code.as_str() {
-        "NOT_FOUND" | "GUID_REQUIRED" => StatusCode::NOT_FOUND,
-        "INVALID_STATUS" | "INVALID_PRICE" | "PRICE_OUT_OF_RANGE" | "HEADER_TOO_LONG" => {
-            StatusCode::UNPROCESSABLE_ENTITY
-        }
-        _ => StatusCode::INTERNAL_SERVER_ERROR,
-    };
+    let (status, code, i18n_key) = sp_fee_status(&result.code);
+    let locale = current_locale();
+    let localized = tr(i18n_key, &locale, &[]);
     let envelope: ApiResponse<()> = ApiResponse {
         success: false,
         data: None,
         error: Some(kokkak_common::error::ApiErrorBody {
-            code: result.code.clone(),
-            message: result.message.clone(),
+            code: code.to_string(),
+            message: localized,
         }),
         meta: None,
     };
@@ -647,23 +668,120 @@ pub async fn delete_category_job_service_sub_fee_admin(
     };
 
     if result.success {
-        return Ok((StatusCode::OK, ok(result)).into_response());
+        let (_, _, i18n_key) = sp_fee_status(&result.code);
+        let locale = current_locale();
+        let localized = tr(i18n_key, &locale, &[]);
+        let resp = ApiResponse {
+            success: true,
+            data: Some(serde_json::json!({
+                "category_job_service_sub_fee_guid": result.category_job_service_sub_fee_guid,
+                "code": result.code,
+                "message": localized,
+            })),
+            error: None,
+            meta: None,
+        };
+        return Ok((StatusCode::OK, Json(resp)).into_response());
     }
 
-    let status = match result.code.as_str() {
-        "NOT_FOUND" | "GUID_REQUIRED" => StatusCode::NOT_FOUND,
-        _ => StatusCode::INTERNAL_SERVER_ERROR,
-    };
+    let (status, code, i18n_key) = sp_fee_status(&result.code);
+    let locale = current_locale();
+    let localized = tr(i18n_key, &locale, &[]);
     let envelope: ApiResponse<()> = ApiResponse {
         success: false,
         data: None,
         error: Some(kokkak_common::error::ApiErrorBody {
-            code: result.code.clone(),
-            message: result.message.clone(),
+            code: code.to_string(),
+            message: localized,
         }),
         meta: None,
     };
     Ok((status, Json(envelope)).into_response())
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/category-job-service-sub-fees/{guid}",
+    tag = "category-job-service-sub-fee",
+    params(
+        ("guid" = String, Path, description = "Category Job Service Sub Fee GUID (UUID)"),
+    ),
+    responses(
+        (status = 200, description = "Sub-service fee detail with all localized fields", body = kokkak_domain::CategoryJobServiceSubFeeDetailRow),
+        (status = 401, description = "Not authenticated", body = crate::openapi::ApiError),
+        (status = 404, description = "Fee not found", body = crate::openapi::ApiError),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn get_category_job_service_sub_fee(
+    State(state): State<AppState>,
+    Path(guid): Path<String>,
+) -> Result<Response, Response> {
+    let guid = guid.trim();
+    if guid.is_empty() {
+        return Err(validation_envelope(
+            &state,
+            "category_job_service_sub_fee_guid is required",
+        ));
+    }
+
+    match state.category_job_service_sub_fee.detail(guid).await {
+        Ok(Some(row)) => Ok((StatusCode::OK, ok(row)).into_response()),
+        Ok(None) => {
+            let locale = current_locale();
+            let msg = tr("err_fee.not_found", &locale, &[guid]);
+            let envelope: ApiResponse<()> = ApiResponse {
+                success: false,
+                data: None,
+                error: Some(kokkak_common::error::ApiErrorBody {
+                    code: "not_found".into(),
+                    message: msg,
+                }),
+                meta: None,
+            };
+            Err((StatusCode::NOT_FOUND, Json(envelope)).into_response())
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, guid = %guid, "category_job_service_sub_fee.detail failed");
+            Err(repo_error_to_response(&state, e).await)
+        }
+    }
+}
+
+fn sp_fee_status(sp_code: &str) -> (StatusCode, &'static str, &'static str) {
+    match sp_code {
+        "INSERT_SUCCESS" | "CREATE_SUCCESS" | "UPDATE_SUCCESS" | "DELETE_SUCCESS" => {
+            (StatusCode::OK, "success", "err_fee.create_success")
+        }
+        "DUPLICATE_GUID" => (StatusCode::CONFLICT, "conflict", "err_fee.duplicate_guid"),
+        "NOT_FOUND" => (StatusCode::NOT_FOUND, "not_found", "err_fee.not_found"),
+        "GUID_REQUIRED" => (StatusCode::NOT_FOUND, "not_found", "err_fee.guid_required"),
+        "INVALID_STATUS" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation",
+            "err_fee.invalid_status",
+        ),
+        "INVALID_PRICE" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation",
+            "err_fee.invalid_price",
+        ),
+        "PRICE_OUT_OF_RANGE" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation",
+            "err_fee.price_out_of_range",
+        ),
+        "HEADER_TOO_LONG" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation",
+            "err_fee.header_too_long",
+        ),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            "err_fee.internal",
+        ),
+    }
 }
 
 async fn repo_error_to_response(state: &AppState, err: kokkak_domain::RepoError) -> Response {

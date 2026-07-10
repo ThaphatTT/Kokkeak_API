@@ -100,15 +100,51 @@ err_admin_user:
   user_not_found: "user not found or deleted"
   image_invalid: 'image upload failed for field "{field}"'
 
-  err_category_job_service_main:
-    not_found: "service not found: {0}"
-    validation: "service validation failed: {0}"
-    backend: "service backend error: {0}"
+err_category_job_main:
+  create_success: "category created successfully"
+  update_success: "category updated successfully"
+  delete_success: "category deleted successfully"
+  not_found: "category not found: {0}"
+  validation: "category validation failed: {0}"
+  backend: "category backend error: {0}"
 
-  err_category_job_service_sub:
-    not_found: "service sub not found: {0}"
-    main_not_found: "parent service not found: {0}"
-    name_required: "service sub name is required"
-    invalid_status: "status must be 0 or 1"
-    validation: "service sub validation failed: {0}"
-    backend: "service sub backend error: {0}"
+err_category_job_service_main:
+  create_success: "service created successfully"
+  update_success: "service updated successfully"
+  delete_success: "service deleted successfully"
+  not_found: "service not found: {0}"
+  validation: "service validation failed: {0}"
+  backend: "service backend error: {0}"
+
+err_category_job_service_sub:
+  create_success: "service sub created successfully"
+  update_success: "service sub updated successfully"
+  delete_success: "service sub deleted successfully"
+  not_found: "service sub not found: {0}"
+  main_not_found: "parent service not found: {0}"
+  name_required: "service sub name is required"
+  invalid_status: "status must be 0 or 1"
+  validation: "service sub validation failed: {0}"
+  backend: "service sub backend error: {0}"
+
+err_fee:
+  create_success: "fee created successfully"
+  update_success: "fee updated successfully"
+  delete_success: "fee deleted successfully"
+  duplicate_guid: "fee GUID already exists"
+  not_found: "fee not found"
+  guid_required: "fee GUID is required"
+  invalid_status: "status must be 0 or 1"
+  invalid_price: "price is not a valid decimal"
+  price_out_of_range: "price must be between 0 and 99999999"
+  header_too_long: "header must be 200 characters or fewer"
+  internal: "fee operation failed"
+
+err_warranty:
+  create_success: "warranty created successfully"
+  update_success: "warranty updated successfully"
+  delete_success: "warranty deleted successfully"
+  duplicate_guid: "warranty GUID already exists"
+  not_found: "warranty not found"
+  guid_required: "warranty GUID is required"
+  internal: "warranty operation failed"

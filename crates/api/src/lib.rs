@@ -240,6 +240,14 @@ impl kokkak_domain::CategoryJobServiceSubRepository for MssqlCategoryJobServiceS
             "category_job_service_sub repo not wired in build_app_state".into(),
         ))
     }
+    async fn create_via_sp(
+        &self,
+        _input: &kokkak_domain::CategoryJobServiceSubCreateSpInput,
+    ) -> Result<kokkak_domain::CategoryJobServiceSubCreateSpResult, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_service_sub repo not wired in build_app_state".into(),
+        ))
+    }
 }
 
 #[allow(dead_code)]
@@ -295,6 +303,16 @@ impl kokkak_domain::CategoryJobServiceSubFeeRepository
                     .into(),
             ))
     }
+    async fn detail(
+        &self,
+        _category_job_service_sub_fee_guid: &str,
+    ) -> Result<Option<kokkak_domain::CategoryJobServiceSubFeeDetailRow>, kokkak_domain::RepoError>
+    {
+        Err(kokkak_domain::RepoError::Backend(
+                "category_job_service_sub_fee repo not wired in build_app_state (set KOKKAK_DATABASE__SQLSERVER_URL)"
+                    .into(),
+            ))
+    }
 }
 
 struct MssqlCategoryJobServiceSubWarrantyRepositoryNoop;
@@ -340,6 +358,32 @@ impl kokkak_domain::CategoryJobServiceSubWarrantyRepository
         _input: &kokkak_domain::CategoryJobServiceSubWarrantyDeleteInput,
     ) -> Result<kokkak_domain::CategoryJobServiceSubWarrantyDeleteResult, kokkak_domain::RepoError>
     {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_service_sub_warranty repo not wired in build_app_state (set KOKKAK_DATABASE__SQLSERVER_URL)"
+                .into(),
+        ))
+    }
+
+    async fn autocomplete(
+        &self,
+        _input: &kokkak_domain::CategoryJobServiceSubWarrantyAutocompleteInput,
+    ) -> Result<
+        Vec<kokkak_domain::CategoryJobServiceSubWarrantyAutocompleteRow>,
+        kokkak_domain::RepoError,
+    > {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_service_sub_warranty repo not wired in build_app_state (set KOKKAK_DATABASE__SQLSERVER_URL)"
+                .into(),
+        ))
+    }
+
+    async fn detail(
+        &self,
+        _category_job_service_sub_warranty_guid: &str,
+    ) -> Result<
+        Option<kokkak_domain::CategoryJobServiceSubWarrantyFullDetailRow>,
+        kokkak_domain::RepoError,
+    > {
         Err(kokkak_domain::RepoError::Backend(
             "category_job_service_sub_warranty repo not wired in build_app_state (set KOKKAK_DATABASE__SQLSERVER_URL)"
                 .into(),

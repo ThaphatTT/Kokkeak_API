@@ -320,7 +320,20 @@ pub async fn create_category_job_service_sub_admin(
         }
     };
 
-    Ok((StatusCode::CREATED, created(result)).into_response())
+    let locale = current_locale();
+    let i18n_key = sp_service_sub_status_key(&result.code);
+    let localized = tr(i18n_key, &locale, &[]);
+    let resp = ApiResponse {
+        success: result.success,
+        data: Some(serde_json::json!({
+            "category_job_service_sub_guid": result.category_job_service_sub_guid,
+            "code": result.code,
+            "message": localized,
+        })),
+        error: None,
+        meta: None,
+    };
+    Ok((StatusCode::CREATED, Json(resp)).into_response())
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -530,7 +543,20 @@ pub async fn update_category_job_service_sub_admin(
         }
     }
 
-    Ok((StatusCode::OK, ok(result)).into_response())
+    let locale = current_locale();
+    let i18n_key = sp_service_sub_status_key(&result.code);
+    let localized = tr(i18n_key, &locale, &[]);
+    let resp = ApiResponse {
+        success: result.success,
+        data: Some(serde_json::json!({
+            "category_job_service_sub_guid": result.category_job_service_sub_guid,
+            "code": result.code,
+            "message": localized,
+        })),
+        error: None,
+        meta: None,
+    };
+    Ok((StatusCode::OK, Json(resp)).into_response())
 }
 
 #[utoipa::path(
@@ -579,7 +605,246 @@ pub async fn delete_category_job_service_sub_admin(
             return Err(sp_error_to_response(&state, e).await);
         }
     };
-    Ok((StatusCode::OK, ok(result)).into_response())
+
+    let locale = current_locale();
+    let i18n_key = sp_service_sub_status_key(&result.code);
+    let localized = tr(i18n_key, &locale, &[]);
+    let resp = ApiResponse {
+        success: result.success,
+        data: Some(serde_json::json!({
+            "category_job_service_sub_guid": result.category_job_service_sub_guid,
+            "code": result.code,
+            "message": localized,
+        })),
+        error: None,
+        meta: None,
+    };
+    Ok((StatusCode::OK, Json(resp)).into_response())
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct CreateCategoryJobServiceSubSpRequest {
+    #[serde(default)]
+    pub category_job_service_sub_guid: Option<String>,
+
+    pub category_job_service_main_guid: String,
+
+    #[serde(default)]
+    pub category_job_service_sub_name_la: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_sub_name_en: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_sub_name_th: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_sub_name_zh: Option<String>,
+
+    pub category_job_service_sub_start_price: String,
+
+    #[serde(default)]
+    pub category_job_service_sub_description_la: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_sub_description_en: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_sub_description_th: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_sub_description_zh: Option<String>,
+
+    #[serde(default = "default_sp_status")]
+    pub category_job_service_sub_status: i32,
+
+    #[serde(default)]
+    pub warranties: Vec<kokkak_domain::CategoryJobServiceSubCreateSpWarrantyInput>,
+
+    #[serde(default)]
+    pub fees: Vec<kokkak_domain::CategoryJobServiceSubCreateSpFeeInput>,
+
+    #[serde(default)]
+    pub images: Vec<kokkak_domain::CategoryJobServiceSubCreateSpImageInput>,
+}
+
+fn default_sp_status() -> i32 {
+    1
+}
+
+impl CreateCategoryJobServiceSubSpRequest {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.category_job_service_main_guid.trim().is_empty() {
+            return Err("category_job_service_main_guid is required".to_string());
+        }
+        let has_any_name = self
+            .category_job_service_sub_name_la
+            .as_deref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false)
+            || self
+                .category_job_service_sub_name_en
+                .as_deref()
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false)
+            || self
+                .category_job_service_sub_name_th
+                .as_deref()
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false)
+            || self
+                .category_job_service_sub_name_zh
+                .as_deref()
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false);
+        if !has_any_name {
+            return Err(
+                "at least one name (_name_la/_name_en/_name_th/_name_zh) is required".to_string(),
+            );
+        }
+        if self.category_job_service_sub_start_price.trim().is_empty() {
+            return Err("category_job_service_sub_start_price is required".to_string());
+        }
+        if let Ok(price) = self
+            .category_job_service_sub_start_price
+            .trim()
+            .parse::<rust_decimal::Decimal>()
+        {
+            if price < rust_decimal::Decimal::ZERO {
+                return Err("category_job_service_sub_start_price cannot be negative".to_string());
+            }
+        }
+        for (i, w) in self.warranties.iter().enumerate() {
+            if w.guid.trim().is_empty() {
+                return Err(format!("warranties[{i}].guid is required"));
+            }
+            if w.sort_order < 1 {
+                return Err(format!("warranties[{i}].sort_order must be >= 1"));
+            }
+        }
+        for (i, f) in self.fees.iter().enumerate() {
+            if f.guid.trim().is_empty() {
+                return Err(format!("fees[{i}].guid is required"));
+            }
+            if f.sort_order < 1 {
+                return Err(format!("fees[{i}].sort_order must be >= 1"));
+            }
+        }
+        for (i, img) in self.images.iter().enumerate() {
+            if img.img_path.trim().is_empty() {
+                return Err(format!("images[{i}].img_path is required"));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/category-job-service-subs/sp-insert",
+    tag = "admin",
+    request_body = CreateCategoryJobServiceSubSpRequest,
+    responses(
+        (status = 201, description = "Sub-service created via SP", body = kokkak_domain::CategoryJobServiceSubCreateSpResult),
+        (status = 400, description = "Validation error", body = crate::openapi::ApiError),
+        (status = 401, description = "Not authenticated"),
+        (status = 403, description = "PERMISSION_DENIED", body = crate::openapi::ApiError),
+        (status = 500, description = "Internal error", body = crate::openapi::ApiError),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn create_category_job_service_sub_sp_admin(
+    State(state): State<AppState>,
+    user: AuthnUser,
+    Json(req): Json<CreateCategoryJobServiceSubSpRequest>,
+) -> Result<Response, Response> {
+    let locale = current_locale();
+    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+
+    if !user
+        .has_permission(
+            kokkak_domain::Permission::ServiceCreate,
+            &state.permission_checker,
+        )
+        .await
+    {
+        return Err(permission_denied(
+            &state,
+            kokkak_domain::Permission::ServiceCreate.code(),
+        ));
+    }
+    if let Err(msg) = req.validate() {
+        return Err(validation_envelope(&state, &msg));
+    }
+
+    let start_price: rust_decimal::Decimal =
+        match req.category_job_service_sub_start_price.trim().parse() {
+            Ok(d) => d,
+            Err(_) => {
+                return Err(validation_envelope(
+                    &state,
+                    "category_job_service_sub_start_price must be a decimal number",
+                ));
+            }
+        };
+
+    let actor = user.id().to_string();
+    let input = kokkak_domain::CategoryJobServiceSubCreateSpInput {
+        category_job_service_sub_guid: req.category_job_service_sub_guid,
+        category_job_service_main_guid: req.category_job_service_main_guid,
+        category_job_service_sub_name_la: req.category_job_service_sub_name_la,
+        category_job_service_sub_name_en: req.category_job_service_sub_name_en,
+        category_job_service_sub_name_th: req.category_job_service_sub_name_th,
+        category_job_service_sub_name_zh: req.category_job_service_sub_name_zh,
+        category_job_service_sub_start_price: start_price,
+        category_job_service_sub_description_la: req.category_job_service_sub_description_la,
+        category_job_service_sub_description_en: req.category_job_service_sub_description_en,
+        category_job_service_sub_description_th: req.category_job_service_sub_description_th,
+        category_job_service_sub_description_zh: req.category_job_service_sub_description_zh,
+        category_job_service_sub_status: req.category_job_service_sub_status,
+        warranties: req.warranties,
+        fees: req.fees,
+        images: req.images,
+        create_by: actor,
+    };
+
+    let result = match state.category_job_service_sub.create_via_sp(input).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "category_job_service_sub.create_via_sp failed");
+            return Err(sp_error_to_response(&state, e).await);
+        }
+    };
+
+    let locale = current_locale();
+    let i18n_key = sp_service_sub_status_key(&result.code);
+    let localized = tr(i18n_key, &locale, &[]);
+    let resp = ApiResponse {
+        success: result.success,
+        data: Some(serde_json::json!({
+            "category_job_service_sub_guid": result.category_job_service_sub_guid,
+            "code": result.code,
+            "message": localized,
+            "warranty_count": result.warranty_count,
+            "fee_count": result.fee_count,
+            "image_count": result.image_count,
+        })),
+        error: None,
+        meta: None,
+    };
+    Ok((StatusCode::CREATED, Json(resp)).into_response())
+}
+
+fn sp_service_sub_status_key(sp_code: &str) -> &'static str {
+    match sp_code {
+        "INSERT_SUCCESS" | "CREATE_SUCCESS" | "CREATED" => {
+            "err_category_job_service_sub.create_success"
+        }
+        "UPDATE_SUCCESS" => "err_category_job_service_sub.update_success",
+        "DELETE_SUCCESS" => "err_category_job_service_sub.delete_success",
+        code if code.starts_with("INSERT_ERROR_") => "err_category_job_service_sub.backend",
+        _ => "err_category_job_service_sub.backend",
+    }
 }
 
 async fn cleanup_files(state: &AppState, files: &[StorageKey]) {

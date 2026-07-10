@@ -137,6 +137,155 @@ pub async fn list_category_job_service_sub_warranties(
     Ok((StatusCode::OK, ok(resp)).into_response())
 }
 
+#[derive(Debug, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
+pub struct AutocompleteCategoryJobServiceSubWarrantyQuery {
+    #[serde(default)]
+    pub category_job_service_sub_warranty_guid: Option<String>,
+
+    #[serde(default)]
+    pub keyword: Option<String>,
+
+    #[serde(default)]
+    pub status: Option<i32>,
+
+    #[serde(default)]
+    pub locale: Option<String>,
+
+    #[serde(default)]
+    pub limit: Option<i32>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/category-job-service-sub-warranties/autocomplete",
+    tag = "category-job-service-sub-warranty",
+    params(AutocompleteCategoryJobServiceSubWarrantyQuery),
+    responses(
+        (status = 200, description = "Sub-service warranty autocomplete rows", body = Vec<kokkak_domain::CategoryJobServiceSubWarrantyAutocompleteRow>),
+        (status = 401, description = "Not authenticated", body = crate::openapi::ApiError),
+        (status = 422, description = "Validation error", body = crate::openapi::ApiError),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn autocomplete_category_job_service_sub_warranties(
+    State(state): State<AppState>,
+    Query(q): Query<AutocompleteCategoryJobServiceSubWarrantyQuery>,
+) -> Result<Response, Response> {
+    if let Some(locale) = q.locale.as_deref() {
+        let normalized = locale.to_ascii_lowercase();
+        if !matches!(normalized.as_str(), "la" | "lo" | "en" | "th" | "zh") {
+            return Err(validation_envelope(
+                &state,
+                "locale must be one of: th, en, la, lo, zh",
+            ));
+        }
+    }
+    if let Some(s) = q.status {
+        if !matches!(s, 0 | 1) {
+            return Err(validation_envelope(&state, "status must be 0 or 1"));
+        }
+    }
+    if let Some(l) = q.limit {
+        if !(1..=100).contains(&l) {
+            return Err(validation_envelope(
+                &state,
+                "limit must be between 1 and 100",
+            ));
+        }
+    }
+
+    let locale = q.locale.clone().or_else(|| Some(current_locale()));
+
+    let input = kokkak_domain::CategoryJobServiceSubWarrantyAutocompleteInput {
+        category_job_service_sub_warranty_guid: q
+            .category_job_service_sub_warranty_guid
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        keyword: q
+            .keyword
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        status: q.status,
+        locale,
+        limit: q.limit,
+    };
+
+    let rows = match state
+        .category_job_service_sub_warranty
+        .autocomplete(input)
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "category_job_service_sub_warranty.autocomplete failed"
+            );
+            return Err(repo_error_to_response(&state, e).await);
+        }
+    };
+
+    Ok((
+        StatusCode::OK,
+        Json(ApiResponse {
+            success: true,
+            data: Some(rows),
+            error: None,
+            meta: None,
+        }),
+    )
+        .into_response())
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/category-job-service-sub-warranties/{guid}",
+    tag = "category-job-service-sub-warranty",
+    params(
+        ("guid" = String, Path, description = "Category Job Service Sub Warranty GUID (UUID)"),
+    ),
+    responses(
+        (status = 200, description = "Sub-service warranty detail with all localized fields", body = kokkak_domain::CategoryJobServiceSubWarrantyFullDetailRow),
+        (status = 401, description = "Not authenticated", body = crate::openapi::ApiError),
+        (status = 404, description = "Warranty not found", body = crate::openapi::ApiError),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn get_category_job_service_sub_warranty(
+    State(state): State<AppState>,
+    Path(guid): Path<String>,
+) -> Result<Response, Response> {
+    let guid = guid.trim();
+    if guid.is_empty() {
+        return Err(validation_envelope(
+            &state,
+            "category_job_service_sub_warranty_guid is required",
+        ));
+    }
+
+    match state.category_job_service_sub_warranty.detail(guid).await {
+        Ok(Some(row)) => Ok((StatusCode::OK, ok(row)).into_response()),
+        Ok(None) => {
+            let locale = current_locale();
+            let msg = tr("err_warranty.not_found", &locale, &[guid]);
+            let envelope: ApiResponse<()> = ApiResponse {
+                success: false,
+                data: None,
+                error: Some(kokkak_common::error::ApiErrorBody {
+                    code: "not_found".into(),
+                    message: msg,
+                }),
+                meta: None,
+            };
+            Err((StatusCode::NOT_FOUND, Json(envelope)).into_response())
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, guid = %guid, "category_job_service_sub_warranty.detail failed");
+            Err(repo_error_to_response(&state, e).await)
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct CreateCategoryJobServiceSubWarrantyRequest {
     #[serde(default)]
@@ -260,19 +409,31 @@ pub async fn create_category_job_service_sub_warranty_admin(
     };
 
     if result.success {
-        return Ok((StatusCode::CREATED, created(result)).into_response());
+        let (_, _, i18n_key) = sp_warranty_status(&result.code);
+        let locale = current_locale();
+        let localized = tr(i18n_key, &locale, &[]);
+        let resp = ApiResponse {
+            success: true,
+            data: Some(serde_json::json!({
+                "category_job_service_sub_warranty_guid": result.category_job_service_sub_warranty_guid,
+                "code": result.code,
+                "message": localized,
+            })),
+            error: None,
+            meta: None,
+        };
+        return Ok((StatusCode::CREATED, Json(resp)).into_response());
     }
 
-    let (status, _code_str) = match result.code.as_str() {
-        "DUPLICATE_GUID" => (StatusCode::CONFLICT, "conflict"),
-        _ => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
-    };
+    let (status, code, i18n_key) = sp_warranty_status(&result.code);
+    let locale = current_locale();
+    let localized = tr(i18n_key, &locale, &[]);
     let envelope: ApiResponse<()> = ApiResponse {
         success: false,
         data: None,
         error: Some(kokkak_common::error::ApiErrorBody {
-            code: result.code.clone(),
-            message: result.message.clone(),
+            code: code.to_string(),
+            message: localized,
         }),
         meta: None,
     };
@@ -415,19 +576,31 @@ pub async fn update_category_job_service_sub_warranty_admin(
     };
 
     if result.success {
-        return Ok((StatusCode::OK, ok(result)).into_response());
+        let (_, _, i18n_key) = sp_warranty_status(&result.code);
+        let locale = current_locale();
+        let localized = tr(i18n_key, &locale, &[]);
+        let resp = ApiResponse {
+            success: true,
+            data: Some(serde_json::json!({
+                "category_job_service_sub_warranty_guid": result.category_job_service_sub_warranty_guid,
+                "code": result.code,
+                "message": localized,
+            })),
+            error: None,
+            meta: None,
+        };
+        return Ok((StatusCode::OK, Json(resp)).into_response());
     }
 
-    let status = match result.code.as_str() {
-        "NOT_FOUND" | "GUID_REQUIRED" => StatusCode::NOT_FOUND,
-        _ => StatusCode::INTERNAL_SERVER_ERROR,
-    };
+    let (status, code, i18n_key) = sp_warranty_status(&result.code);
+    let locale = current_locale();
+    let localized = tr(i18n_key, &locale, &[]);
     let envelope: ApiResponse<()> = ApiResponse {
         success: false,
         data: None,
         error: Some(kokkak_common::error::ApiErrorBody {
-            code: result.code.clone(),
-            message: result.message.clone(),
+            code: code.to_string(),
+            message: localized,
         }),
         meta: None,
     };
@@ -494,23 +667,59 @@ pub async fn delete_category_job_service_sub_warranty_admin(
     };
 
     if result.success {
-        return Ok((StatusCode::OK, ok(result)).into_response());
+        let (_, _, i18n_key) = sp_warranty_status(&result.code);
+        let locale = current_locale();
+        let localized = tr(i18n_key, &locale, &[]);
+        let resp = ApiResponse {
+            success: true,
+            data: Some(serde_json::json!({
+                "category_job_service_sub_warranty_guid": result.category_job_service_sub_warranty_guid,
+                "code": result.code,
+                "message": localized,
+            })),
+            error: None,
+            meta: None,
+        };
+        return Ok((StatusCode::OK, Json(resp)).into_response());
     }
 
-    let status = match result.code.as_str() {
-        "NOT_FOUND" | "GUID_REQUIRED" => StatusCode::NOT_FOUND,
-        _ => StatusCode::INTERNAL_SERVER_ERROR,
-    };
+    let (status, code, i18n_key) = sp_warranty_status(&result.code);
+    let locale = current_locale();
+    let localized = tr(i18n_key, &locale, &[]);
     let envelope: ApiResponse<()> = ApiResponse {
         success: false,
         data: None,
         error: Some(kokkak_common::error::ApiErrorBody {
-            code: result.code.clone(),
-            message: result.message.clone(),
+            code: code.to_string(),
+            message: localized,
         }),
         meta: None,
     };
     Ok((status, Json(envelope)).into_response())
+}
+
+fn sp_warranty_status(sp_code: &str) -> (StatusCode, &'static str, &'static str) {
+    match sp_code {
+        "INSERT_SUCCESS" | "CREATE_SUCCESS" | "UPDATE_SUCCESS" | "DELETE_SUCCESS" => {
+            (StatusCode::OK, "success", "err_warranty.create_success")
+        }
+        "DUPLICATE_GUID" => (
+            StatusCode::CONFLICT,
+            "conflict",
+            "err_warranty.duplicate_guid",
+        ),
+        "NOT_FOUND" => (StatusCode::NOT_FOUND, "not_found", "err_warranty.not_found"),
+        "GUID_REQUIRED" => (
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "err_warranty.guid_required",
+        ),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            "err_warranty.internal",
+        ),
+    }
 }
 
 async fn repo_error_to_response(state: &AppState, err: kokkak_domain::RepoError) -> Response {

@@ -5,8 +5,9 @@ use crate::category_job_service_sub_fee::{
     CategoryJobServiceSubFeeAutocompleteInput, CategoryJobServiceSubFeeAutocompleteRow,
     CategoryJobServiceSubFeeCreateInput, CategoryJobServiceSubFeeCreateResult,
     CategoryJobServiceSubFeeDeleteInput, CategoryJobServiceSubFeeDeleteResult,
-    CategoryJobServiceSubFeeListInput, CategoryJobServiceSubFeePage,
-    CategoryJobServiceSubFeeUpdateInput, CategoryJobServiceSubFeeUpdateResult,
+    CategoryJobServiceSubFeeDetailRow, CategoryJobServiceSubFeeListInput,
+    CategoryJobServiceSubFeePage, CategoryJobServiceSubFeeUpdateInput,
+    CategoryJobServiceSubFeeUpdateResult,
 };
 
 #[async_trait]
@@ -35,4 +36,9 @@ pub trait CategoryJobServiceSubFeeRepository: Send + Sync {
         &self,
         input: &CategoryJobServiceSubFeeAutocompleteInput,
     ) -> Result<Vec<CategoryJobServiceSubFeeAutocompleteRow>, RepoError>;
+
+    async fn detail(
+        &self,
+        category_job_service_sub_fee_guid: &str,
+    ) -> Result<Option<CategoryJobServiceSubFeeDetailRow>, RepoError>;
 }

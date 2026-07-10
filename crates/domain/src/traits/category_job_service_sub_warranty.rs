@@ -2,10 +2,12 @@ use async_trait::async_trait;
 
 use super::user::RepoError;
 use crate::category_job_service_sub_warranty::{
+    CategoryJobServiceSubWarrantyAutocompleteInput, CategoryJobServiceSubWarrantyAutocompleteRow,
     CategoryJobServiceSubWarrantyCreateInput, CategoryJobServiceSubWarrantyCreateResult,
     CategoryJobServiceSubWarrantyDeleteInput, CategoryJobServiceSubWarrantyDeleteResult,
-    CategoryJobServiceSubWarrantyListInput, CategoryJobServiceSubWarrantyPage,
-    CategoryJobServiceSubWarrantyUpdateInput, CategoryJobServiceSubWarrantyUpdateResult,
+    CategoryJobServiceSubWarrantyFullDetailRow, CategoryJobServiceSubWarrantyListInput,
+    CategoryJobServiceSubWarrantyPage, CategoryJobServiceSubWarrantyUpdateInput,
+    CategoryJobServiceSubWarrantyUpdateResult,
 };
 
 #[async_trait]
@@ -29,4 +31,14 @@ pub trait CategoryJobServiceSubWarrantyRepository: Send + Sync {
         &self,
         input: &CategoryJobServiceSubWarrantyDeleteInput,
     ) -> Result<CategoryJobServiceSubWarrantyDeleteResult, RepoError>;
+
+    async fn autocomplete(
+        &self,
+        input: &CategoryJobServiceSubWarrantyAutocompleteInput,
+    ) -> Result<Vec<CategoryJobServiceSubWarrantyAutocompleteRow>, RepoError>;
+
+    async fn detail(
+        &self,
+        category_job_service_sub_warranty_guid: &str,
+    ) -> Result<Option<CategoryJobServiceSubWarrantyFullDetailRow>, RepoError>;
 }

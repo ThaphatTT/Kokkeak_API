@@ -100,15 +100,51 @@ err_admin_user:
   user_not_found: "ບໍ່ພົບຜູ້ໃຊ້ ຫຼື ຖືກລົບໄປແລ້ວ"
   image_invalid: 'ອັບໂຫລດຮູບບໍ່ສຳເລັດສຳລັບຟິວສ "{field}"'
 
-  err_category_job_service_main:
-    not_found: "บໍ່ພົບບໍລິການ {0}"
-    validation: "ຂໍ້ມູນບໍລິການບໍ່ຜ່ານການກວດສອບ: {0}"
-    backend: "ລະບົບຈັດການບໍລິການຂັດຂ້ອງ: {0}"
+err_category_job_main:
+  create_success: "ສ້າງໝວດໝູ່ສຳເລັດ"
+  update_success: "ອັບເດດໝວດໝູ່ສຳເລັດ"
+  delete_success: "ລຶບໝວດໝູ່ສຳເລັດ"
+  not_found: "ບໍ່ພົບໝວດໝູ່ {0}"
+  validation: "ຂໍ້ມູນໝວດໝູ່ບໍ່ຜ່ານການກວດສອບ: {0}"
+  backend: "ລະບົບຈັດການໝວດໝູ່ຂັດຂ້ອງ: {0}"
 
-  err_category_job_service_sub:
-    not_found: "บໍ່ພົບບໍລິການຍ່ອຍ {0}"
-    main_not_found: "บໍ່ພົບບໍລິການຫຼັກ {0}"
-    name_required: "ຕ້ອງລະບຸຊື່ບໍລິການຍ່ອຍ"
-    invalid_status: "ສະຖານະບໍ່ຖືກຕ້ອງ (ຕ້ອງເປັນ 0 ຫຼື 1)"
-    validation: "ຂໍ້ມູນບໍລິການຍ່ອຍບໍ່ຜ່ານການກວດສອບ: {0}"
-    backend: "ລະບົບຈັດການບໍລິການຍ່ອຍຂັດຂ້ອງ: {0}"
+err_category_job_service_main:
+  create_success: "ສ້າງບໍລິການສຳເລັດ"
+  update_success: "ອັບເດດບໍລິການສຳເລັດ"
+  delete_success: "ລຶບບໍລິການສຳເລັດ"
+  not_found: "ບໍ່ພົບບໍລິການ {0}"
+  validation: "ຂໍ້ມູນບໍລິການບໍ່ຜ່ານການກວດສອບ: {0}"
+  backend: "ລະບົບຈັດການບໍລິການຂັດຂ້ອງ: {0}"
+
+err_category_job_service_sub:
+  create_success: "ສ້າງບໍລິການຍ່ອຍສຳເລັດ"
+  update_success: "ອັບເດດບໍລິການຍ່ອຍສຳເລັດ"
+  delete_success: "ລຶບບໍລິການຍ່ອຍສຳເລັດ"
+  not_found: "ບໍ່ພົບບໍລິການຍ່ອຍ {0}"
+  main_not_found: "ບໍ່ພົບບໍລິການຫຼັກ {0}"
+  name_required: "ຕ້ອງລະບຸຊື່ບໍລິການຍ່ອຍ"
+  invalid_status: "ສະຖານະບໍ່ຖືກຕ້ອງ (ຕ້ອງເປັນ 0 ຫຼື 1)"
+  validation: "ຂໍ້ມູນບໍລິການຍ່ອຍບໍ່ຜ່ານການກວດສອບ: {0}"
+  backend: "ລະບົບຈັດການບໍລິການຍ່ອຍຂັດຂ້ອງ: {0}"
+
+err_fee:
+  create_success: "ສ້າງຄ່າບໍລິການສຳເລັດ"
+  update_success: "ອັບເດດຄ່າບໍລິການສຳເລັດ"
+  delete_success: "ລຶບຄ່າບໍລິການສຳເລັດ"
+  duplicate_guid: "GUID ຄ່າບໍລິການນີ້ມີຢູ່ແລ້ວ"
+  not_found: "ບໍ່ພົບຄ່າບໍລິການ"
+  guid_required: "ຕ້ອງລະບຸ GUID ຄ່າບໍລິການ"
+  invalid_status: "ສະຖານະຕ້ອງເປັນ 0 ຫຼື 1"
+  invalid_price: "ລາຄາບໍ່ຖືກຕ້ອງ"
+  price_out_of_range: "ລາຄາຕ້ອງຢູ່ລະຫວ່າງ 0 ຫາ 99999999"
+  header_too_long: "ຫົວຂໍ້ຕ້ອງບໍ່ເກີນ 200 ຕົວອັກສອນ"
+  internal: "ການເຮັດລາຍການຄ່າບໍລິການບໍ່ສຳເລັດ"
+
+err_warranty:
+  create_success: "ສ້າງການຮັບປະກັນສຳເລັດ"
+  update_success: "ອັບເດດການຮັບປະກັນສຳເລັດ"
+  delete_success: "ລຶບການຮັບປະກັນສຳເລັດ"
+  duplicate_guid: "GUID ການຮັບປະກັນນີ້ມີຢູ່ແລ້ວ"
+  not_found: "ບໍ່ພົບການຮັບປະກັນ"
+  guid_required: "ຕ້ອງລະບຸ GUID ການຮັບປະກັນ"
+  internal: "ການເຮັດລາຍການການຮັບປະກັນບໍ່ສຳເລັດ"

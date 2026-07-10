@@ -5,9 +5,9 @@ use kokkak_domain::{
     CategoryJobServiceSubFeeAutocompleteInput, CategoryJobServiceSubFeeAutocompleteRow,
     CategoryJobServiceSubFeeCreateInput, CategoryJobServiceSubFeeCreateResult,
     CategoryJobServiceSubFeeDeleteInput, CategoryJobServiceSubFeeDeleteResult,
-    CategoryJobServiceSubFeeListInput, CategoryJobServiceSubFeePage,
-    CategoryJobServiceSubFeeRepository, CategoryJobServiceSubFeeUpdateInput,
-    CategoryJobServiceSubFeeUpdateResult,
+    CategoryJobServiceSubFeeDetailRow, CategoryJobServiceSubFeeListInput,
+    CategoryJobServiceSubFeePage, CategoryJobServiceSubFeeRepository,
+    CategoryJobServiceSubFeeUpdateInput, CategoryJobServiceSubFeeUpdateResult,
 };
 
 pub struct CategoryJobServiceSubFeeService {
@@ -68,6 +68,15 @@ impl CategoryJobServiceSubFeeService {
                         .into(),
                 ))
             }
+            async fn detail(
+                &self,
+                _category_job_service_sub_fee_guid: &str,
+            ) -> Result<Option<CategoryJobServiceSubFeeDetailRow>, RepoError> {
+                Err(RepoError::Backend(
+                    "CategoryJobServiceSubFeeService::disabled — repository not wired (set KOKKAK_DATABASE__SQLSERVER_URL)"
+                        .into(),
+                ))
+            }
         }
         let repo: Arc<dyn CategoryJobServiceSubFeeRepository> = Arc::new(DisabledRepo);
         Self { repo }
@@ -110,6 +119,13 @@ impl CategoryJobServiceSubFeeService {
         input: CategoryJobServiceSubFeeAutocompleteInput,
     ) -> Result<Vec<CategoryJobServiceSubFeeAutocompleteRow>, RepoError> {
         self.repo.autocomplete(&input).await
+    }
+
+    pub async fn detail(
+        &self,
+        category_job_service_sub_fee_guid: &str,
+    ) -> Result<Option<CategoryJobServiceSubFeeDetailRow>, RepoError> {
+        self.repo.detail(category_job_service_sub_fee_guid).await
     }
 }
 

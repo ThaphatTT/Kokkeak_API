@@ -96,8 +96,20 @@ pub fn build(state: AppState) -> Router {
             get(handlers::category_job_service_sub_fee::autocomplete_category_job_service_sub_fees),
         )
         .route(
+            "/api/v1/category-job-service-sub-fees/:guid",
+            get(handlers::category_job_service_sub_fee::get_category_job_service_sub_fee),
+        )
+        .route(
             "/api/v1/category-job-service-sub-warranties",
             get(handlers::category_job_service_sub_warranty::list_category_job_service_sub_warranties),
+        )
+        .route(
+            "/api/v1/category-job-service-sub-warranties/autocomplete",
+            get(handlers::category_job_service_sub_warranty::autocomplete_category_job_service_sub_warranties),
+        )
+        .route(
+            "/api/v1/category-job-service-sub-warranties/:guid",
+            get(handlers::category_job_service_sub_warranty::get_category_job_service_sub_warranty),
         )
         .route(
             "/api/v1/master/countries",
@@ -184,6 +196,10 @@ pub fn build(state: AppState) -> Router {
         .route(
             "/api/v1/category-job-service-subs",
             post(handlers::category_job_service_sub::create_category_job_service_sub_admin),
+        )
+        .route(
+            "/api/v1/category-job-service-subs/sp-insert",
+            post(handlers::category_job_service_sub::create_category_job_service_sub_sp_admin),
         )
         .route(
             "/api/v1/category-job-service-subs/:sub_guid",

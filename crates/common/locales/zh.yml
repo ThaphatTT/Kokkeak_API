@@ -100,15 +100,51 @@ err_admin_user:
   user_not_found: "用户不存在或已删除"
   image_invalid: '字段 "{field}" 的图片上传失败'
 
+err_category_job_main:
+  create_success: "分类创建成功"
+  update_success: "分类更新成功"
+  delete_success: "分类删除成功"
+  not_found: "未找到分类 {0}"
+  validation: "分类校验失败: {0}"
+  backend: "分类后端错误: {0}"
+
 err_category_job_service_main:
+  create_success: "服务创建成功"
+  update_success: "服务更新成功"
+  delete_success: "服务删除成功"
   not_found: "找不到服务 {0}"
   validation: "服务校验失败: {0}"
   backend: "服务后端错误: {0}"
 
 err_category_job_service_sub:
+  create_success: "子服务创建成功"
+  update_success: "子服务更新成功"
+  delete_success: "子服务删除成功"
   not_found: "找不到子服务 {0}"
   main_not_found: "找不到父级服务 {0}"
   name_required: "子服务名称为必填项"
   invalid_status: "状态值无效（必须为 0 或 1）"
   validation: "子服务校验失败: {0}"
   backend: "子服务后端错误: {0}"
+
+err_fee:
+  create_success: "费用创建成功"
+  update_success: "费用更新成功"
+  delete_success: "费用删除成功"
+  duplicate_guid: "费用 GUID 已存在"
+  not_found: "未找到费用"
+  guid_required: "必须提供费用 GUID"
+  invalid_status: "状态必须为 0 或 1"
+  invalid_price: "价格不是有效的小数"
+  price_out_of_range: "价格必须在 0 到 99999999 之间"
+  header_too_long: "标题不能超过 200 个字符"
+  internal: "费用操作失败"
+
+err_warranty:
+  create_success: "保修创建成功"
+  update_success: "保修更新成功"
+  delete_success: "保修删除成功"
+  duplicate_guid: "保修 GUID 已存在"
+  not_found: "未找到保修"
+  guid_required: "必须提供保修 GUID"
+  internal: "保修操作失败"

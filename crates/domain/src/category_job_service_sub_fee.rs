@@ -220,6 +220,42 @@ pub struct CategoryJobServiceSubFeeDeleteResult {
     pub category_job_service_sub_fee_guid: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CategoryJobServiceSubFeeDetailRow {
+    pub category_job_service_sub_fee_guid: String,
+
+    pub category_job_service_sub_fee_header_la: String,
+
+    pub category_job_service_sub_fee_description_la: String,
+
+    pub category_job_service_sub_fee_header_en: String,
+
+    pub category_job_service_sub_fee_description_en: String,
+
+    pub category_job_service_sub_fee_header_th: String,
+
+    pub category_job_service_sub_fee_description_th: String,
+
+    pub category_job_service_sub_fee_header_zh: String,
+
+    pub category_job_service_sub_fee_description_zh: String,
+
+    pub category_job_service_sub_fee_price: Decimal,
+
+    pub category_job_service_sub_fee_status: i32,
+
+    pub category_job_service_sub_fee_icon: String,
+
+    pub category_job_service_sub_fee_create_at: Option<DateTime<Utc>>,
+
+    pub category_job_service_sub_fee_create_by: String,
+
+    pub category_job_service_sub_fee_update_at: Option<DateTime<Utc>>,
+
+    pub category_job_service_sub_fee_update_by: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CategoryJobServiceSubFeeAutocompleteInput {

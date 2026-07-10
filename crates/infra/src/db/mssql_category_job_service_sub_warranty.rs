@@ -5,11 +5,12 @@ use tiberius::ToSql;
 use kokkak_domain::traits::category_job_service_sub_warranty::CategoryJobServiceSubWarrantyRepository;
 use kokkak_domain::traits::user::RepoError;
 use kokkak_domain::{
+    CategoryJobServiceSubWarrantyAutocompleteInput, CategoryJobServiceSubWarrantyAutocompleteRow,
     CategoryJobServiceSubWarrantyCreateInput, CategoryJobServiceSubWarrantyCreateResult,
     CategoryJobServiceSubWarrantyDeleteInput, CategoryJobServiceSubWarrantyDeleteResult,
-    CategoryJobServiceSubWarrantyDetailRow, CategoryJobServiceSubWarrantyListInput,
-    CategoryJobServiceSubWarrantyPage, CategoryJobServiceSubWarrantyUpdateInput,
-    CategoryJobServiceSubWarrantyUpdateResult,
+    CategoryJobServiceSubWarrantyDetailRow, CategoryJobServiceSubWarrantyFullDetailRow,
+    CategoryJobServiceSubWarrantyListInput, CategoryJobServiceSubWarrantyPage,
+    CategoryJobServiceSubWarrantyUpdateInput, CategoryJobServiceSubWarrantyUpdateResult,
 };
 
 use crate::db::mssql::{exec_sp, read_i32, read_str, MssqlPool};
@@ -38,6 +39,25 @@ fn normalize_locale(raw: Option<&str>) -> String {
     "la".to_string()
 }
 
+fn row_to_warranty_autocomplete_row(
+    row: &tiberius::Row,
+) -> CategoryJobServiceSubWarrantyAutocompleteRow {
+    CategoryJobServiceSubWarrantyAutocompleteRow {
+        category_job_service_sub_warranty_guid: read_str(
+            row,
+            "category_job_service_sub_warranty_guid",
+        )
+        .unwrap_or("")
+        .to_string(),
+        category_job_service_sub_warranty_name: read_str(
+            row,
+            "category_job_service_sub_warranty_name",
+        )
+        .unwrap_or("")
+        .to_string(),
+    }
+}
+
 fn row_to_warranty_row(row: &tiberius::Row) -> CategoryJobServiceSubWarrantyDetailRow {
     CategoryJobServiceSubWarrantyDetailRow {
         category_job_service_sub_warranty_guid: read_str(
@@ -49,6 +69,75 @@ fn row_to_warranty_row(row: &tiberius::Row) -> CategoryJobServiceSubWarrantyDeta
         category_job_service_sub_warranty_description: read_str(
             row,
             "category_job_service_sub_warranty_description",
+        )
+        .unwrap_or("")
+        .to_string(),
+        category_job_service_sub_warranty_warranty_amount_day: read_i32(
+            row,
+            "category_job_service_sub_warranty_warranty_amount_day",
+        )
+        .unwrap_or(0),
+        category_job_service_sub_warranty_status: read_i32(
+            row,
+            "category_job_service_sub_warranty_status",
+        )
+        .unwrap_or(0),
+        category_job_service_sub_warranty_icon: read_str(
+            row,
+            "category_job_service_sub_warranty_icon",
+        )
+        .unwrap_or("")
+        .to_string(),
+        category_job_service_sub_warranty_create_at: {
+            row.get::<DateTime<Utc>, _>("category_job_service_sub_warranty_create_at")
+        },
+        category_job_service_sub_warranty_create_by: read_str(
+            row,
+            "category_job_service_sub_warranty_create_by",
+        )
+        .unwrap_or("")
+        .to_string(),
+        category_job_service_sub_warranty_update_at: {
+            row.get::<DateTime<Utc>, _>("category_job_service_sub_warranty_update_at")
+        },
+        category_job_service_sub_warranty_update_by: read_str(
+            row,
+            "category_job_service_sub_warranty_update_by",
+        )
+        .unwrap_or("")
+        .to_string(),
+    }
+}
+
+fn row_to_warranty_detail_row(row: &tiberius::Row) -> CategoryJobServiceSubWarrantyFullDetailRow {
+    CategoryJobServiceSubWarrantyFullDetailRow {
+        category_job_service_sub_warranty_guid: read_str(
+            row,
+            "category_job_service_sub_warranty_guid",
+        )
+        .unwrap_or("")
+        .to_string(),
+        category_job_service_sub_warranty_description_la: read_str(
+            row,
+            "category_job_service_sub_warranty_description_la",
+        )
+        .unwrap_or("")
+        .to_string(),
+        category_job_service_sub_warranty_description_en: read_str(
+            row,
+            "category_job_service_sub_warranty_description_en",
+        )
+        .unwrap_or("")
+        .to_string(),
+        category_job_service_sub_warranty_description_th: read_str(
+            row,
+            "category_job_service_sub_warranty_description_th",
+        )
+        .unwrap_or("")
+        .to_string(),
+        category_job_service_sub_warranty_description_zh: read_str(
+            row,
+            "category_job_service_sub_warranty_description_zh",
         )
         .unwrap_or("")
         .to_string(),
@@ -347,5 +436,60 @@ impl CategoryJobServiceSubWarrantyRepository for MssqlCategoryJobServiceSubWarra
             message,
             category_job_service_sub_warranty_guid: out_guid,
         })
+    }
+
+    async fn autocomplete(
+        &self,
+        input: &CategoryJobServiceSubWarrantyAutocompleteInput,
+    ) -> Result<Vec<CategoryJobServiceSubWarrantyAutocompleteRow>, RepoError> {
+        let guid = input
+            .category_job_service_sub_warranty_guid
+            .as_deref()
+            .unwrap_or("");
+        let keyword: Option<&str> = input.keyword.as_deref();
+        let status: Option<i32> = input.status;
+        let locale_raw: Option<&str> = input.locale.as_deref();
+        let locale: String = normalize_locale(locale_raw);
+        let limit: Option<i32> = Some(input.limit.unwrap_or(20).clamp(1, 100));
+
+        let rows = exec_sp(
+            &self.pool,
+            "EXEC dbo.SP_CATEGORY_JOB_SERVICE_SUB_WARRANTY_AUTOCOMPLETE \
+                @p_category_job_service_sub_warranty_guid = @P1, \
+                @p_keyword = @P2, \
+                @p_locale = @P3, \
+                @p_status = @P4, \
+                @p_limit = @P5",
+            &[
+                &guid as &dyn ToSql,
+                &keyword as &dyn ToSql,
+                &locale as &dyn ToSql,
+                &status as &dyn ToSql,
+                &limit as &dyn ToSql,
+            ],
+        )
+        .await?;
+
+        Ok(rows.iter().map(row_to_warranty_autocomplete_row).collect())
+    }
+
+    async fn detail(
+        &self,
+        category_job_service_sub_warranty_guid: &str,
+    ) -> Result<Option<CategoryJobServiceSubWarrantyFullDetailRow>, RepoError> {
+        let guid = category_job_service_sub_warranty_guid.trim();
+        if guid.is_empty() {
+            return Ok(None);
+        }
+
+        let rows = exec_sp(
+            &self.pool,
+            "EXEC dbo.SP_CATEGORY_JOB_SERVICE_SUB_WARRANTY_DETAIL_GET \
+                @p_category_job_service_sub_warranty_guid = @P1",
+            &[&guid as &dyn ToSql],
+        )
+        .await?;
+
+        Ok(rows.first().map(row_to_warranty_detail_row))
     }
 }

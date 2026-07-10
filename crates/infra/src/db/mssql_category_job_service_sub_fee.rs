@@ -8,9 +8,9 @@ use kokkak_domain::{
     CategoryJobServiceSubFeeAdminRow, CategoryJobServiceSubFeeAutocompleteInput,
     CategoryJobServiceSubFeeAutocompleteRow, CategoryJobServiceSubFeeCreateInput,
     CategoryJobServiceSubFeeCreateResult, CategoryJobServiceSubFeeDeleteInput,
-    CategoryJobServiceSubFeeDeleteResult, CategoryJobServiceSubFeeListInput,
-    CategoryJobServiceSubFeePage, CategoryJobServiceSubFeeUpdateInput,
-    CategoryJobServiceSubFeeUpdateResult,
+    CategoryJobServiceSubFeeDeleteResult, CategoryJobServiceSubFeeDetailRow,
+    CategoryJobServiceSubFeeListInput, CategoryJobServiceSubFeePage,
+    CategoryJobServiceSubFeeUpdateInput, CategoryJobServiceSubFeeUpdateResult,
 };
 
 use crate::db::mssql::{exec_sp, read_i32, read_str, MssqlPool};
@@ -93,6 +93,88 @@ fn row_to_fee_row(row: &tiberius::Row) -> CategoryJobServiceSubFeeAdminRow {
         category_job_service_sub_fee_description: read_str(
             row,
             "category_job_service_sub_fee_description",
+        )
+        .unwrap_or("")
+        .to_string(),
+        category_job_service_sub_fee_price: row
+            .get::<rust_decimal::Decimal, _>("category_job_service_sub_fee_price")
+            .unwrap_or(rust_decimal::Decimal::ZERO),
+        category_job_service_sub_fee_status: read_i32(row, "category_job_service_sub_fee_status")
+            .unwrap_or(0),
+        category_job_service_sub_fee_icon: read_str(row, "category_job_service_sub_fee_icon")
+            .unwrap_or("")
+            .to_string(),
+        category_job_service_sub_fee_create_at: {
+            row.get::<DateTime<Utc>, _>("category_job_service_sub_fee_create_at")
+        },
+        category_job_service_sub_fee_create_by: read_str(
+            row,
+            "category_job_service_sub_fee_create_by",
+        )
+        .unwrap_or("")
+        .to_string(),
+        category_job_service_sub_fee_update_at: {
+            row.get::<DateTime<Utc>, _>("category_job_service_sub_fee_update_at")
+        },
+        category_job_service_sub_fee_update_by: read_str(
+            row,
+            "category_job_service_sub_fee_update_by",
+        )
+        .unwrap_or("")
+        .to_string(),
+    }
+}
+
+fn row_to_fee_detail_row(row: &tiberius::Row) -> CategoryJobServiceSubFeeDetailRow {
+    CategoryJobServiceSubFeeDetailRow {
+        category_job_service_sub_fee_guid: read_str(row, "category_job_service_sub_fee_guid")
+            .unwrap_or("")
+            .to_string(),
+        category_job_service_sub_fee_header_la: read_str(
+            row,
+            "category_job_service_sub_fee_header_la",
+        )
+        .unwrap_or("")
+        .to_string(),
+        category_job_service_sub_fee_description_la: read_str(
+            row,
+            "category_job_service_sub_fee_description_la",
+        )
+        .unwrap_or("")
+        .to_string(),
+        category_job_service_sub_fee_header_en: read_str(
+            row,
+            "category_job_service_sub_fee_header_en",
+        )
+        .unwrap_or("")
+        .to_string(),
+        category_job_service_sub_fee_description_en: read_str(
+            row,
+            "category_job_service_sub_fee_description_en",
+        )
+        .unwrap_or("")
+        .to_string(),
+        category_job_service_sub_fee_header_th: read_str(
+            row,
+            "category_job_service_sub_fee_header_th",
+        )
+        .unwrap_or("")
+        .to_string(),
+        category_job_service_sub_fee_description_th: read_str(
+            row,
+            "category_job_service_sub_fee_description_th",
+        )
+        .unwrap_or("")
+        .to_string(),
+        category_job_service_sub_fee_header_zh: read_str(
+            row,
+            "category_job_service_sub_fee_header_zh",
+        )
+        .unwrap_or("")
+        .to_string(),
+        category_job_service_sub_fee_description_zh: read_str(
+            row,
+            "category_job_service_sub_fee_description_zh",
         )
         .unwrap_or("")
         .to_string(),
@@ -432,5 +514,25 @@ impl CategoryJobServiceSubFeeRepository for MssqlCategoryJobServiceSubFeeReposit
         .await?;
 
         Ok(rows.iter().map(row_to_fee_autocomplete_row).collect())
+    }
+
+    async fn detail(
+        &self,
+        category_job_service_sub_fee_guid: &str,
+    ) -> Result<Option<CategoryJobServiceSubFeeDetailRow>, RepoError> {
+        let guid = category_job_service_sub_fee_guid.trim();
+        if guid.is_empty() {
+            return Ok(None);
+        }
+
+        let rows = exec_sp(
+            &self.pool,
+            "EXEC dbo.SP_CATEGORY_JOB_SERVICE_SUB_FEE_DETAIL_GET \
+                @p_category_job_service_sub_fee_guid = @P1",
+            &[&guid as &dyn ToSql],
+        )
+        .await?;
+
+        Ok(rows.first().map(row_to_fee_detail_row))
     }
 }

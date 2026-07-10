@@ -369,7 +369,20 @@ pub async fn create_category_job_main_admin(
         }
     };
 
-    Ok((StatusCode::CREATED, created(result)).into_response())
+    let locale = current_locale();
+    let i18n_key = sp_main_status_key(&result.code);
+    let localized = tr(i18n_key, &locale, &[]);
+    let resp = ApiResponse {
+        success: result.success,
+        data: Some(serde_json::json!({
+            "category_job_main_guid": result.category_job_main_guid,
+            "code": result.code,
+            "message": localized,
+        })),
+        error: None,
+        meta: None,
+    };
+    Ok((StatusCode::CREATED, Json(resp)).into_response())
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -480,7 +493,20 @@ pub async fn update_category_job_main_admin(
         }
     };
 
-    Ok((StatusCode::OK, ok(result)).into_response())
+    let locale = current_locale();
+    let i18n_key = sp_main_status_key(&result.code);
+    let localized = tr(i18n_key, &locale, &[]);
+    let resp = ApiResponse {
+        success: result.success,
+        data: Some(serde_json::json!({
+            "category_job_main_guid": result.category_job_main_guid,
+            "code": result.code,
+            "message": localized,
+        })),
+        error: None,
+        meta: None,
+    };
+    Ok((StatusCode::OK, Json(resp)).into_response())
 }
 
 #[utoipa::path(
@@ -531,7 +557,29 @@ pub async fn delete_category_job_main_admin(
         }
     };
 
-    Ok((StatusCode::OK, ok(result)).into_response())
+    let locale = current_locale();
+    let i18n_key = sp_main_status_key(&result.code);
+    let localized = tr(i18n_key, &locale, &[]);
+    let resp = ApiResponse {
+        success: result.success,
+        data: Some(serde_json::json!({
+            "category_job_main_guid": result.category_job_main_guid,
+            "code": result.code,
+            "message": localized,
+        })),
+        error: None,
+        meta: None,
+    };
+    Ok((StatusCode::OK, Json(resp)).into_response())
+}
+
+fn sp_main_status_key(sp_code: &str) -> &'static str {
+    match sp_code {
+        "INSERT_SUCCESS" | "CREATE_SUCCESS" => "err_category_job_main.create_success",
+        "UPDATE_SUCCESS" => "err_category_job_main.update_success",
+        "DELETE_SUCCESS" => "err_category_job_main.delete_success",
+        _ => "err_category_job_main.backend",
+    }
 }
 
 async fn resolve_b64_category_icon(
