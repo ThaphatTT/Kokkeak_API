@@ -335,7 +335,9 @@ async fn run(settings: Settings) {
     };
 
     let body_limit_bytes = settings.middleware.request_body_limit_bytes;
-    let app = app.layer(RequestBodyLimitLayer::new(body_limit_bytes));
+    let app = app
+        .layer(axum::extract::DefaultBodyLimit::max(body_limit_bytes))
+        .layer(RequestBodyLimitLayer::new(body_limit_bytes));
     tracing::info!(body_limit_bytes, "request body limit wired");
 
     let max_concurrency = settings.middleware.max_concurrency;

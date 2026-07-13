@@ -98,7 +98,7 @@ err_admin_user:
   admin_role_not_found: "role ADMIN not found or inactive"
   employee_role_not_found: "role EMPLOYEE not found or inactive"
   user_not_found: "user not found or deleted"
-  image_invalid: 'image upload failed for field "{field}"'
+  image_invalid: 'image upload failed for field "{0}"'
 
 err_category_job_main:
   create_success: "category created successfully"

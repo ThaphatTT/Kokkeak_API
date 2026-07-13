@@ -7,12 +7,17 @@ use kokkak_domain::traits::category_job_main::CategoryJobMainRepository;
 use kokkak_domain::traits::user::RepoError;
 use kokkak_domain::{
     CategoryJobMainAutocompleteInput, CategoryJobMainAutocompleteRow, CategoryJobMainCreateInput,
-    CategoryJobMainCreateResult, CategoryJobMainDeleteResult, CategoryJobMainListInput,
-    CategoryJobMainPage, CategoryJobMainRow, CategoryJobMainUpdateInput,
+    CategoryJobMainCreateResult, CategoryJobMainDeleteResult, CategoryJobMainDetailRow,
+    CategoryJobMainListInput, CategoryJobMainPage, CategoryJobMainRow, CategoryJobMainUpdateInput,
     CategoryJobMainUpdateResult,
 };
 
-use crate::db::mssql::{exec_sp, read_guid_str, read_i32, read_str, read_uuid, MssqlPool};
+use crate::db::mssql::{exec_sp, read_guid_str, read_i32, read_str, MssqlPool};
+
+fn read_datetime_utc(row: &tiberius::Row, col: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    row.get::<chrono::NaiveDateTime, _>(col)
+        .map(|ndt| ndt.and_utc())
+}
 
 #[derive(Clone)]
 pub struct MssqlCategoryJobMainRepository {
@@ -178,7 +183,10 @@ impl CategoryJobMainRepository for MssqlCategoryJobMainRepository {
         input: &CategoryJobMainUpdateInput,
     ) -> Result<CategoryJobMainUpdateResult, RepoError> {
         let guid = input.category_job_main_guid.as_str();
-        let name = input.category_job_main_name.as_str();
+        let name_la: Option<&str> = input.category_job_main_name_la.as_deref();
+        let name_en: Option<&str> = input.category_job_main_name_en.as_deref();
+        let name_th: Option<&str> = input.category_job_main_name_th.as_deref();
+        let name_zh: Option<&str> = input.category_job_main_name_zh.as_deref();
         let icon_style: Option<&str> = input.category_job_main_icon_style.as_deref();
         let icon_line: Option<&str> = input.category_job_main_icon_line.as_deref();
         let img_path: Option<&str> = input.category_job_main_img_path.as_deref();
@@ -188,12 +196,15 @@ impl CategoryJobMainRepository for MssqlCategoryJobMainRepository {
 
         let params: &[&dyn ToSql] = &[
             &guid,
-            &name,
+            &name_la,
+            &name_en,
+            &name_th,
+            &name_zh,
             &icon_style,
             &icon_line,
             &img_path,
-            &priority,
             &status,
+            &priority,
             &update_by,
         ];
 
@@ -201,13 +212,16 @@ impl CategoryJobMainRepository for MssqlCategoryJobMainRepository {
             &self.pool,
             "EXEC dbo.SP_CATEGORY_JOB_MAIN_UPDATE \
                 @p_category_job_main_guid = @P1, \
-                @p_category_job_main_name = @P2, \
-                @p_category_job_main_icon_style = @P3, \
-                @p_category_job_main_icon_line = @P4, \
-                @p_category_job_main_img_path = @P5, \
-                @p_category_job_main_priority = @P6, \
-                @p_category_job_main_status = @P7, \
-                @p_update_by = @P8",
+                @p_name_la = @P2, \
+                @p_name_en = @P3, \
+                @p_name_th = @P4, \
+                @p_name_zh = @P5, \
+                @p_icon_style = @P6, \
+                @p_icon_line = @P7, \
+                @p_img_path = @P8, \
+                @p_status = @P9, \
+                @p_priority = @P10, \
+                @p_update_by = @P11",
             params,
         )
         .await?;
@@ -234,19 +248,11 @@ impl CategoryJobMainRepository for MssqlCategoryJobMainRepository {
             code,
             message,
             category_job_main_guid: {
-                if let Some(g) = read_uuid(row, "category_job_main_guid") {
-                    if !g.is_nil() {
-                        Some(g.to_string())
-                    } else {
-                        Some(read_guid_str(row, "category_job_main_guid"))
-                    }
+                let s = read_guid_str(row, "category_job_main_guid");
+                if s.is_empty() {
+                    None
                 } else {
-                    let s = read_guid_str(row, "category_job_main_guid");
-                    if s.is_empty() {
-                        None
-                    } else {
-                        Some(s)
-                    }
+                    Some(s)
                 }
             },
         })
@@ -333,6 +339,24 @@ impl CategoryJobMainRepository for MssqlCategoryJobMainRepository {
             .map(row_to_category_job_main_autocomplete_row)
             .collect())
     }
+
+    async fn detail(
+        &self,
+        category_guid: &str,
+    ) -> Result<Option<CategoryJobMainDetailRow>, RepoError> {
+        let guid: &str = category_guid;
+        let params: &[&dyn ToSql] = &[&guid];
+
+        let rows = exec_sp(
+            &self.pool,
+            "EXEC dbo.SP_CATEGORY_JOB_MAIN_DETAIL_GET \
+                @p_category_job_main_guid = @P1",
+            params,
+        )
+        .await?;
+
+        Ok(rows.first().map(row_to_category_job_main_detail_row))
+    }
 }
 
 fn normalize_locale_for_sp(raw: &str) -> String {
@@ -381,17 +405,51 @@ fn row_to_category_job_main_row(row: &tiberius::Row) -> CategoryJobMainRow {
         category_job_main_status: read_i32(row, "category_job_main_status").unwrap_or(0),
         category_job_main_priority: read_i32(row, "category_job_main_priority").unwrap_or(0),
         has_sub_service,
-        category_job_main_create_at: {
-            use chrono::{DateTime, Utc};
-            row.get::<DateTime<Utc>, _>("category_job_main_create_at")
-        },
+        category_job_main_create_at: read_datetime_utc(row, "category_job_main_create_at"),
         category_job_main_create_by: read_str(row, "category_job_main_create_by")
             .unwrap_or("")
             .to_string(),
-        category_job_main_update_at: {
-            use chrono::{DateTime, Utc};
-            row.get::<DateTime<Utc>, _>("category_job_main_update_at")
-        },
+        category_job_main_update_at: read_datetime_utc(row, "category_job_main_update_at"),
+        category_job_main_update_by: read_str(row, "category_job_main_update_by")
+            .unwrap_or("")
+            .to_string(),
+    }
+}
+
+fn row_to_category_job_main_detail_row(row: &tiberius::Row) -> CategoryJobMainDetailRow {
+    CategoryJobMainDetailRow {
+        category_job_main_guid: read_guid_str(row, "category_job_main_guid"),
+        category_job_main_name_la: read_str(row, "category_job_main_name_la")
+            .unwrap_or("")
+            .to_string(),
+        category_job_main_name_en: read_str(row, "category_job_main_name_en")
+            .unwrap_or("")
+            .to_string(),
+        category_job_main_name_th: read_str(row, "category_job_main_name_th")
+            .unwrap_or("")
+            .to_string(),
+        category_job_main_name_zh: read_str(row, "category_job_main_name_zh")
+            .unwrap_or("")
+            .to_string(),
+        category_job_main_icon_style: read_str(row, "category_job_main_icon_style")
+            .unwrap_or("")
+            .to_string(),
+        category_job_main_icon_line: read_str(row, "category_job_main_icon_line")
+            .unwrap_or("")
+            .to_string(),
+        category_job_main_img_path: read_str(row, "category_job_main_img_path")
+            .unwrap_or("")
+            .to_string(),
+        category_job_main_img_url: None,
+        category_job_main_status: read_i32(row, "category_job_main_status").unwrap_or(0),
+        category_job_main_priority: read_i32(row, "category_job_main_priority").unwrap_or(0),
+        has_service_main: row.get::<bool, _>("has_service_main").unwrap_or(false),
+        has_sub_service: row.get::<bool, _>("has_sub_service").unwrap_or(false),
+        category_job_main_create_at: read_datetime_utc(row, "category_job_main_create_at"),
+        category_job_main_create_by: read_str(row, "category_job_main_create_by")
+            .unwrap_or("")
+            .to_string(),
+        category_job_main_update_at: read_datetime_utc(row, "category_job_main_update_at"),
         category_job_main_update_by: read_str(row, "category_job_main_update_by")
             .unwrap_or("")
             .to_string(),

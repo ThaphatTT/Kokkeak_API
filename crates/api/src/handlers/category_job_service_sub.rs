@@ -8,7 +8,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kokkak_common::i18n::{current_locale, tr, tr_with_repo};
 use kokkak_common::response::{created, ok, ApiResponse};
-use kokkak_domain::traits::category_job_service_sub::{SubImageForCreate, SubImageForUpdate};
+use kokkak_domain::traits::category_job_service_sub::SubImageForCreate;
 use kokkak_domain::{LocalizedError, RepoError, StorageKey};
 use kokkak_infra::image_processor::UserImageKind;
 use serde::{Deserialize, Serialize};
@@ -121,7 +121,12 @@ pub async fn get_category_job_service_sub(
     State(state): State<AppState>,
     Path(sub_guid): Path<String>,
 ) -> Result<Response, Response> {
-    let bundle = match state.category_job_service_sub.detail(&sub_guid).await {
+    let locale = normalize_locale_for_api(&current_locale());
+    let bundle = match state
+        .category_job_service_sub
+        .detail(&sub_guid, &locale)
+        .await
+    {
         Ok(b) => b,
         Err(e) => {
             tracing::warn!(error = %e, sub_guid = %sub_guid, "category_job_service_sub.detail failed");
@@ -129,7 +134,7 @@ pub async fn get_category_job_service_sub(
         }
     };
     let mut bundle = bundle;
-    populate_signed_image_urls(&state, &mut bundle.images);
+    populate_signed_detail_image_urls(&state, &mut bundle.images);
     Ok((StatusCode::OK, ok(bundle)).into_response())
 }
 
@@ -338,37 +343,114 @@ pub async fn create_category_job_service_sub_admin(
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct UpdateCategoryJobServiceSubRequest {
-    pub category_job_service_guid: String,
-
-    pub category_job_service_sub_name: String,
-
-    pub category_job_service_sub_start_price: String,
+    #[serde(default)]
+    pub category_job_service_main_guid: Option<String>,
 
     #[serde(default)]
-    pub category_job_service_sub_description: String,
-
-    pub category_job_service_sub_status: i32,
+    pub category_job_service_sub_name_la: Option<String>,
 
     #[serde(default)]
-    pub images: Vec<kokkak_domain::CategoryJobServiceSubImageInput>,
+    pub category_job_service_sub_name_en: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_sub_name_th: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_sub_name_zh: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_sub_start_price: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_sub_description_la: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_sub_description_en: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_sub_description_th: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_sub_description_zh: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_sub_status: Option<i32>,
+
+    #[serde(default)]
+    pub warranties: Vec<kokkak_domain::CategoryJobServiceSubCreateSpWarrantyInput>,
+
+    #[serde(default)]
+    pub fees: Vec<kokkak_domain::CategoryJobServiceSubCreateSpFeeInput>,
+
+    #[serde(default)]
+    pub images: Vec<UpdateCategoryJobServiceSubImageRequest>,
+
+    #[serde(default)]
+    pub deleted_image_guids: Vec<String>,
+
+    #[serde(default = "default_replace_images")]
+    pub replace_images: bool,
+}
+
+fn default_replace_images() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
+pub struct UpdateCategoryJobServiceSubImageRequest {
+    #[serde(default, alias = "img_path")]
+    pub img_b64: Option<String>,
+
+    #[serde(default)]
+    pub img_type: Option<i32>,
+
+    #[serde(default)]
+    pub img_type_language: Option<i32>,
+
+    #[serde(default)]
+    pub img_priority: Option<i32>,
+
+    #[serde(default)]
+    pub img_status: Option<i32>,
 }
 
 impl UpdateCategoryJobServiceSubRequest {
     pub fn validate(&self) -> Result<(), String> {
-        if self.category_job_service_guid.trim().is_empty() {
-            return Err("category_job_service_guid is required".to_string());
+        let has_any_name = self
+            .category_job_service_sub_name_la
+            .as_ref()
+            .or(self.category_job_service_sub_name_en.as_ref())
+            .or(self.category_job_service_sub_name_th.as_ref())
+            .or(self.category_job_service_sub_name_zh.as_ref());
+        let has_any_data = has_any_name.is_some()
+            || self.category_job_service_main_guid.is_some()
+            || self.category_job_service_sub_start_price.is_some()
+            || self.category_job_service_sub_description_la.is_some()
+            || self.category_job_service_sub_description_en.is_some()
+            || self.category_job_service_sub_description_th.is_some()
+            || self.category_job_service_sub_description_zh.is_some()
+            || self.category_job_service_sub_status.is_some()
+            || !self.warranties.is_empty()
+            || !self.fees.is_empty()
+            || !self.images.is_empty();
+        if !has_any_data {
+            return Err("no update data was provided".to_string());
         }
-        if self.category_job_service_sub_name.trim().is_empty() {
-            return Err("category_job_service_sub_name is required".to_string());
+        if let Some(ref sp) = self.category_job_service_sub_start_price {
+            if sp.trim().parse::<rust_decimal::Decimal>().is_err() {
+                return Err(
+                    "category_job_service_sub_start_price must be a decimal number".to_string(),
+                );
+            }
         }
-        if self.category_job_service_sub_start_price.trim().is_empty() {
-            return Err("category_job_service_sub_start_price is required".to_string());
-        }
-        if !matches!(self.category_job_service_sub_status, 0 | 1) {
-            return Err("category_job_service_sub_status must be 0 or 1".to_string());
+        if let Some(s) = self.category_job_service_sub_status {
+            if !matches!(s, 0 | 1) {
+                return Err("category_job_service_sub_status must be 0 or 1".to_string());
+            }
         }
         for (i, img) in self.images.iter().enumerate() {
-            if img.img_b64.trim().is_empty() {
+            let has_b64 = img.img_b64.as_ref().map_or(false, |s| !s.trim().is_empty());
+            if !has_b64 {
                 return Err(format!("images[{i}].img_b64 is required"));
             }
         }
@@ -420,64 +502,55 @@ pub async fn update_category_job_service_sub_admin(
         return Err(validation_envelope(&state, &msg));
     }
 
-    let start_price: rust_decimal::Decimal =
-        match req.category_job_service_sub_start_price.trim().parse() {
-            Ok(d) => d,
+    let start_price: Option<rust_decimal::Decimal> = match req.category_job_service_sub_start_price
+    {
+        Some(ref sp) => match sp.trim().parse() {
+            Ok(d) => Some(d),
             Err(_) => {
                 return Err(validation_envelope(
                     &state,
                     "category_job_service_sub_start_price must be a decimal number",
                 ));
             }
-        };
-
-    let actor = user.id().to_string();
-    let main_guid = req.category_job_service_guid.clone();
-    let name = req.category_job_service_sub_name.clone();
-    let description = req.category_job_service_sub_description.clone();
-    let status = req.category_job_service_sub_status;
-    let new_images = req.images.clone();
-
-    let existing_images = match state.category_job_service_sub.list_images(&sub_guid).await {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(error = %e, "category_job_service_sub.list_images (before update) failed");
-            return Err(sp_error_to_response(&state, e).await);
-        }
+        },
+        None => None,
     };
 
-    for old in &existing_images {
-        let del_input = kokkak_domain::CategoryJobServiceSubImageDeleteInput {
-            category_job_service_sub_img_guid: old.category_job_service_sub_img_guid.clone(),
-            update_by: actor.clone(),
-        };
-        if let Err(e) = state.category_job_service_sub.delete_image(del_input).await {
-            tracing::warn!(error = %e, "category_job_service_sub.delete_image (replace) failed");
-            return Err(sp_error_to_response(&state, e).await);
-        }
-    }
+    let actor = user.id().to_string();
 
     let mut saved_files: Vec<StorageKey> = Vec::new();
-    let mut image_records: Vec<SubImageForUpdate> = Vec::with_capacity(new_images.len());
-    let old_paths: Vec<String> = existing_images
-        .iter()
-        .map(|i| i.category_job_service_sub_img_path.clone())
-        .collect();
+    let mut sp_images: Vec<kokkak_domain::CategoryJobServiceSubCreateSpImageInput> =
+        Vec::with_capacity(req.images.len());
 
-    for (idx, img) in new_images.iter().enumerate() {
-        let bytes = match decode_base64_payload(&img.img_b64) {
+    for (idx, img) in req.images.iter().enumerate() {
+        let img_b64_str = img.img_b64.as_deref().unwrap_or("");
+
+        if img_b64_str.starts_with("http://") || img_b64_str.starts_with("https://") {
+            continue;
+        }
+
+        if img_b64_str.starts_with("/files/") {
+            sp_images.push(kokkak_domain::CategoryJobServiceSubCreateSpImageInput {
+                img_path: img_b64_str.trim_start_matches("/files/").to_string(),
+                img_type: Some(img.img_type.unwrap_or(1)),
+                img_type_language: img.img_type_language,
+                priority: Some(img.img_priority.unwrap_or(idx as i32)),
+                img_status: Some(img.img_status.unwrap_or(1)),
+            });
+            continue;
+        }
+
+        let bytes = match decode_base64_payload(img_b64_str) {
             Ok(b) => b,
             Err(e) => {
                 cleanup_files(&state, &saved_files).await;
                 return Err(image_error_envelope(
                     &state,
-                    &format!("images[{idx}].img_b64"),
+                    &format!("images[{idx}]"),
                     kokkak_infra::image_processor::ImageError::Decode(e),
                 ));
             }
         };
-        let img_type = img.img_type.unwrap_or(1);
-        let img_priority = img.img_priority.unwrap_or(idx as i32);
 
         let placeholder_guid = format!("pending-{idx}");
         let processed = match state
@@ -499,49 +572,59 @@ pub async fn update_category_job_service_sub_admin(
             }
         };
         saved_files.push(processed.key.clone());
-        image_records.push(SubImageForUpdate {
-            img_type,
-            img_priority,
+
+        sp_images.push(kokkak_domain::CategoryJobServiceSubCreateSpImageInput {
             img_path: processed.key.as_str().to_string(),
+            img_type: Some(img.img_type.unwrap_or(1)),
+            img_type_language: img.img_type_language,
+            priority: Some(img.img_priority.unwrap_or(idx as i32)),
+            img_status: Some(img.img_status.unwrap_or(1)),
         });
     }
 
-    let update_input = kokkak_domain::CategoryJobServiceSubUpdateInput {
+    for guid in &req.deleted_image_guids {
+        let clean_guid = guid.strip_prefix("/files/").unwrap_or(guid);
+        let del_input = kokkak_domain::CategoryJobServiceSubImageDeleteInput {
+            category_job_service_sub_img_guid: clean_guid.to_string(),
+            update_by: actor.clone(),
+        };
+        if let Err(e) = state.category_job_service_sub.delete_image(del_input).await {
+            tracing::warn!(error = %e, guid = %guid, "deleted_image_guids soft-delete failed (non-fatal)");
+        }
+    }
+
+    let sp_input = kokkak_domain::CategoryJobServiceSubUpdateSpInput {
         category_job_service_sub_guid: sub_guid.clone(),
-        category_job_service_guid: main_guid,
-        category_job_service_sub_name: name,
+        category_job_service_main_guid: req.category_job_service_main_guid,
+        category_job_service_sub_name_la: req.category_job_service_sub_name_la,
+        category_job_service_sub_name_en: req.category_job_service_sub_name_en,
+        category_job_service_sub_name_th: req.category_job_service_sub_name_th,
+        category_job_service_sub_name_zh: req.category_job_service_sub_name_zh,
         category_job_service_sub_start_price: start_price,
-        category_job_service_sub_description: description,
-        category_job_service_sub_status: status,
+        category_job_service_sub_description_la: req.category_job_service_sub_description_la,
+        category_job_service_sub_description_en: req.category_job_service_sub_description_en,
+        category_job_service_sub_description_th: req.category_job_service_sub_description_th,
+        category_job_service_sub_description_zh: req.category_job_service_sub_description_zh,
+        category_job_service_sub_status: req.category_job_service_sub_status,
+        warranties: req.warranties,
+        fees: req.fees,
+        images: sp_images,
+        replace_images: req.replace_images,
         update_by: actor.clone(),
-        images: vec![],
     };
 
     let result = match state
         .category_job_service_sub
-        .update_with_images(update_input, image_records)
+        .update_via_sp(&sp_input)
         .await
     {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!(error = %e, "category_job_service_sub.update_with_images failed");
+            tracing::warn!(error = %e, "category_job_service_sub.update_via_sp failed");
             cleanup_files(&state, &saved_files).await;
             return Err(sp_error_to_response(&state, e).await);
         }
     };
-
-    for old_path in &old_paths {
-        if old_path.is_empty() {
-            continue;
-        }
-        if let Err(e) = state.storage.delete(&StorageKey(old_path.clone())).await {
-            tracing::warn!(
-                error = %e,
-                old_path = %old_path,
-                "old sub-service image cleanup failed (non-fatal — DB is committed)"
-            );
-        }
-    }
 
     let locale = current_locale();
     let i18n_key = sp_service_sub_status_key(&result.code);
@@ -552,6 +635,9 @@ pub async fn update_category_job_service_sub_admin(
             "category_job_service_sub_guid": result.category_job_service_sub_guid,
             "code": result.code,
             "message": localized,
+            "warranty_count": result.warranty_count,
+            "fee_count": result.fee_count,
+            "image_count": result.image_count,
         })),
         error: None,
         meta: None,
@@ -840,8 +926,12 @@ fn sp_service_sub_status_key(sp_code: &str) -> &'static str {
         "INSERT_SUCCESS" | "CREATE_SUCCESS" | "CREATED" => {
             "err_category_job_service_sub.create_success"
         }
-        "UPDATE_SUCCESS" => "err_category_job_service_sub.update_success",
-        "DELETE_SUCCESS" => "err_category_job_service_sub.delete_success",
+        "UPDATE_SUCCESS" | "UPDATED" => "err_category_job_service_sub.update_success",
+        "DELETE_SUCCESS" | "DELETED" => "err_category_job_service_sub.delete_success",
+        "NOT_FOUND" => "err_category_job_service_sub.not_found",
+        "INVALID_STATUS" => "err_category_job_service_sub.invalid_status",
+        "NAME_REQUIRED" => "err_category_job_service_sub.name_required",
+        "MAIN_NOT_FOUND" => "err_category_job_service_sub.main_not_found",
         code if code.starts_with("INSERT_ERROR_") => "err_category_job_service_sub.backend",
         _ => "err_category_job_service_sub.backend",
     }
@@ -886,6 +976,34 @@ fn populate_signed_image_urls(
             state.signed_url_ttl_secs,
         );
     }
+}
+
+fn populate_signed_detail_image_urls(
+    state: &AppState,
+    items: &mut [kokkak_domain::CategoryJobServiceSubDetailImageRow],
+) {
+    for row in items.iter_mut() {
+        if row.category_job_service_sub_img_img_path.is_empty() {
+            continue;
+        }
+        row.category_job_service_sub_img_url = crate::signed_url::signed_image_url(
+            state.public_base_url.as_ref(),
+            &row.category_job_service_sub_img_img_path,
+            state.signed_url_secret.as_ref(),
+            state.signed_url_ttl_secs,
+        );
+    }
+}
+
+fn normalize_locale_for_api(raw: &str) -> String {
+    let primary = raw.split('-').next().unwrap_or("").trim().to_lowercase();
+    if matches!(primary.as_str(), "la" | "en" | "th" | "zh") {
+        return primary;
+    }
+    if primary == "lo" {
+        return "la".to_string();
+    }
+    "la".to_string()
 }
 
 fn validation_envelope(state: &AppState, msg: &str) -> Response {

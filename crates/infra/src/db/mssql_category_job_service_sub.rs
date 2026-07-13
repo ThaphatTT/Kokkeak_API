@@ -12,10 +12,13 @@ use kokkak_domain::{
     CategoryJobServiceSubCreateInput, CategoryJobServiceSubCreateResult,
     CategoryJobServiceSubCreateSpInput, CategoryJobServiceSubCreateSpResult,
     CategoryJobServiceSubDeleteResult, CategoryJobServiceSubDetailBundle,
+    CategoryJobServiceSubDetailFeeRow, CategoryJobServiceSubDetailImageRow,
+    CategoryJobServiceSubDetailRow, CategoryJobServiceSubDetailWarrantyRow,
     CategoryJobServiceSubFeeRow, CategoryJobServiceSubImageCreateInput,
     CategoryJobServiceSubImageCreateResult, CategoryJobServiceSubImageDeleteInput,
     CategoryJobServiceSubImageDeleteResult, CategoryJobServiceSubImageRow,
     CategoryJobServiceSubRow, CategoryJobServiceSubUpdateInput, CategoryJobServiceSubUpdateResult,
+    CategoryJobServiceSubUpdateSpInput, CategoryJobServiceSubUpdateSpResult,
     CategoryJobServiceSubWarrantyRow,
 };
 
@@ -76,14 +79,17 @@ impl CategoryJobServiceSubRepository for MssqlCategoryJobServiceSubRepository {
     async fn detail(
         &self,
         category_job_service_sub_guid: &str,
+        locale: &str,
     ) -> Result<CategoryJobServiceSubDetailBundle, RepoError> {
         let sub_guid = category_job_service_sub_guid;
-        let params: &[&dyn ToSql] = &[&sub_guid];
+        let loc: &str = locale;
+        let params: &[&dyn ToSql] = &[&sub_guid, &loc];
 
         let sets = exec_sp_multi(
             &self.pool,
             "EXEC dbo.SP_CATEGORY_JOB_SERVICE_SUB_DETAIL_GET \
-                @p_category_job_service_sub_guid = @P1",
+                @p_category_job_service_sub_guid = @P1, \
+                @p_locale = @P2",
             params,
         )
         .await?;
@@ -100,9 +106,9 @@ impl CategoryJobServiceSubRepository for MssqlCategoryJobServiceSubRepository {
                     .into(),
             )
         })?;
-        let sub = row_to_sub_row(sub_row);
+        let sub = row_to_sub_detail_row(sub_row);
 
-        let images_set = if !sets.is_empty() {
+        let warranties_set = if !sets.is_empty() {
             sets.remove(0)
         } else {
             Vec::new()
@@ -112,7 +118,7 @@ impl CategoryJobServiceSubRepository for MssqlCategoryJobServiceSubRepository {
         } else {
             Vec::new()
         };
-        let warranties_set = if !sets.is_empty() {
+        let images_set = if !sets.is_empty() {
             sets.remove(0)
         } else {
             Vec::new()
@@ -120,9 +126,12 @@ impl CategoryJobServiceSubRepository for MssqlCategoryJobServiceSubRepository {
 
         Ok(CategoryJobServiceSubDetailBundle {
             sub,
-            images: images_set.iter().map(row_to_sub_image_row).collect(),
-            fees: fees_set.iter().map(row_to_sub_fee_row).collect(),
-            warranties: warranties_set.iter().map(row_to_sub_warranty_row).collect(),
+            warranties: warranties_set
+                .iter()
+                .map(row_to_sub_detail_warranty_row)
+                .collect(),
+            fees: fees_set.iter().map(row_to_sub_detail_fee_row).collect(),
+            images: images_set.iter().map(row_to_sub_detail_image_row).collect(),
         })
     }
 
@@ -622,6 +631,111 @@ impl CategoryJobServiceSubRepository for MssqlCategoryJobServiceSubRepository {
             image_count: read_i32(row, "image_count").unwrap_or(0),
         })
     }
+
+    async fn update_via_sp(
+        &self,
+        input: &CategoryJobServiceSubUpdateSpInput,
+    ) -> Result<CategoryJobServiceSubUpdateSpResult, RepoError> {
+        let warranties_json = serde_json::to_string(&input.warranties)
+            .map_err(|e| RepoError::Backend(format!("warranties_json serialize: {e}")))?;
+        let fees_json = serde_json::to_string(&input.fees)
+            .map_err(|e| RepoError::Backend(format!("fees_json serialize: {e}")))?;
+        let images_json = serde_json::to_string(&input.images)
+            .map_err(|e| RepoError::Backend(format!("images_json serialize: {e}")))?;
+
+        let sub_guid = input.category_job_service_sub_guid.as_str();
+        let main_guid = input.category_job_service_main_guid.as_deref();
+        let name_la = input.category_job_service_sub_name_la.as_deref();
+        let name_en = input.category_job_service_sub_name_en.as_deref();
+        let name_th = input.category_job_service_sub_name_th.as_deref();
+        let name_zh = input.category_job_service_sub_name_zh.as_deref();
+        let start_price = input.category_job_service_sub_start_price;
+        let desc_la = input.category_job_service_sub_description_la.as_deref();
+        let desc_en = input.category_job_service_sub_description_en.as_deref();
+        let desc_th = input.category_job_service_sub_description_th.as_deref();
+        let desc_zh = input.category_job_service_sub_description_zh.as_deref();
+        let status = input.category_job_service_sub_status;
+        let warranties_json_str = warranties_json.as_str();
+        let fees_json_str = fees_json.as_str();
+        let images_json_str = images_json.as_str();
+        let replace_images = input.replace_images;
+        let update_by = input.update_by.as_str();
+
+        let params: &[&dyn ToSql] = &[
+            &sub_guid,
+            &main_guid,
+            &name_la,
+            &name_en,
+            &name_th,
+            &name_zh,
+            &start_price,
+            &desc_la,
+            &desc_en,
+            &desc_th,
+            &desc_zh,
+            &status,
+            &warranties_json_str,
+            &fees_json_str,
+            &images_json_str,
+            &replace_images,
+            &update_by,
+        ];
+
+        let rows = exec_sp(
+            &self.pool,
+            "EXEC dbo.SP_CATEGORY_JOB_SERVICE_SUB_UPDATE \
+                @p_category_job_service_sub_guid = @P1, \
+                @p_category_job_service_main_guid = @P2, \
+                @p_category_job_service_sub_name_la = @P3, \
+                @p_category_job_service_sub_name_en = @P4, \
+                @p_category_job_service_sub_name_th = @P5, \
+                @p_category_job_service_sub_name_zh = @P6, \
+                @p_category_job_service_sub_start_price = @P7, \
+                @p_category_job_service_sub_description_la = @P8, \
+                @p_category_job_service_sub_description_en = @P9, \
+                @p_category_job_service_sub_description_th = @P10, \
+                @p_category_job_service_sub_description_zh = @P11, \
+                @p_category_job_service_sub_status = @P12, \
+                @p_warranties_json = @P13, \
+                @p_fees_json = @P14, \
+                @p_images_json = @P15, \
+                @p_replace_images = @P16, \
+                @p_update_by = @P17",
+            params,
+        )
+        .await?;
+
+        let row = rows.first().ok_or_else(|| {
+            RepoError::Backend("SP_CATEGORY_JOB_SERVICE_SUB_UPDATE returned no row".into())
+        })?;
+
+        let success: bool = row.get::<bool, _>("success").unwrap_or(false);
+        let code = read_str(row, "code").unwrap_or("").to_string();
+        let message = read_str(row, "message").unwrap_or("").to_string();
+
+        if !success {
+            return Err(RepoError::Backend(format!(
+                "SP_CATEGORY_JOB_SERVICE_SUB_UPDATE: {code} — {message}"
+            )));
+        }
+
+        Ok(CategoryJobServiceSubUpdateSpResult {
+            success,
+            code,
+            message,
+            category_job_service_sub_guid: {
+                let s = read_guid_str(row, "category_job_service_sub_guid");
+                if s.is_empty() {
+                    input.category_job_service_sub_guid.clone()
+                } else {
+                    s
+                }
+            },
+            warranty_count: read_i32(row, "warranty_count").unwrap_or(0),
+            fee_count: read_i32(row, "fee_count").unwrap_or(0),
+            image_count: read_i32(row, "image_count").unwrap_or(0),
+        })
+    }
 }
 
 impl MssqlCategoryJobServiceSubRepository {
@@ -816,6 +930,11 @@ fn read_decimal(row: &tiberius::Row, col: &str) -> Decimal {
     row.get::<Decimal, _>(col).unwrap_or(Decimal::ZERO)
 }
 
+fn read_datetime_utc(row: &tiberius::Row, col: &str) -> Option<DateTime<Utc>> {
+    row.get::<chrono::NaiveDateTime, _>(col)
+        .map(|ndt| ndt.and_utc())
+}
+
 fn row_to_sub_row(row: &tiberius::Row) -> CategoryJobServiceSubRow {
     CategoryJobServiceSubRow {
         category_job_service_sub_guid: read_guid_str(row, "category_job_service_sub_guid"),
@@ -851,15 +970,17 @@ fn row_to_sub_row(row: &tiberius::Row) -> CategoryJobServiceSubRow {
             .unwrap_or(0),
         main_img_path: read_str(row, "main_img_path").unwrap_or("").to_string(),
         main_img_url: None,
-        category_job_service_sub_create_at: {
-            row.get::<DateTime<Utc>, _>("category_job_service_sub_create_at")
-        },
+        category_job_service_sub_create_at: read_datetime_utc(
+            row,
+            "category_job_service_sub_create_at",
+        ),
         category_job_service_sub_create_by: read_str(row, "category_job_service_sub_create_by")
             .unwrap_or("")
             .to_string(),
-        category_job_service_sub_update_at: {
-            row.get::<DateTime<Utc>, _>("category_job_service_sub_update_at")
-        },
+        category_job_service_sub_update_at: read_datetime_utc(
+            row,
+            "category_job_service_sub_update_at",
+        ),
         category_job_service_sub_update_by: read_str(row, "category_job_service_sub_update_by")
             .unwrap_or("")
             .to_string(),
@@ -891,9 +1012,10 @@ fn row_to_sub_image_row(row: &tiberius::Row) -> CategoryJobServiceSubImageRow {
         category_job_service_sub_img_url: None,
         category_job_service_sub_img_status: read_i32(row, "category_job_service_sub_img_status")
             .unwrap_or(0),
-        category_job_service_sub_img_create_at: {
-            row.get::<DateTime<Utc>, _>("category_job_service_sub_img_create_at")
-        },
+        category_job_service_sub_img_create_at: read_datetime_utc(
+            row,
+            "category_job_service_sub_img_create_at",
+        ),
         category_job_service_sub_img_create_by: read_str(
             row,
             "category_job_service_sub_img_create_by",
@@ -945,6 +1067,235 @@ fn row_to_sub_warranty_row(row: &tiberius::Row) -> CategoryJobServiceSubWarranty
             "category_job_service_sub_warranty_status",
         )
         .unwrap_or(0),
+    }
+}
+
+fn row_to_sub_detail_row(row: &tiberius::Row) -> CategoryJobServiceSubDetailRow {
+    CategoryJobServiceSubDetailRow {
+        category_job_service_guid: read_guid_str(row, "category_job_service_guid"),
+        category_job_service_sub_guid: read_guid_str(row, "category_job_service_sub_guid"),
+        category_job_service_sub_category_job_service_main_guid: read_guid_str(
+            row,
+            "category_job_service_sub_category_job_service_main_guid",
+        ),
+        category_job_service_sub_name_la: read_str(row, "category_job_service_sub_name_la")
+            .unwrap_or("")
+            .to_string(),
+        category_job_service_sub_name_en: read_str(row, "category_job_service_sub_name_en")
+            .unwrap_or("")
+            .to_string(),
+        category_job_service_sub_name_th: read_str(row, "category_job_service_sub_name_th")
+            .unwrap_or("")
+            .to_string(),
+        category_job_service_sub_name_zh: read_str(row, "category_job_service_sub_name_zh")
+            .unwrap_or("")
+            .to_string(),
+        category_job_service_sub_description_la: read_str(
+            row,
+            "category_job_service_sub_description_la",
+        )
+        .unwrap_or("")
+        .to_string(),
+        category_job_service_sub_description_en: read_str(
+            row,
+            "category_job_service_sub_description_en",
+        )
+        .unwrap_or("")
+        .to_string(),
+        category_job_service_sub_description_th: read_str(
+            row,
+            "category_job_service_sub_description_th",
+        )
+        .unwrap_or("")
+        .to_string(),
+        category_job_service_sub_description_zh: read_str(
+            row,
+            "category_job_service_sub_description_zh",
+        )
+        .unwrap_or("")
+        .to_string(),
+        category_job_service_sub_start_price: read_decimal(
+            row,
+            "category_job_service_sub_start_price",
+        ),
+        category_job_service_sub_status: read_i32(row, "category_job_service_sub_status")
+            .unwrap_or(0),
+        category_job_service_sub_create_at: read_datetime_utc(
+            row,
+            "category_job_service_sub_create_at",
+        ),
+        category_job_service_sub_create_by: read_str(row, "category_job_service_sub_create_by")
+            .unwrap_or("")
+            .to_string(),
+        category_job_service_sub_update_at: read_datetime_utc(
+            row,
+            "category_job_service_sub_update_at",
+        ),
+        category_job_service_sub_update_by: read_str(row, "category_job_service_sub_update_by")
+            .unwrap_or("")
+            .to_string(),
+    }
+}
+
+fn row_to_sub_detail_warranty_row(row: &tiberius::Row) -> CategoryJobServiceSubDetailWarrantyRow {
+    CategoryJobServiceSubDetailWarrantyRow {
+        category_job_service_sub_warranty_guid: read_guid_str(
+            row,
+            "category_job_service_sub_warranty_guid",
+        ),
+        category_job_service_sub_warranty_map_sort_order: read_i32(
+            row,
+            "category_job_service_sub_warranty_map_sort_order",
+        )
+        .unwrap_or(0),
+        category_job_service_sub_warranty_description: read_str(
+            row,
+            "category_job_service_sub_warranty_description",
+        )
+        .unwrap_or("")
+        .to_string(),
+        category_job_service_sub_warranty_locale: read_str(
+            row,
+            "category_job_service_sub_warranty_locale",
+        )
+        .unwrap_or("la")
+        .to_string(),
+        category_job_service_sub_warranty_warranty_amount_day: read_i32(
+            row,
+            "category_job_service_sub_warranty_warranty_amount_day",
+        )
+        .unwrap_or(0),
+        category_job_service_sub_warranty_icon: read_str(
+            row,
+            "category_job_service_sub_warranty_icon",
+        )
+        .unwrap_or("")
+        .to_string(),
+        category_job_service_sub_warranty_status: read_i32(
+            row,
+            "category_job_service_sub_warranty_status",
+        )
+        .unwrap_or(0),
+        category_job_service_sub_warranty_map_create_at: read_datetime_utc(
+            row,
+            "category_job_service_sub_warranty_map_create_at",
+        ),
+        category_job_service_sub_warranty_map_create_by: read_str(
+            row,
+            "category_job_service_sub_warranty_map_create_by",
+        )
+        .unwrap_or("")
+        .to_string(),
+        category_job_service_sub_warranty_map_update_at: read_datetime_utc(
+            row,
+            "category_job_service_sub_warranty_map_update_at",
+        ),
+        category_job_service_sub_warranty_map_update_by: read_str(
+            row,
+            "category_job_service_sub_warranty_map_update_by",
+        )
+        .unwrap_or("")
+        .to_string(),
+    }
+}
+
+fn row_to_sub_detail_fee_row(row: &tiberius::Row) -> CategoryJobServiceSubDetailFeeRow {
+    CategoryJobServiceSubDetailFeeRow {
+        category_job_service_sub_fee_guid: read_guid_str(row, "category_job_service_sub_fee_guid"),
+        category_job_service_sub_fee_map_sort_order: read_i32(
+            row,
+            "category_job_service_sub_fee_map_sort_order",
+        )
+        .unwrap_or(0),
+        category_job_service_sub_fee_header: read_str(row, "category_job_service_sub_fee_header")
+            .unwrap_or("")
+            .to_string(),
+        category_job_service_sub_fee_description: read_str(
+            row,
+            "category_job_service_sub_fee_description",
+        )
+        .unwrap_or("")
+        .to_string(),
+        category_job_service_sub_fee_locale: read_str(row, "category_job_service_sub_fee_locale")
+            .unwrap_or("la")
+            .to_string(),
+        category_job_service_sub_fee_icon: read_str(row, "category_job_service_sub_fee_icon")
+            .unwrap_or("")
+            .to_string(),
+        category_job_service_sub_fee_price: read_decimal(row, "category_job_service_sub_fee_price"),
+        category_job_service_sub_fee_status: read_i32(row, "category_job_service_sub_fee_status")
+            .unwrap_or(0),
+        category_job_service_sub_fee_map_create_at: read_datetime_utc(
+            row,
+            "category_job_service_sub_fee_map_create_at",
+        ),
+        category_job_service_sub_fee_map_create_by: read_str(
+            row,
+            "category_job_service_sub_fee_map_create_by",
+        )
+        .unwrap_or("")
+        .to_string(),
+        category_job_service_sub_fee_map_update_at: read_datetime_utc(
+            row,
+            "category_job_service_sub_fee_map_update_at",
+        ),
+        category_job_service_sub_fee_map_update_by: read_str(
+            row,
+            "category_job_service_sub_fee_map_update_by",
+        )
+        .unwrap_or("")
+        .to_string(),
+    }
+}
+
+fn row_to_sub_detail_image_row(row: &tiberius::Row) -> CategoryJobServiceSubDetailImageRow {
+    CategoryJobServiceSubDetailImageRow {
+        category_job_service_sub_img_guid: read_guid_str(row, "category_job_service_sub_img_guid"),
+        category_job_service_sub_img_category_job_service_sub_guid: read_guid_str(
+            row,
+            "category_job_service_sub_img_category_job_service_sub_guid",
+        ),
+        category_job_service_sub_img_type: read_i32(row, "category_job_service_sub_img_type")
+            .unwrap_or(0),
+        category_job_service_sub_img_type_language: read_i32(
+            row,
+            "category_job_service_sub_img_type_language",
+        )
+        .unwrap_or(0),
+        category_job_service_sub_img_priority: read_i32(
+            row,
+            "category_job_service_sub_img_priority",
+        )
+        .unwrap_or(0),
+        category_job_service_sub_img_img_path: read_str(
+            row,
+            "category_job_service_sub_img_img_path",
+        )
+        .unwrap_or("")
+        .to_string(),
+        category_job_service_sub_img_url: None,
+        category_job_service_sub_img_status: read_i32(row, "category_job_service_sub_img_status")
+            .unwrap_or(0),
+        category_job_service_sub_img_create_at: read_datetime_utc(
+            row,
+            "category_job_service_sub_img_create_at",
+        ),
+        category_job_service_sub_img_create_by: read_str(
+            row,
+            "category_job_service_sub_img_create_by",
+        )
+        .unwrap_or("")
+        .to_string(),
+        category_job_service_sub_img_update_at: read_datetime_utc(
+            row,
+            "category_job_service_sub_img_update_at",
+        ),
+        category_job_service_sub_img_update_by: read_str(
+            row,
+            "category_job_service_sub_img_update_by",
+        )
+        .unwrap_or("")
+        .to_string(),
     }
 }
 

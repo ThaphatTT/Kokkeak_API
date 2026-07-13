@@ -15,6 +15,11 @@ use kokkak_domain::{
 
 use crate::db::mssql::{exec_sp, read_i32, read_str, MssqlPool};
 
+fn read_datetime_utc(row: &tiberius::Row, col: &str) -> Option<DateTime<Utc>> {
+    row.get::<chrono::NaiveDateTime, _>(col)
+        .map(|ndt| ndt.and_utc())
+}
+
 #[derive(Clone)]
 pub struct MssqlCategoryJobServiceSubFeeRepository {
     pool: MssqlPool,
@@ -104,18 +109,20 @@ fn row_to_fee_row(row: &tiberius::Row) -> CategoryJobServiceSubFeeAdminRow {
         category_job_service_sub_fee_icon: read_str(row, "category_job_service_sub_fee_icon")
             .unwrap_or("")
             .to_string(),
-        category_job_service_sub_fee_create_at: {
-            row.get::<DateTime<Utc>, _>("category_job_service_sub_fee_create_at")
-        },
+        category_job_service_sub_fee_create_at: read_datetime_utc(
+            row,
+            "category_job_service_sub_fee_create_at",
+        ),
         category_job_service_sub_fee_create_by: read_str(
             row,
             "category_job_service_sub_fee_create_by",
         )
         .unwrap_or("")
         .to_string(),
-        category_job_service_sub_fee_update_at: {
-            row.get::<DateTime<Utc>, _>("category_job_service_sub_fee_update_at")
-        },
+        category_job_service_sub_fee_update_at: read_datetime_utc(
+            row,
+            "category_job_service_sub_fee_update_at",
+        ),
         category_job_service_sub_fee_update_by: read_str(
             row,
             "category_job_service_sub_fee_update_by",
@@ -186,18 +193,20 @@ fn row_to_fee_detail_row(row: &tiberius::Row) -> CategoryJobServiceSubFeeDetailR
         category_job_service_sub_fee_icon: read_str(row, "category_job_service_sub_fee_icon")
             .unwrap_or("")
             .to_string(),
-        category_job_service_sub_fee_create_at: {
-            row.get::<DateTime<Utc>, _>("category_job_service_sub_fee_create_at")
-        },
+        category_job_service_sub_fee_create_at: read_datetime_utc(
+            row,
+            "category_job_service_sub_fee_create_at",
+        ),
         category_job_service_sub_fee_create_by: read_str(
             row,
             "category_job_service_sub_fee_create_by",
         )
         .unwrap_or("")
         .to_string(),
-        category_job_service_sub_fee_update_at: {
-            row.get::<DateTime<Utc>, _>("category_job_service_sub_fee_update_at")
-        },
+        category_job_service_sub_fee_update_at: read_datetime_utc(
+            row,
+            "category_job_service_sub_fee_update_at",
+        ),
         category_job_service_sub_fee_update_by: read_str(
             row,
             "category_job_service_sub_fee_update_by",

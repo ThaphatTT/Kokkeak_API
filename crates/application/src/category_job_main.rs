@@ -3,9 +3,9 @@ use std::sync::Arc;
 use kokkak_domain::traits::user::RepoError;
 use kokkak_domain::{
     CategoryJobMainAutocompleteInput, CategoryJobMainAutocompleteRow, CategoryJobMainCreateInput,
-    CategoryJobMainCreateResult, CategoryJobMainDeleteResult, CategoryJobMainListInput,
-    CategoryJobMainPage, CategoryJobMainRepository, CategoryJobMainUpdateInput,
-    CategoryJobMainUpdateResult,
+    CategoryJobMainCreateResult, CategoryJobMainDeleteResult, CategoryJobMainDetailRow,
+    CategoryJobMainListInput, CategoryJobMainPage, CategoryJobMainRepository,
+    CategoryJobMainUpdateInput, CategoryJobMainUpdateResult,
 };
 
 pub struct CategoryJobMainService {
@@ -63,6 +63,14 @@ impl CategoryJobMainService {
                     "CategoryJobMainService::disabled — repository not wired".into(),
                 ))
             }
+            async fn detail(
+                &self,
+                _category_guid: &str,
+            ) -> Result<Option<CategoryJobMainDetailRow>, RepoError> {
+                Err(RepoError::Backend(
+                    "CategoryJobMainService::disabled — repository not wired".into(),
+                ))
+            }
         }
         let repo: Arc<dyn CategoryJobMainRepository> = Arc::new(DisabledRepo);
         Self { repo }
@@ -106,6 +114,13 @@ impl CategoryJobMainService {
         input: CategoryJobMainAutocompleteInput,
     ) -> Result<Vec<CategoryJobMainAutocompleteRow>, RepoError> {
         self.repo.autocomplete(&input).await
+    }
+
+    pub async fn detail(
+        &self,
+        category_guid: &str,
+    ) -> Result<Option<CategoryJobMainDetailRow>, RepoError> {
+        self.repo.detail(category_guid).await
     }
 }
 
@@ -182,6 +197,12 @@ mod tests {
         ) -> Result<Vec<CategoryJobMainAutocompleteRow>, RepoError> {
             *self.last_autocomplete.lock().unwrap() = Some(input.clone());
             Ok(self.autocomplete_rows.lock().unwrap().clone())
+        }
+        async fn detail(
+            &self,
+            _category_guid: &str,
+        ) -> Result<Option<CategoryJobMainDetailRow>, RepoError> {
+            Ok(None)
         }
     }
 
@@ -262,7 +283,10 @@ mod tests {
         let update_res = svc
             .update(CategoryJobMainUpdateInput {
                 category_job_main_guid: create_res.category_job_main_guid.clone().unwrap(),
-                category_job_main_name: "Plumbing v2".into(),
+                category_job_main_name_la: Some("Plumbing v2".into()),
+                category_job_main_name_en: Some("Plumbing v2 EN".into()),
+                category_job_main_name_th: None,
+                category_job_main_name_zh: None,
                 category_job_main_icon_style: Some("solid".into()),
                 category_job_main_icon_line: Some("pipe".into()),
                 category_job_main_img_path: None,
@@ -350,6 +374,12 @@ mod tests {
             _input: &CategoryJobMainAutocompleteInput,
         ) -> Result<Vec<CategoryJobMainAutocompleteRow>, RepoError> {
             Ok(Vec::new())
+        }
+        async fn detail(
+            &self,
+            _category_guid: &str,
+        ) -> Result<Option<CategoryJobMainDetailRow>, RepoError> {
+            Ok(None)
         }
     }
 

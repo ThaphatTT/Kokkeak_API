@@ -93,6 +93,14 @@ impl kokkak_domain::CategoryJobMainRepository for MssqlCategoryJobMainRepository
             "category_job_main repo not wired in build_app_state".into(),
         ))
     }
+    async fn detail(
+        &self,
+        _category_guid: &str,
+    ) -> Result<Option<kokkak_domain::CategoryJobMainDetailRow>, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_main repo not wired in build_app_state".into(),
+        ))
+    }
 }
 
 #[allow(dead_code)]
@@ -143,6 +151,15 @@ impl kokkak_domain::CategoryJobServiceMainRepository for MssqlCategoryJobService
             "category_job_service_main repo not wired in build_app_state".into(),
         ))
     }
+    async fn detail(
+        &self,
+        _service_guid: &str,
+    ) -> Result<Option<kokkak_domain::CategoryJobServiceMainDetailRow>, kokkak_domain::RepoError>
+    {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_service_main repo not wired in build_app_state".into(),
+        ))
+    }
 }
 
 #[allow(dead_code)]
@@ -166,6 +183,7 @@ impl kokkak_domain::CategoryJobServiceSubRepository for MssqlCategoryJobServiceS
     async fn detail(
         &self,
         _category_job_service_sub_guid: &str,
+        _locale: &str,
     ) -> Result<kokkak_domain::CategoryJobServiceSubDetailBundle, kokkak_domain::RepoError> {
         Err(kokkak_domain::RepoError::Backend(
             "category_job_service_sub repo not wired in build_app_state".into(),
@@ -244,6 +262,14 @@ impl kokkak_domain::CategoryJobServiceSubRepository for MssqlCategoryJobServiceS
         &self,
         _input: &kokkak_domain::CategoryJobServiceSubCreateSpInput,
     ) -> Result<kokkak_domain::CategoryJobServiceSubCreateSpResult, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+            "category_job_service_sub repo not wired in build_app_state".into(),
+        ))
+    }
+    async fn update_via_sp(
+        &self,
+        _input: &kokkak_domain::CategoryJobServiceSubUpdateSpInput,
+    ) -> Result<kokkak_domain::CategoryJobServiceSubUpdateSpResult, kokkak_domain::RepoError> {
         Err(kokkak_domain::RepoError::Backend(
             "category_job_service_sub repo not wired in build_app_state".into(),
         ))

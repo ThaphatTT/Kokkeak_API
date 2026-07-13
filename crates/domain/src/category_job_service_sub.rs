@@ -97,14 +97,136 @@ pub struct CategoryJobServiceSubWarrantyRow {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CategoryJobServiceSubDetailRow {
+    pub category_job_service_guid: String,
+
+    pub category_job_service_sub_guid: String,
+
+    pub category_job_service_sub_category_job_service_main_guid: String,
+
+    pub category_job_service_sub_name_la: String,
+
+    pub category_job_service_sub_name_en: String,
+
+    pub category_job_service_sub_name_th: String,
+
+    pub category_job_service_sub_name_zh: String,
+
+    pub category_job_service_sub_description_la: String,
+
+    pub category_job_service_sub_description_en: String,
+
+    pub category_job_service_sub_description_th: String,
+
+    pub category_job_service_sub_description_zh: String,
+
+    pub category_job_service_sub_start_price: Decimal,
+
+    pub category_job_service_sub_status: i32,
+
+    pub category_job_service_sub_create_at: Option<DateTime<Utc>>,
+
+    pub category_job_service_sub_create_by: String,
+
+    pub category_job_service_sub_update_at: Option<DateTime<Utc>>,
+
+    pub category_job_service_sub_update_by: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CategoryJobServiceSubDetailWarrantyRow {
+    pub category_job_service_sub_warranty_guid: String,
+
+    pub category_job_service_sub_warranty_map_sort_order: i32,
+
+    pub category_job_service_sub_warranty_description: String,
+
+    pub category_job_service_sub_warranty_locale: String,
+
+    pub category_job_service_sub_warranty_warranty_amount_day: i32,
+
+    pub category_job_service_sub_warranty_icon: String,
+
+    pub category_job_service_sub_warranty_status: i32,
+
+    pub category_job_service_sub_warranty_map_create_at: Option<DateTime<Utc>>,
+
+    pub category_job_service_sub_warranty_map_create_by: String,
+
+    pub category_job_service_sub_warranty_map_update_at: Option<DateTime<Utc>>,
+
+    pub category_job_service_sub_warranty_map_update_by: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CategoryJobServiceSubDetailFeeRow {
+    pub category_job_service_sub_fee_guid: String,
+
+    pub category_job_service_sub_fee_map_sort_order: i32,
+
+    pub category_job_service_sub_fee_header: String,
+
+    pub category_job_service_sub_fee_description: String,
+
+    pub category_job_service_sub_fee_locale: String,
+
+    pub category_job_service_sub_fee_icon: String,
+
+    pub category_job_service_sub_fee_price: Decimal,
+
+    pub category_job_service_sub_fee_status: i32,
+
+    pub category_job_service_sub_fee_map_create_at: Option<DateTime<Utc>>,
+
+    pub category_job_service_sub_fee_map_create_by: String,
+
+    pub category_job_service_sub_fee_map_update_at: Option<DateTime<Utc>>,
+
+    pub category_job_service_sub_fee_map_update_by: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CategoryJobServiceSubDetailImageRow {
+    pub category_job_service_sub_img_guid: String,
+
+    pub category_job_service_sub_img_category_job_service_sub_guid: String,
+
+    pub category_job_service_sub_img_type: i32,
+
+    pub category_job_service_sub_img_type_language: i32,
+
+    pub category_job_service_sub_img_priority: i32,
+
+    #[serde(skip_serializing)]
+    pub category_job_service_sub_img_img_path: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category_job_service_sub_img_url: Option<String>,
+
+    pub category_job_service_sub_img_status: i32,
+
+    pub category_job_service_sub_img_create_at: Option<DateTime<Utc>>,
+
+    pub category_job_service_sub_img_create_by: String,
+
+    pub category_job_service_sub_img_update_at: Option<DateTime<Utc>>,
+
+    pub category_job_service_sub_img_update_by: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CategoryJobServiceSubDetailBundle {
-    pub sub: CategoryJobServiceSubRow,
+    pub sub: CategoryJobServiceSubDetailRow,
 
-    pub images: Vec<CategoryJobServiceSubImageRow>,
+    pub warranties: Vec<CategoryJobServiceSubDetailWarrantyRow>,
 
-    pub fees: Vec<CategoryJobServiceSubFeeRow>,
+    pub fees: Vec<CategoryJobServiceSubDetailFeeRow>,
 
-    pub warranties: Vec<CategoryJobServiceSubWarrantyRow>,
+    pub images: Vec<CategoryJobServiceSubDetailImageRow>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -178,6 +300,84 @@ pub struct CategoryJobServiceSubUpdateResult {
     pub message: String,
 
     pub category_job_service_sub_guid: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CategoryJobServiceSubUpdateSpInput {
+    pub category_job_service_sub_guid: String,
+
+    #[serde(default)]
+    pub category_job_service_main_guid: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_sub_name_la: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_sub_name_en: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_sub_name_th: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_sub_name_zh: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_sub_start_price: Option<Decimal>,
+
+    #[serde(default)]
+    pub category_job_service_sub_description_la: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_sub_description_en: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_sub_description_th: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_sub_description_zh: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_sub_status: Option<i32>,
+
+    #[serde(default)]
+    pub warranties: Vec<CategoryJobServiceSubCreateSpWarrantyInput>,
+
+    #[serde(default)]
+    pub fees: Vec<CategoryJobServiceSubCreateSpFeeInput>,
+
+    #[serde(default)]
+    pub images: Vec<CategoryJobServiceSubCreateSpImageInput>,
+
+    #[serde(default = "default_replace_images")]
+    pub replace_images: bool,
+
+    pub update_by: String,
+}
+
+fn default_replace_images() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CategoryJobServiceSubUpdateSpResult {
+    pub success: bool,
+
+    pub code: String,
+
+    pub message: String,
+
+    pub category_job_service_sub_guid: String,
+
+    #[serde(default)]
+    pub warranty_count: i32,
+
+    #[serde(default)]
+    pub fee_count: i32,
+
+    #[serde(default)]
+    pub image_count: i32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

@@ -4,9 +4,9 @@ use kokkak_domain::traits::user::RepoError;
 use kokkak_domain::{
     CategoryJobServiceMainAutocompleteInput, CategoryJobServiceMainAutocompleteRow,
     CategoryJobServiceMainCreateInput, CategoryJobServiceMainCreateResult,
-    CategoryJobServiceMainDeleteResult, CategoryJobServiceMainListInput,
-    CategoryJobServiceMainRepository, CategoryJobServiceMainRow, CategoryJobServiceMainUpdateInput,
-    CategoryJobServiceMainUpdateResult,
+    CategoryJobServiceMainDeleteResult, CategoryJobServiceMainDetailRow,
+    CategoryJobServiceMainListInput, CategoryJobServiceMainRepository, CategoryJobServiceMainRow,
+    CategoryJobServiceMainUpdateInput, CategoryJobServiceMainUpdateResult,
 };
 
 pub struct CategoryJobServiceMainService {
@@ -64,6 +64,14 @@ impl CategoryJobServiceMainService {
                     "CategoryJobServiceMainService::disabled — repository not wired".into(),
                 ))
             }
+            async fn detail(
+                &self,
+                _service_guid: &str,
+            ) -> Result<Option<CategoryJobServiceMainDetailRow>, RepoError> {
+                Err(RepoError::Backend(
+                    "CategoryJobServiceMainService::disabled — repository not wired".into(),
+                ))
+            }
         }
         let repo: Arc<dyn CategoryJobServiceMainRepository> = Arc::new(DisabledRepo);
         Self { repo }
@@ -107,6 +115,13 @@ impl CategoryJobServiceMainService {
         input: CategoryJobServiceMainAutocompleteInput,
     ) -> Result<Vec<CategoryJobServiceMainAutocompleteRow>, RepoError> {
         self.repo.autocomplete(&input).await
+    }
+
+    pub async fn detail(
+        &self,
+        service_guid: &str,
+    ) -> Result<Option<CategoryJobServiceMainDetailRow>, RepoError> {
+        self.repo.detail(service_guid).await
     }
 }
 
@@ -174,6 +189,12 @@ mod tests {
         ) -> Result<Vec<CategoryJobServiceMainAutocompleteRow>, RepoError> {
             *self.last_autocomplete.lock().unwrap() = Some(input.clone());
             Ok(self.autocomplete_rows.lock().unwrap().clone())
+        }
+        async fn detail(
+            &self,
+            _service_guid: &str,
+        ) -> Result<Option<CategoryJobServiceMainDetailRow>, RepoError> {
+            Ok(None)
         }
     }
 
@@ -252,7 +273,10 @@ mod tests {
             .update(CategoryJobServiceMainUpdateInput {
                 category_job_service_guid: created_guid.clone(),
                 category_job_main_guid: "m-1".into(),
-                category_job_service_name: "Plumbing v2".into(),
+                category_job_service_name_la: Some("Plumbing v2".into()),
+                category_job_service_name_en: Some("Plumbing v2 EN".into()),
+                category_job_service_name_th: None,
+                category_job_service_name_zh: None,
                 category_job_service_icon_style: Some("solid".into()),
                 category_job_service_icon_line: Some("pipe".into()),
                 category_job_service_img_path: None,

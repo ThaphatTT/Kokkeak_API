@@ -98,7 +98,7 @@ err_admin_user:
   admin_role_not_found: "ບໍ່ພົບ role ADMIN ຫຼືບໍ່ໄດ້ເປີດໃຊ້ງານ"
   employee_role_not_found: "ບໍ່ພົບ role EMPLOYEE ຫຼືບໍ່ໄດ້ເປີດໃຊ້ງານ"
   user_not_found: "ບໍ່ພົບຜູ້ໃຊ້ ຫຼື ຖືກລົບໄປແລ້ວ"
-  image_invalid: 'ອັບໂຫລດຮູບບໍ່ສຳເລັດສຳລັບຟິວສ "{field}"'
+  image_invalid: 'ອັບໂຫລດຮູບບໍ່ສຳເລັດສຳລັບຟິວສ "{0}"'
 
 err_category_job_main:
   create_success: "ສ້າງໝວດໝູ່ສຳເລັດ"

@@ -204,27 +204,13 @@ pub async fn get_category_job_main(
     State(state): State<AppState>,
     Path(guid): Path<String>,
 ) -> Result<Response, Response> {
-    let input = kokkak_domain::CategoryJobMainListInput {
-        keyword: None,
-        status: None,
-        locale: Some(current_locale()),
-        page: 1,
-        page_size: 100,
-    };
-    let page = match state.category_job_main.list(input).await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::warn!(error = %e, "category_job_main.list failed");
-            return Err(repo_error_to_response(e, &state).await);
-        }
-    };
-    let mut found: Vec<kokkak_domain::CategoryJobMainRow> = page
-        .items
-        .into_iter()
-        .filter(|r| r.category_job_main_guid == guid)
-        .collect();
-    match found.len() {
-        0 => {
+    if guid.trim().is_empty() {
+        return Err(validation_envelope(&state, "guid is required"));
+    }
+
+    let detail = match state.category_job_main.detail(&guid).await {
+        Ok(Some(d)) => d,
+        Ok(None) => {
             let locale = current_locale();
             let msg = tr("err_category_job_main.not_found", &locale, &[guid.as_str()]);
             let envelope: ApiResponse<()> = ApiResponse {
@@ -236,13 +222,17 @@ pub async fn get_category_job_main(
                 }),
                 meta: None,
             };
-            Err((StatusCode::NOT_FOUND, Json(envelope)).into_response())
+            return Err((StatusCode::NOT_FOUND, Json(envelope)).into_response());
         }
-        _ => {
-            populate_signed_image_urls(&state, &mut found);
-            Ok((StatusCode::OK, ok(found.remove(0))).into_response())
+        Err(e) => {
+            tracing::warn!(error = %e, "category_job_main.detail failed");
+            return Err(repo_error_to_response(e, &state).await);
         }
-    }
+    };
+
+    let mut detail = detail;
+    populate_signed_detail_image_url(&state, &mut detail);
+    Ok((StatusCode::OK, ok(detail)).into_response())
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -345,7 +335,9 @@ pub async fn create_category_job_main_admin(
     )
     .await
     {
-        Ok(v) => v.or(req.category_job_main_img_path),
+        Ok(v) => v.or(req
+            .category_job_main_img_path
+            .map(|p| p.strip_prefix("/files/").unwrap_or(&p).to_string())),
         Err(e) => return Err(image_error_envelope(&state, "category_job_main_img_b64", e)),
     };
 
@@ -387,7 +379,17 @@ pub async fn create_category_job_main_admin(
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct UpdateCategoryJobMainRequest {
-    pub category_job_main_name: String,
+    #[serde(default)]
+    pub category_job_main_name_la: Option<String>,
+
+    #[serde(default)]
+    pub category_job_main_name_en: Option<String>,
+
+    #[serde(default)]
+    pub category_job_main_name_th: Option<String>,
+
+    #[serde(default)]
+    pub category_job_main_name_zh: Option<String>,
 
     #[serde(default)]
     pub category_job_main_icon_style: Option<String>,
@@ -408,8 +410,14 @@ pub struct UpdateCategoryJobMainRequest {
 
 impl UpdateCategoryJobMainRequest {
     pub fn validate(&self) -> Result<(), String> {
-        if self.category_job_main_name.trim().is_empty() {
-            return Err("category_job_main_name is required".to_string());
+        let has_any_name = self
+            .category_job_main_name_la
+            .as_ref()
+            .or(self.category_job_main_name_en.as_ref())
+            .or(self.category_job_main_name_th.as_ref())
+            .or(self.category_job_main_name_zh.as_ref());
+        if has_any_name.is_none() {
+            return Err("at least one name (la/en/th/zh) is required".to_string());
         }
         if !matches!(self.category_job_main_status, 0 | 1) {
             return Err("category_job_main_status must be 0 or 1".to_string());
@@ -470,13 +478,18 @@ pub async fn update_category_job_main_admin(
     )
     .await
     {
-        Ok(v) => v.or(req.category_job_main_img_path),
+        Ok(v) => v.or(req
+            .category_job_main_img_path
+            .map(|p| p.strip_prefix("/files/").unwrap_or(&p).to_string())),
         Err(e) => return Err(image_error_envelope(&state, "category_job_main_img_b64", e)),
     };
 
     let input = kokkak_domain::CategoryJobMainUpdateInput {
         category_job_main_guid: guid,
-        category_job_main_name: req.category_job_main_name,
+        category_job_main_name_la: req.category_job_main_name_la,
+        category_job_main_name_en: req.category_job_main_name_en,
+        category_job_main_name_th: req.category_job_main_name_th,
+        category_job_main_name_zh: req.category_job_main_name_zh,
         category_job_main_icon_style: req.category_job_main_icon_style,
         category_job_main_icon_line: req.category_job_main_icon_line,
         category_job_main_img_path: img_path,
@@ -575,9 +588,11 @@ pub async fn delete_category_job_main_admin(
 
 fn sp_main_status_key(sp_code: &str) -> &'static str {
     match sp_code {
-        "INSERT_SUCCESS" | "CREATE_SUCCESS" => "err_category_job_main.create_success",
-        "UPDATE_SUCCESS" => "err_category_job_main.update_success",
-        "DELETE_SUCCESS" => "err_category_job_main.delete_success",
+        "INSERT_SUCCESS" | "CREATE_SUCCESS" | "CREATED" => "err_category_job_main.create_success",
+        "UPDATE_SUCCESS" | "UPDATED" => "err_category_job_main.update_success",
+        "DELETE_SUCCESS" | "DELETED" => "err_category_job_main.delete_success",
+        "NOT_FOUND" => "err_category_job_main.not_found",
+        "INVALID_STATUS" => "err_category_job_main.validation",
         _ => "err_category_job_main.backend",
     }
 }
@@ -626,6 +641,21 @@ fn populate_signed_image_urls(state: &AppState, items: &mut [kokkak_domain::Cate
             state.signed_url_ttl_secs,
         );
     }
+}
+
+fn populate_signed_detail_image_url(
+    state: &AppState,
+    row: &mut kokkak_domain::CategoryJobMainDetailRow,
+) {
+    if row.category_job_main_img_path.is_empty() {
+        return;
+    }
+    row.category_job_main_img_url = crate::signed_url::signed_image_url(
+        state.public_base_url.as_ref(),
+        &row.category_job_main_img_path,
+        state.signed_url_secret.as_ref(),
+        state.signed_url_ttl_secs,
+    );
 }
 
 async fn repo_error_to_response(err: RepoError, state: &AppState) -> Response {

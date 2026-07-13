@@ -4,8 +4,9 @@ use super::user::RepoError;
 use crate::category_job_service_main::{
     CategoryJobServiceMainAutocompleteInput, CategoryJobServiceMainAutocompleteRow,
     CategoryJobServiceMainCreateInput, CategoryJobServiceMainCreateResult,
-    CategoryJobServiceMainDeleteResult, CategoryJobServiceMainListInput, CategoryJobServiceMainRow,
-    CategoryJobServiceMainUpdateInput, CategoryJobServiceMainUpdateResult,
+    CategoryJobServiceMainDeleteResult, CategoryJobServiceMainDetailRow,
+    CategoryJobServiceMainListInput, CategoryJobServiceMainRow, CategoryJobServiceMainUpdateInput,
+    CategoryJobServiceMainUpdateResult,
 };
 
 #[async_trait]
@@ -35,4 +36,9 @@ pub trait CategoryJobServiceMainRepository: Send + Sync {
         &self,
         input: &CategoryJobServiceMainAutocompleteInput,
     ) -> Result<Vec<CategoryJobServiceMainAutocompleteRow>, RepoError>;
+
+    async fn detail(
+        &self,
+        service_guid: &str,
+    ) -> Result<Option<CategoryJobServiceMainDetailRow>, RepoError>;
 }

@@ -162,7 +162,7 @@ pub async fn exec_sp_multi_on(
         .query(query, params)
         .await
         .map_err(|e| RepoError::Backend(e.to_string()))?;
-    let mut sets: Vec<Vec<tiberius::Row>> = vec![Vec::new()];
+    let mut sets: Vec<Vec<tiberius::Row>> = Vec::new();
     while let Some(item) = stream
         .try_next()
         .await
@@ -170,6 +170,9 @@ pub async fn exec_sp_multi_on(
     {
         match item {
             tiberius::QueryItem::Row(row) => {
+                if sets.is_empty() {
+                    sets.push(Vec::new());
+                }
                 if let Some(last) = sets.last_mut() {
                     last.push(row);
                 }

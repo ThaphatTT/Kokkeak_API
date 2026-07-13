@@ -98,7 +98,7 @@ err_admin_user:
   admin_role_not_found: "未找到 ADMIN 角色或未启用"
   employee_role_not_found: "未找到 EMPLOYEE 角色或未启用"
   user_not_found: "用户不存在或已删除"
-  image_invalid: '字段 "{field}" 的图片上传失败'
+  image_invalid: '字段 "{0}" 的图片上传失败'
 
 err_category_job_main:
   create_success: "分类创建成功"

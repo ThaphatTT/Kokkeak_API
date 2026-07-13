@@ -9,6 +9,7 @@ use crate::category_job_service_sub::{
     CategoryJobServiceSubImageDeleteInput, CategoryJobServiceSubImageDeleteResult,
     CategoryJobServiceSubImageInput, CategoryJobServiceSubImageRow, CategoryJobServiceSubRow,
     CategoryJobServiceSubUpdateInput, CategoryJobServiceSubUpdateResult,
+    CategoryJobServiceSubUpdateSpInput, CategoryJobServiceSubUpdateSpResult,
 };
 
 #[derive(Debug, Clone)]
@@ -43,6 +44,7 @@ pub trait CategoryJobServiceSubRepository: Send + Sync {
     async fn detail(
         &self,
         category_job_service_sub_guid: &str,
+        locale: &str,
     ) -> Result<CategoryJobServiceSubDetailBundle, RepoError>;
 
     async fn list_images(
@@ -92,6 +94,11 @@ pub trait CategoryJobServiceSubRepository: Send + Sync {
         &self,
         input: &CategoryJobServiceSubCreateSpInput,
     ) -> Result<CategoryJobServiceSubCreateSpResult, RepoError>;
+
+    async fn update_via_sp(
+        &self,
+        input: &CategoryJobServiceSubUpdateSpInput,
+    ) -> Result<CategoryJobServiceSubUpdateSpResult, RepoError>;
 }
 
 #[allow(dead_code)]

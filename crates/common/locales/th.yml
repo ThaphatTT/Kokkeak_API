@@ -98,7 +98,7 @@ err_admin_user:
   admin_role_not_found: "ไม่พบ role ADMIN หรือ role ไม่ได้ใช้งาน"
   employee_role_not_found: "ไม่พบ role EMPLOYEE หรือ role ไม่ได้ใช้งาน"
   user_not_found: "ไม่พบผู้ใช้หรือผู้ใช้ถูกลบไปแล้ว"
-  image_invalid: 'อัปโหลดรูปภาพไม่สำเร็จสำหรับฟิลด์ "{field}"'
+  image_invalid: 'อัปโหลดรูปภาพไม่สำเร็จสำหรับฟิลด์ "{0}"'
 
 err_category_job_main:
   create_success: "สร้างหมวดหมู่สำเร็จ"

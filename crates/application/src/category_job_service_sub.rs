@@ -11,7 +11,8 @@ use kokkak_domain::{
     CategoryJobServiceSubImageCreateInput, CategoryJobServiceSubImageCreateResult,
     CategoryJobServiceSubImageDeleteInput, CategoryJobServiceSubImageDeleteResult,
     CategoryJobServiceSubImageRow, CategoryJobServiceSubRow, CategoryJobServiceSubUpdateInput,
-    CategoryJobServiceSubUpdateResult,
+    CategoryJobServiceSubUpdateResult, CategoryJobServiceSubUpdateSpInput,
+    CategoryJobServiceSubUpdateSpResult,
 };
 
 pub struct CategoryJobServiceSubService {
@@ -45,6 +46,7 @@ impl CategoryJobServiceSubService {
             async fn detail(
                 &self,
                 _category_job_service_sub_guid: &str,
+                _locale: &str,
             ) -> Result<CategoryJobServiceSubDetailBundle, RepoError> {
                 Err(RepoError::Backend(
                     "CategoryJobServiceSubService::disabled — repository not wired".into(),
@@ -134,6 +136,15 @@ impl CategoryJobServiceSubService {
                     "CategoryJobServiceSubService::disabled — repository not wired".into(),
                 ))
             }
+
+            async fn update_via_sp(
+                &self,
+                _input: &CategoryJobServiceSubUpdateSpInput,
+            ) -> Result<CategoryJobServiceSubUpdateSpResult, RepoError> {
+                Err(RepoError::Backend(
+                    "CategoryJobServiceSubService::disabled — repository not wired".into(),
+                ))
+            }
         }
 
         let repo: Arc<dyn CategoryJobServiceSubRepository> = Arc::new(DisabledRepo);
@@ -166,8 +177,11 @@ impl CategoryJobServiceSubService {
     pub async fn detail(
         &self,
         category_job_service_sub_guid: &str,
+        locale: &str,
     ) -> Result<CategoryJobServiceSubDetailBundle, RepoError> {
-        self.repo.detail(category_job_service_sub_guid).await
+        self.repo
+            .detail(category_job_service_sub_guid, locale)
+            .await
     }
 
     pub async fn list_images(
@@ -237,6 +251,13 @@ impl CategoryJobServiceSubService {
     ) -> Result<CategoryJobServiceSubCreateSpResult, RepoError> {
         self.repo.create_via_sp(&input).await
     }
+
+    pub async fn update_via_sp(
+        &self,
+        input: &CategoryJobServiceSubUpdateSpInput,
+    ) -> Result<CategoryJobServiceSubUpdateSpResult, RepoError> {
+        self.repo.update_via_sp(input).await
+    }
 }
 
 #[cfg(test)]
@@ -269,6 +290,7 @@ mod tests {
         async fn detail(
             &self,
             category_job_service_sub_guid: &str,
+            _locale: &str,
         ) -> Result<CategoryJobServiceSubDetailBundle, RepoError> {
             let sub = self
                 .rows
@@ -292,8 +314,48 @@ mod tests {
                 .cloned()
                 .collect();
             Ok(CategoryJobServiceSubDetailBundle {
-                sub,
-                images,
+                sub: kokkak_domain::CategoryJobServiceSubDetailRow {
+                    category_job_service_guid: "".into(),
+                    category_job_service_sub_guid: sub.category_job_service_sub_guid,
+                    category_job_service_sub_category_job_service_main_guid: sub
+                        .category_job_service_sub_category_job_service_main_guid,
+                    category_job_service_sub_name_la: "".into(),
+                    category_job_service_sub_name_en: "".into(),
+                    category_job_service_sub_name_th: "".into(),
+                    category_job_service_sub_name_zh: "".into(),
+                    category_job_service_sub_description_la: "".into(),
+                    category_job_service_sub_description_en: "".into(),
+                    category_job_service_sub_description_th: "".into(),
+                    category_job_service_sub_description_zh: "".into(),
+                    category_job_service_sub_start_price: sub.category_job_service_sub_start_price,
+                    category_job_service_sub_status: sub.category_job_service_sub_status,
+                    category_job_service_sub_create_at: sub.category_job_service_sub_create_at,
+                    category_job_service_sub_create_by: sub.category_job_service_sub_create_by,
+                    category_job_service_sub_update_at: sub.category_job_service_sub_update_at,
+                    category_job_service_sub_update_by: sub.category_job_service_sub_update_by,
+                },
+                images: images
+                    .into_iter()
+                    .map(|i| kokkak_domain::CategoryJobServiceSubDetailImageRow {
+                        category_job_service_sub_img_guid: i.category_job_service_sub_img_guid,
+                        category_job_service_sub_img_category_job_service_sub_guid: i
+                            .category_job_service_sub_img_category_job_service_sub_guid,
+                        category_job_service_sub_img_type: i.category_job_service_sub_img_type,
+                        category_job_service_sub_img_type_language: i
+                            .category_job_service_sub_img_type_language,
+                        category_job_service_sub_img_priority: i
+                            .category_job_service_sub_img_priority,
+                        category_job_service_sub_img_img_path: i.category_job_service_sub_img_path,
+                        category_job_service_sub_img_url: i.category_job_service_sub_img_url,
+                        category_job_service_sub_img_status: i.category_job_service_sub_img_status,
+                        category_job_service_sub_img_create_at: i
+                            .category_job_service_sub_img_create_at,
+                        category_job_service_sub_img_create_by: i
+                            .category_job_service_sub_img_create_by,
+                        category_job_service_sub_img_update_at: None,
+                        category_job_service_sub_img_update_by: "".into(),
+                    })
+                    .collect(),
                 fees: vec![],
                 warranties: vec![],
             })
@@ -530,6 +592,21 @@ mod tests {
                 code: "INSERT_SUCCESS".into(),
                 message: "ok".into(),
                 category_job_service_sub_guid: Some(guid),
+                warranty_count: input.warranties.len() as i32,
+                fee_count: input.fees.len() as i32,
+                image_count: input.images.len() as i32,
+            })
+        }
+
+        async fn update_via_sp(
+            &self,
+            input: &CategoryJobServiceSubUpdateSpInput,
+        ) -> Result<CategoryJobServiceSubUpdateSpResult, RepoError> {
+            Ok(CategoryJobServiceSubUpdateSpResult {
+                success: true,
+                code: "UPDATED".into(),
+                message: "ok".into(),
+                category_job_service_sub_guid: input.category_job_service_sub_guid.clone(),
                 warranty_count: input.warranties.len() as i32,
                 fee_count: input.fees.len() as i32,
                 image_count: input.images.len() as i32,

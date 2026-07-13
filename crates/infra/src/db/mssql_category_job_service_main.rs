@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use tiberius::ToSql;
+use uuid::Uuid;
 
 use kokkak_domain::category_job_service_main::CategoryJobServiceMainError;
 use kokkak_domain::traits::category_job_service_main::CategoryJobServiceMainRepository;
@@ -8,11 +9,17 @@ use kokkak_domain::traits::user::RepoError;
 use kokkak_domain::{
     CategoryJobServiceMainAutocompleteInput, CategoryJobServiceMainAutocompleteRow,
     CategoryJobServiceMainCreateInput, CategoryJobServiceMainCreateResult,
-    CategoryJobServiceMainDeleteResult, CategoryJobServiceMainListInput, CategoryJobServiceMainRow,
-    CategoryJobServiceMainUpdateInput, CategoryJobServiceMainUpdateResult,
+    CategoryJobServiceMainDeleteResult, CategoryJobServiceMainDetailRow,
+    CategoryJobServiceMainListInput, CategoryJobServiceMainRow, CategoryJobServiceMainUpdateInput,
+    CategoryJobServiceMainUpdateResult,
 };
 
 use crate::db::mssql::{exec_sp, read_guid_str, read_i32, read_str, MssqlPool};
+
+fn read_datetime_utc(row: &tiberius::Row, col: &str) -> Option<DateTime<Utc>> {
+    row.get::<chrono::NaiveDateTime, _>(col)
+        .map(|ndt| ndt.and_utc())
+}
 
 #[derive(Clone)]
 pub struct MssqlCategoryJobServiceMainRepository {
@@ -144,7 +151,10 @@ impl CategoryJobServiceMainRepository for MssqlCategoryJobServiceMainRepository 
     ) -> Result<CategoryJobServiceMainUpdateResult, RepoError> {
         let service_guid = input.category_job_service_guid.as_str();
         let main_guid = input.category_job_main_guid.as_str();
-        let name = input.category_job_service_name.as_str();
+        let name_la: Option<&str> = input.category_job_service_name_la.as_deref();
+        let name_en: Option<&str> = input.category_job_service_name_en.as_deref();
+        let name_th: Option<&str> = input.category_job_service_name_th.as_deref();
+        let name_zh: Option<&str> = input.category_job_service_name_zh.as_deref();
         let icon_style: Option<&str> = input.category_job_service_icon_style.as_deref();
         let icon_line: Option<&str> = input.category_job_service_icon_line.as_deref();
         let img_path: Option<&str> = input.category_job_service_img_path.as_deref();
@@ -154,7 +164,10 @@ impl CategoryJobServiceMainRepository for MssqlCategoryJobServiceMainRepository 
         let params: &[&dyn ToSql] = &[
             &service_guid,
             &main_guid,
-            &name,
+            &name_la,
+            &name_en,
+            &name_th,
+            &name_zh,
             &icon_style,
             &icon_line,
             &img_path,
@@ -167,12 +180,15 @@ impl CategoryJobServiceMainRepository for MssqlCategoryJobServiceMainRepository 
             "EXEC dbo.SP_CATEGORY_JOB_SERVICE_MAIN_UPDATE \
                 @p_category_job_service_guid = @P1, \
                 @p_category_job_main_guid = @P2, \
-                @p_category_job_service_name = @P3, \
-                @p_category_job_service_icon_style = @P4, \
-                @p_category_job_service_icon_line = @P5, \
-                @p_category_job_service_img_path = @P6, \
-                @p_category_job_service_status = @P7, \
-                @p_update_by = @P8",
+                @p_name_la = @P3, \
+                @p_name_en = @P4, \
+                @p_name_th = @P5, \
+                @p_name_zh = @P6, \
+                @p_icon_style = @P7, \
+                @p_icon_line = @P8, \
+                @p_img_path = @P9, \
+                @p_status = @P10, \
+                @p_update_by = @P11",
             params,
         )
         .await?;
@@ -298,6 +314,26 @@ impl CategoryJobServiceMainRepository for MssqlCategoryJobServiceMainRepository 
             .map(row_to_category_job_service_main_autocomplete_row)
             .collect())
     }
+
+    async fn detail(
+        &self,
+        service_guid: &str,
+    ) -> Result<Option<CategoryJobServiceMainDetailRow>, RepoError> {
+        let guid: &str = service_guid;
+        let params: &[&dyn ToSql] = &[&guid];
+
+        let rows = exec_sp(
+            &self.pool,
+            "EXEC dbo.SP_CATEGORY_JOB_SERVICE_MAIN_DETAIL_GET \
+                @p_category_job_service_guid = @P1",
+            params,
+        )
+        .await?;
+
+        Ok(rows
+            .first()
+            .map(row_to_category_job_service_main_detail_row))
+    }
 }
 
 fn normalize_locale_for_sp(raw: &str) -> String {
@@ -352,19 +388,76 @@ fn row_to_category_job_service_main_row(
         category_job_service_img_url: None,
         category_job_service_status: read_i32(row, "category_job_service_status").unwrap_or(0),
         has_sub_service: row.get::<bool, _>("has_sub_service").unwrap_or(false),
-        category_job_service_create_at: {
-            row.get::<DateTime<Utc>, _>("category_job_service_create_at")
-        },
+        category_job_service_create_at: read_datetime_utc(row, "category_job_service_create_at"),
         category_job_service_create_by: read_str(row, "category_job_service_create_by")
             .unwrap_or("")
             .to_string(),
-        category_job_service_update_at: {
-            row.get::<DateTime<Utc>, _>("category_job_service_update_at")
-        },
+        category_job_service_update_at: read_datetime_utc(row, "category_job_service_update_at"),
         category_job_service_update_by: read_str(row, "category_job_service_update_by")
             .unwrap_or("")
             .to_string(),
     }
+}
+
+fn row_to_category_job_service_main_detail_row(
+    row: &tiberius::Row,
+) -> CategoryJobServiceMainDetailRow {
+    CategoryJobServiceMainDetailRow {
+        category_job_service_guid: read_guid_str(row, "category_job_service_guid"),
+        category_job_service_category_main_guid: read_guid_str(
+            row,
+            "category_job_service_category_main_guid",
+        ),
+        category_job_main_name_la: read_str(row, "category_job_main_name_la")
+            .unwrap_or("")
+            .to_string(),
+        category_job_main_name_en: read_str(row, "category_job_main_name_en")
+            .unwrap_or("")
+            .to_string(),
+        category_job_main_name_th: read_str(row, "category_job_main_name_th")
+            .unwrap_or("")
+            .to_string(),
+        category_job_main_name_zh: read_str(row, "category_job_main_name_zh")
+            .unwrap_or("")
+            .to_string(),
+        category_job_service_name_la: read_str(row, "category_job_service_name_la")
+            .unwrap_or("")
+            .to_string(),
+        category_job_service_name_en: read_str(row, "category_job_service_name_en")
+            .unwrap_or("")
+            .to_string(),
+        category_job_service_name_th: read_str(row, "category_job_service_name_th")
+            .unwrap_or("")
+            .to_string(),
+        category_job_service_name_zh: read_str(row, "category_job_service_name_zh")
+            .unwrap_or("")
+            .to_string(),
+        category_job_service_icon_style: read_str(row, "category_job_service_icon_style")
+            .unwrap_or("")
+            .to_string(),
+        category_job_service_icon_line: read_str(row, "category_job_service_icon_line")
+            .unwrap_or("")
+            .to_string(),
+        category_job_service_img_path: read_str(row, "category_job_service_img_path")
+            .unwrap_or("")
+            .to_string(),
+        category_job_service_img_url: None,
+        category_job_service_status: read_i32(row, "category_job_service_status").unwrap_or(0),
+        has_sub_service: row.get::<bool, _>("has_sub_service").unwrap_or(false),
+        category_job_service_create_at: read_datetime_utc(row, "category_job_service_create_at"),
+        category_job_service_create_by: read_str(row, "category_job_service_create_by")
+            .unwrap_or("")
+            .to_string(),
+        category_job_service_update_at: read_datetime_utc(row, "category_job_service_update_at"),
+        category_job_service_update_by: read_str(row, "category_job_service_update_by")
+            .unwrap_or("")
+            .to_string(),
+    }
+}
+
+impl MssqlCategoryJobServiceMainRepository {
+    #[allow(dead_code)]
+    fn _uuid_zero_use(_: Uuid) {}
 }
 
 #[cfg(test)]

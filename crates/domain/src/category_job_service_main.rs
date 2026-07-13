@@ -93,7 +93,17 @@ pub struct CategoryJobServiceMainUpdateInput {
 
     pub category_job_main_guid: String,
 
-    pub category_job_service_name: String,
+    #[serde(default)]
+    pub category_job_service_name_la: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_name_en: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_name_th: Option<String>,
+
+    #[serde(default)]
+    pub category_job_service_name_zh: Option<String>,
 
     #[serde(default)]
     pub category_job_service_icon_style: Option<String>,
@@ -167,6 +177,52 @@ pub struct CategoryJobServiceMainAutocompleteRow {
     pub category_job_service_guid: String,
 
     pub category_job_service_name: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CategoryJobServiceMainDetailRow {
+    pub category_job_service_guid: String,
+
+    pub category_job_service_category_main_guid: String,
+
+    pub category_job_main_name_la: String,
+
+    pub category_job_main_name_en: String,
+
+    pub category_job_main_name_th: String,
+
+    pub category_job_main_name_zh: String,
+
+    pub category_job_service_name_la: String,
+
+    pub category_job_service_name_en: String,
+
+    pub category_job_service_name_th: String,
+
+    pub category_job_service_name_zh: String,
+
+    pub category_job_service_icon_style: String,
+
+    pub category_job_service_icon_line: String,
+
+    #[serde(skip_serializing)]
+    pub category_job_service_img_path: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category_job_service_img_url: Option<String>,
+
+    pub category_job_service_status: i32,
+
+    pub has_sub_service: bool,
+
+    pub category_job_service_create_at: Option<DateTime<Utc>>,
+
+    pub category_job_service_create_by: String,
+
+    pub category_job_service_update_at: Option<DateTime<Utc>>,
+
+    pub category_job_service_update_by: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

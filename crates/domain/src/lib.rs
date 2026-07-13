@@ -40,28 +40,31 @@ pub use cache::{Cache, CacheError, CacheExt, CacheGroup, CacheKey, InvalidationS
 pub use catalog::ServiceCategory;
 pub use category_job_main::{
     CategoryJobMainAutocompleteInput, CategoryJobMainAutocompleteRow, CategoryJobMainCreateInput,
-    CategoryJobMainCreateResult, CategoryJobMainDeleteResult, CategoryJobMainError,
-    CategoryJobMainListInput, CategoryJobMainPage, CategoryJobMainRow, CategoryJobMainUpdateInput,
-    CategoryJobMainUpdateResult,
+    CategoryJobMainCreateResult, CategoryJobMainDeleteResult, CategoryJobMainDetailRow,
+    CategoryJobMainError, CategoryJobMainListInput, CategoryJobMainPage, CategoryJobMainRow,
+    CategoryJobMainUpdateInput, CategoryJobMainUpdateResult,
 };
 pub use category_job_service_main::{
     CategoryJobServiceMainAutocompleteInput, CategoryJobServiceMainAutocompleteRow,
     CategoryJobServiceMainCreateInput, CategoryJobServiceMainCreateResult,
-    CategoryJobServiceMainDeleteResult, CategoryJobServiceMainError,
-    CategoryJobServiceMainListInput, CategoryJobServiceMainRow, CategoryJobServiceMainUpdateInput,
-    CategoryJobServiceMainUpdateResult,
+    CategoryJobServiceMainDeleteResult, CategoryJobServiceMainDetailRow,
+    CategoryJobServiceMainError, CategoryJobServiceMainListInput, CategoryJobServiceMainRow,
+    CategoryJobServiceMainUpdateInput, CategoryJobServiceMainUpdateResult,
 };
 pub use category_job_service_sub::{
     CategoryJobServiceSubCreateInput, CategoryJobServiceSubCreateResult,
     CategoryJobServiceSubCreateSpFeeInput, CategoryJobServiceSubCreateSpImageInput,
     CategoryJobServiceSubCreateSpInput, CategoryJobServiceSubCreateSpResult,
     CategoryJobServiceSubCreateSpWarrantyInput, CategoryJobServiceSubDeleteResult,
-    CategoryJobServiceSubDetailBundle, CategoryJobServiceSubError, CategoryJobServiceSubFeeRow,
-    CategoryJobServiceSubImageCreateInput, CategoryJobServiceSubImageCreateResult,
-    CategoryJobServiceSubImageDeleteInput, CategoryJobServiceSubImageDeleteResult,
-    CategoryJobServiceSubImageInput, CategoryJobServiceSubImageRow, CategoryJobServiceSubRow,
-    CategoryJobServiceSubUpdateInput, CategoryJobServiceSubUpdateResult,
-    CategoryJobServiceSubWarrantyRow,
+    CategoryJobServiceSubDetailBundle, CategoryJobServiceSubDetailFeeRow,
+    CategoryJobServiceSubDetailImageRow, CategoryJobServiceSubDetailRow,
+    CategoryJobServiceSubDetailWarrantyRow, CategoryJobServiceSubError,
+    CategoryJobServiceSubFeeRow, CategoryJobServiceSubImageCreateInput,
+    CategoryJobServiceSubImageCreateResult, CategoryJobServiceSubImageDeleteInput,
+    CategoryJobServiceSubImageDeleteResult, CategoryJobServiceSubImageInput,
+    CategoryJobServiceSubImageRow, CategoryJobServiceSubRow, CategoryJobServiceSubUpdateInput,
+    CategoryJobServiceSubUpdateResult, CategoryJobServiceSubUpdateSpInput,
+    CategoryJobServiceSubUpdateSpResult, CategoryJobServiceSubWarrantyRow,
 };
 pub use category_job_service_sub_fee::{
     CategoryJobServiceSubFeeAdminRow, CategoryJobServiceSubFeeAutocompleteInput,
