@@ -5,11 +5,11 @@ use axum::{
     Json,
 };
 use kokkak_common::i18n::{current_locale, tr, tr_with_repo};
-use kokkak_common::response::{created, ok, ApiResponse};
+use kokkak_common::response::{ok, ApiResponse};
 use kokkak_domain::LocalizedError;
 use serde::{Deserialize, Serialize};
 
-use crate::middleware::auth::{assert_scope, AuthnUser};
+use crate::middleware::auth::{assert_scope_admin_page, AuthnUser};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
@@ -356,7 +356,7 @@ pub async fn create_category_job_service_sub_warranty_admin(
     Json(req): Json<CreateCategoryJobServiceSubWarrantyRequest>,
 ) -> Result<Response, Response> {
     let locale = current_locale();
-    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+    assert_scope_admin_page(&user, tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(
@@ -515,7 +515,7 @@ pub async fn update_category_job_service_sub_warranty_admin(
     Json(req): Json<UpdateCategoryJobServiceSubWarrantyRequest>,
 ) -> Result<Response, Response> {
     let locale = current_locale();
-    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+    assert_scope_admin_page(&user, tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(
@@ -629,7 +629,7 @@ pub async fn delete_category_job_service_sub_warranty_admin(
     Path(guid): Path<String>,
 ) -> Result<Response, Response> {
     let locale = current_locale();
-    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+    assert_scope_admin_page(&user, tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(

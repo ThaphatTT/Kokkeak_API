@@ -252,6 +252,14 @@ pub fn build(state: AppState) -> Router {
             put(handlers::admin::admin_update_user_full),
         )
         .route(
+            "/api/v1/users/:guid",
+            axum::routing::delete(handlers::admin::delete_user_admin),
+        )
+        .route(
+            "/api/v1/users/:guid/suspend",
+            post(handlers::admin::suspend_user_admin),
+        )
+        .route(
             "/api/v1/permissions",
             get(handlers::admin::list_permissions).post(handlers::admin::update_permissions_admin),
         )

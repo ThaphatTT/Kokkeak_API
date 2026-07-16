@@ -2,12 +2,13 @@ use async_trait::async_trait;
 use tiberius::ToSql;
 
 use kokkak_domain::admin_user::{
-    AdminInsertUserError, AdminInsertUserRequest, AdminInsertUserResult, AdminUpdateUserError,
-    AdminUpdateUserRequest, AdminUpdateUserResult, AdminUserDetail, AdminUserDetailAttachment,
-    AdminUserDetailBankAccount, AdminUserDetailCompany, AdminUserDetailCountry,
-    AdminUserDetailPosition, AdminUserDetailProfileImage, AdminUserDetailRoles,
-    AdminUserDetailSalary, AdminUserDetailScope, AdminUserDetailUsername, AdminUserListPagingInput,
-    AdminUserListPagingPage, DaySchedule, UserListPagingRow, WeeklySchedule,
+    AdminDeleteUserError, AdminDeleteUserResult, AdminInsertUserError, AdminInsertUserRequest,
+    AdminInsertUserResult, AdminUpdateUserError, AdminUpdateUserRequest, AdminUpdateUserResult,
+    AdminUserDetail, AdminUserDetailAttachment, AdminUserDetailBankAccount, AdminUserDetailCompany,
+    AdminUserDetailCountry, AdminUserDetailPosition, AdminUserDetailProfileImage,
+    AdminUserDetailRoles, AdminUserDetailSalary, AdminUserDetailScope, AdminUserDetailUsername,
+    AdminUserListPagingInput, AdminUserListPagingPage, DaySchedule, UserListPagingRow,
+    WeeklySchedule,
 };
 use kokkak_domain::{Permission, RepoError, Role, User, UserListRow, UserRepository, UserStatus};
 use uuid::Uuid;
@@ -720,6 +721,82 @@ impl UserRepository for MssqlUserRepository {
             Some(r) => r,
         };
         Ok(Some(row_to_admin_user_detail(row)))
+    }
+
+    async fn admin_delete_user(
+        &self,
+        actor_user_username_guid: &str,
+        user_guid: &str,
+    ) -> Result<AdminDeleteUserResult, AdminDeleteUserError> {
+        const EXEC_SQL: &str = "EXEC dbo.SP_USER_DELETE \
+                @p_actor_user_username_guid = @P1, \
+                @p_user_guid = @P2";
+
+        let params: &[&dyn ToSql] = &[&actor_user_username_guid, &user_guid];
+
+        let rows = exec_sp(&self.pool, EXEC_SQL, params)
+            .await
+            .map_err(|e| AdminDeleteUserError::new("internal", format!("SP_USER_DELETE: {e}")))?;
+
+        let row = rows.first().ok_or_else(|| {
+            AdminDeleteUserError::new(
+                "internal",
+                "SP_USER_DELETE returned no row (driver/protocol mismatch)",
+            )
+        })?;
+
+        let success: bool = row.get::<bool, _>("success").unwrap_or(false);
+        let code = read_str(row, "code").unwrap_or("").to_string();
+        let message = read_str(row, "message").unwrap_or("").to_string();
+        let result_user_guid = read_guid_str(row, "user_guid");
+
+        if !success {
+            return Err(AdminDeleteUserError::new(code, message));
+        }
+
+        Ok(AdminDeleteUserResult {
+            user_guid: result_user_guid,
+            code,
+            message,
+        })
+    }
+
+    async fn admin_suspend_user(
+        &self,
+        actor_user_username_guid: &str,
+        user_guid: &str,
+    ) -> Result<AdminDeleteUserResult, AdminDeleteUserError> {
+        const EXEC_SQL: &str = "EXEC dbo.SP_USER_SUSPEND \
+                @p_actor_user_username_guid = @P1, \
+                @p_user_guid = @P2";
+
+        let params: &[&dyn ToSql] = &[&actor_user_username_guid, &user_guid];
+
+        let rows = exec_sp(&self.pool, EXEC_SQL, params)
+            .await
+            .map_err(|e| AdminDeleteUserError::new("internal", format!("SP_USER_SUSPEND: {e}")))?;
+
+        let row = rows.first().ok_or_else(|| {
+            AdminDeleteUserError::new(
+                "internal",
+                "SP_USER_SUSPEND returned no row (driver/protocol mismatch)",
+            )
+        })?;
+
+        let success: bool = row.get::<bool, _>("success").unwrap_or(false);
+        let code = read_str(row, "code").unwrap_or("").to_string();
+        let message = read_str(row, "message").unwrap_or("").to_string();
+        let result_user_guid = read_guid_str(row, "user_guid");
+
+        if !success {
+            return Err(AdminDeleteUserError::new(code, message));
+        }
+
+        Ok(AdminDeleteUserResult {
+            user_guid: result_user_guid,
+            code,
+            message,
+        })
     }
 }
 

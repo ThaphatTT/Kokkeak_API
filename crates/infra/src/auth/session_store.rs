@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use deadpool_redis::Pool;
-use redis::AsyncCommands;
 use uuid::Uuid;
 
 use kokkak_domain::{AuthError, CreateSession, SessionInfo, SessionStore};
@@ -12,10 +11,10 @@ pub struct RedisSessionStore {
 }
 
 impl RedisSessionStore {
-    pub fn new(pool: Pool) -> Self {
+    pub fn new(pool: Pool, namespace: &str) -> Self {
         Self {
             pool,
-            key_prefix: "kokkak:v1:auth:session".into(),
+            key_prefix: format!("{}:kokkeak:v1:auth:session", namespace),
         }
     }
 

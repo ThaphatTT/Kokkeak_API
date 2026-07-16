@@ -18,6 +18,10 @@ use uuid::Uuid;
 
 use crate::state::AppState;
 
+pub const SCOPE_ADMIN_PAGE: &str = "admin_page";
+pub const SCOPE_LANDING_PAGE: &str = "landing_page";
+pub const SCOPE_MOBILE: &str = "mobile";
+
 #[derive(Debug, Clone)]
 pub struct AuthnUser(pub AuthSession);
 
@@ -153,6 +157,21 @@ pub fn assert_scope(user: &AuthnUser, scope: &str, message: String) -> Result<()
     }
 }
 
+#[allow(clippy::result_large_err)]
+pub fn assert_scope_admin_page(user: &AuthnUser, message: String) -> Result<(), Response> {
+    assert_scope(user, SCOPE_ADMIN_PAGE, message)
+}
+
+#[allow(clippy::result_large_err)]
+pub fn assert_scope_landing_page(user: &AuthnUser, message: String) -> Result<(), Response> {
+    assert_scope(user, SCOPE_LANDING_PAGE, message)
+}
+
+#[allow(clippy::result_large_err)]
+pub fn assert_scope_mobile(user: &AuthnUser, message: String) -> Result<(), Response> {
+    assert_scope(user, SCOPE_MOBILE, message)
+}
+
 pub fn require_scope(
     state: Arc<AppState>,
     required_scope: &'static str,
@@ -165,7 +184,7 @@ pub fn require_scope(
         let state = state.clone();
         Box::pin(async move {
             let locale = current_locale();
-            let (mut parts, body) = req.into_parts();
+            let (parts, body) = req.into_parts();
 
             let auth_header = parts
                 .headers

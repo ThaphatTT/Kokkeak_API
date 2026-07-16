@@ -7,13 +7,13 @@ use axum::{
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kokkak_common::i18n::{current_locale, tr, tr_with_repo};
-use kokkak_common::response::{created, ok, ApiResponse};
+use kokkak_common::response::{ok, ApiResponse};
 use kokkak_domain::traits::category_job_service_sub::SubImageForCreate;
 use kokkak_domain::{LocalizedError, RepoError, StorageKey};
 use kokkak_infra::image_processor::UserImageKind;
 use serde::{Deserialize, Serialize};
 
-use crate::middleware::auth::{assert_scope, AuthnUser};
+use crate::middleware::auth::{assert_scope_admin_page, AuthnUser};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
@@ -223,7 +223,7 @@ pub async fn create_category_job_service_sub_admin(
     Json(req): Json<CreateCategoryJobServiceSubRequest>,
 ) -> Result<Response, Response> {
     let locale = current_locale();
-    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+    assert_scope_admin_page(&user, tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(
@@ -414,50 +414,6 @@ pub struct UpdateCategoryJobServiceSubImageRequest {
     pub img_status: Option<i32>,
 }
 
-impl UpdateCategoryJobServiceSubRequest {
-    pub fn validate(&self) -> Result<(), String> {
-        let has_any_name = self
-            .category_job_service_sub_name_la
-            .as_ref()
-            .or(self.category_job_service_sub_name_en.as_ref())
-            .or(self.category_job_service_sub_name_th.as_ref())
-            .or(self.category_job_service_sub_name_zh.as_ref());
-        let has_any_data = has_any_name.is_some()
-            || self.category_job_service_main_guid.is_some()
-            || self.category_job_service_sub_start_price.is_some()
-            || self.category_job_service_sub_description_la.is_some()
-            || self.category_job_service_sub_description_en.is_some()
-            || self.category_job_service_sub_description_th.is_some()
-            || self.category_job_service_sub_description_zh.is_some()
-            || self.category_job_service_sub_status.is_some()
-            || !self.warranties.is_empty()
-            || !self.fees.is_empty()
-            || !self.images.is_empty();
-        if !has_any_data {
-            return Err("no update data was provided".to_string());
-        }
-        if let Some(ref sp) = self.category_job_service_sub_start_price {
-            if sp.trim().parse::<rust_decimal::Decimal>().is_err() {
-                return Err(
-                    "category_job_service_sub_start_price must be a decimal number".to_string(),
-                );
-            }
-        }
-        if let Some(s) = self.category_job_service_sub_status {
-            if !matches!(s, 0 | 1) {
-                return Err("category_job_service_sub_status must be 0 or 1".to_string());
-            }
-        }
-        for (i, img) in self.images.iter().enumerate() {
-            let has_b64 = img.img_b64.as_ref().map_or(false, |s| !s.trim().is_empty());
-            if !has_b64 {
-                return Err(format!("images[{i}].img_b64 is required"));
-            }
-        }
-        Ok(())
-    }
-}
-
 #[utoipa::path(
     put,
     path = "/api/v1/category-job-service-subs/{sub_guid}",
@@ -484,7 +440,7 @@ pub async fn update_category_job_service_sub_admin(
     Json(req): Json<UpdateCategoryJobServiceSubRequest>,
 ) -> Result<Response, Response> {
     let locale = current_locale();
-    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+    assert_scope_admin_page(&user, tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(
@@ -497,9 +453,6 @@ pub async fn update_category_job_service_sub_admin(
             &state,
             kokkak_domain::Permission::ServiceUpdate.code(),
         ));
-    }
-    if let Err(msg) = req.validate() {
-        return Err(validation_envelope(&state, &msg));
     }
 
     let start_price: Option<rust_decimal::Decimal> = match req.category_job_service_sub_start_price
@@ -666,7 +619,7 @@ pub async fn delete_category_job_service_sub_admin(
     Path(sub_guid): Path<String>,
 ) -> Result<Response, Response> {
     let locale = current_locale();
-    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+    assert_scope_admin_page(&user, tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(
@@ -845,7 +798,7 @@ pub async fn create_category_job_service_sub_sp_admin(
     Json(req): Json<CreateCategoryJobServiceSubSpRequest>,
 ) -> Result<Response, Response> {
     let locale = current_locale();
-    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+    assert_scope_admin_page(&user, tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(

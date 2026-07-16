@@ -1,5 +1,3 @@
-
-
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -7,7 +5,6 @@ use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CacheGroup {
-
     A,
 
     B,
@@ -18,7 +15,6 @@ pub enum CacheGroup {
 }
 
 impl CacheGroup {
-
     pub fn default_ttl(&self) -> Option<Duration> {
         match self {
             Self::A => Some(Duration::from_secs(3600)),
@@ -46,9 +42,8 @@ impl CacheGroup {
 pub struct CacheKey(String);
 
 impl CacheKey {
-
     pub fn new(version: &str, domain: &str, entity: &str, id: &str) -> Self {
-        Self(format!("kokkak:{version}:{domain}:{entity}:{id}"))
+        Self(format!("kokkeak:{version}:{domain}:{entity}:{id}"))
     }
 
     pub fn with_variant(mut self, variant: &str) -> Self {
@@ -74,7 +69,6 @@ impl std::fmt::Display for CacheKey {
 
 #[derive(Debug, Clone, Error)]
 pub enum CacheError {
-
     #[error("cache backend error: {0}")]
     Backend(String),
 
@@ -87,7 +81,6 @@ pub enum CacheError {
 
 #[async_trait]
 pub trait Cache: Send + Sync {
-
     async fn get(&self, key: &CacheKey) -> Result<Option<Vec<u8>>, CacheError>;
 
     async fn set(&self, key: &CacheKey, value: &[u8], ttl: Duration) -> Result<(), CacheError>;
@@ -104,7 +97,6 @@ pub type InvalidationStream =
 
 #[async_trait]
 pub trait CacheExt: Cache {
-
     async fn get_or_load<F, Fut>(
         &self,
         key: &CacheKey,
@@ -120,7 +112,6 @@ pub trait CacheExt: Cache {
         }
         let (value, is_negative) = loader().await;
         let effective_ttl = if is_negative {
-
             std::cmp::max(ttl / 4, Duration::from_secs(5))
         } else {
             ttl
@@ -156,13 +147,13 @@ mod tests {
     #[test]
     fn cache_key_follows_convention() {
         let k = CacheKey::new("v1", "user", "profile", "abc-123");
-        assert_eq!(k.as_str(), "kokkak:v1:user:profile:abc-123");
+        assert_eq!(k.as_str(), "kokkeak:v1:user:profile:abc-123");
     }
 
     #[test]
     fn cache_key_with_variant_appends() {
         let k = CacheKey::new("v1", "catalog", "service_sub", "x").with_variant("lang=lo");
-        assert_eq!(k.as_str(), "kokkak:v1:catalog:service_sub:x:lang=lo");
+        assert_eq!(k.as_str(), "kokkeak:v1:catalog:service_sub:x:lang=lo");
     }
 
     #[test]
@@ -172,7 +163,7 @@ mod tests {
             .with_variant("scope=mobile");
         assert_eq!(
             k.as_str(),
-            "kokkak:v1:user:profile:abc:lang=lo:scope=mobile"
+            "kokkeak:v1:user:profile:abc:lang=lo:scope=mobile"
         );
     }
 

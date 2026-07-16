@@ -1,5 +1,3 @@
-
-
 use std::time::Duration;
 
 use deadpool_redis::{Config, Runtime};
@@ -17,7 +15,7 @@ fn build_limiter(burst: u64) -> RedisRateLimit {
     let pool = cfg
         .create_pool(Some(Runtime::Tokio1))
         .expect("pool must build against live redis");
-    RedisRateLimit::new(pool, burst, 1)
+    RedisRateLimit::new(pool, burst, 1, "test")
 }
 
 fn test_key(suffix: &str) -> String {
@@ -25,7 +23,7 @@ fn test_key(suffix: &str) -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    format!("kokkak:rl:test:{suffix}:{nanos}")
+    format!("test:kokkeak:rl:v1:ip:{suffix}:{nanos}")
 }
 
 #[tokio::test]
@@ -60,7 +58,6 @@ async fn allows_requests_up_to_burst_then_denies() {
 
 #[tokio::test]
 async fn counter_is_shared_across_instances() {
-
     let Some(_) = live_url() else {
         eprintln!("skipping: set KOKKAK_REDIS__TEST_URL to run");
         return;
@@ -87,7 +84,6 @@ async fn counter_is_shared_across_instances() {
 
 #[tokio::test]
 async fn first_hit_sets_ttl_anchored_to_window_start() {
-
     let Some(_) = live_url() else {
         eprintln!("skipping: set KOKKAK_REDIS__TEST_URL to run");
         return;

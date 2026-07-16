@@ -1,5 +1,3 @@
-
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,6 +15,8 @@ pub const IDEMPOTENCY_KEY_HEADER: HeaderName = HeaderName::from_static("idempote
 
 pub const IDEMPOTENCY_REPLAYED_HEADER: HeaderName = HeaderName::from_static("idempotency-replayed");
 
+pub const X_RETRY_COUNT_HEADER: HeaderName = HeaderName::from_static("x-retry-count");
+
 const MAX_CACHEABLE_BODY: usize = 1024 * 1024;
 
 pub async fn handle(
@@ -25,7 +25,6 @@ pub async fn handle(
     store: Arc<dyn IdempotencyStore>,
     ttl: Duration,
 ) -> Response {
-
     if req.method() != Method::POST {
         return next.run(req).await;
     }
@@ -50,14 +49,12 @@ pub async fn handle(
     let (parts, body) = response.into_parts();
 
     if !parts.status.is_success() {
-
         return Response::from_parts(parts, body);
     }
 
     let body_bytes = match to_bytes(body, MAX_CACHEABLE_BODY).await {
         Ok(b) => b,
         Err(err) => {
-
             tracing::warn!(
                 key = %key,
                 error = %err,
@@ -99,7 +96,6 @@ fn replay(cached: CachedResponse) -> Response {
 }
 
 pub async fn require_idempotency_key(req: Request, next: Next) -> Response {
-
     if req.method() != Method::POST {
         return next.run(req).await;
     }

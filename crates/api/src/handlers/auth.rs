@@ -16,7 +16,7 @@ use validator::Validate;
 
 use crate::error::{ApiError, IntoLocalizedResponse};
 use crate::extractors::{ClientIp, ValidatedJson};
-use crate::middleware::auth::AuthnUser;
+use crate::middleware::auth::{AuthnUser, SCOPE_MOBILE};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize, Validate, utoipa::ToSchema)]
@@ -177,7 +177,7 @@ pub async fn login(
     let input = LoginInput {
         username: req.username,
         password: req.password,
-        scope: req.scope.unwrap_or_else(|| "mobile".into()),
+        scope: req.scope.unwrap_or_else(|| SCOPE_MOBILE.into()),
         ip,
     };
     let outcome = match state.auth.login(input).await {

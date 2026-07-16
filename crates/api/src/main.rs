@@ -263,7 +263,12 @@ async fn run(settings: Settings) {
                     eprintln!("[kokkak-api] rate limit redis pool build failed: {err}");
                     std::process::exit(1);
                 });
-                let limiter = RedisRateLimit::new(pool, u64::from(burst), REDIS_WINDOW_SECS);
+                let limiter = RedisRateLimit::new(
+                    pool,
+                    u64::from(burst),
+                    REDIS_WINDOW_SECS,
+                    &settings.redis.namespace,
+                );
                 tracing::info!(
                     burst,
                     window_secs = REDIS_WINDOW_SECS,

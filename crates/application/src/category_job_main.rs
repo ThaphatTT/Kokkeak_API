@@ -153,6 +153,8 @@ mod tests {
                 page: 1,
                 page_size: total as u32,
                 total_page: 1,
+                active: 0,
+                close: 0,
             })
         }
         async fn create(
@@ -331,6 +333,8 @@ mod tests {
                 page: 1,
                 page_size: total as u32,
                 total_page: 1,
+                active: 0,
+                close: 0,
             })
         }
         async fn create(

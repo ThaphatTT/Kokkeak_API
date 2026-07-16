@@ -73,6 +73,8 @@ impl CategoryJobMainRepository for MssqlCategoryJobMainRepository {
                 page: input.page,
                 page_size: input.page_size,
                 total_page: 0,
+                active: 0,
+                close: 0,
             });
         }
 
@@ -91,6 +93,8 @@ impl CategoryJobMainRepository for MssqlCategoryJobMainRepository {
         } else {
             (total_count as u64).div_ceil(page_size as u64) as u32
         };
+        let active: i64 = first.get::<i32, _>("Active").unwrap_or(0) as i64;
+        let close: i64 = first.get::<i32, _>("Close").unwrap_or(0) as i64;
 
         let items: Vec<CategoryJobMainRow> =
             rows.iter().map(row_to_category_job_main_row).collect();
@@ -101,6 +105,8 @@ impl CategoryJobMainRepository for MssqlCategoryJobMainRepository {
             page,
             page_size,
             total_page,
+            active,
+            close,
         })
     }
 

@@ -9,13 +9,13 @@ use axum::{
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kokkak_common::i18n::{current_locale, tr, tr_with_repo};
-use kokkak_common::response::{created, ok, ApiResponse};
+use kokkak_common::response::{ok, ApiResponse};
 use kokkak_domain::{LocalizedError, RepoError};
 use kokkak_infra::image_processor::UserImageKind;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::middleware::auth::{assert_scope, AuthnUser};
+use crate::middleware::auth::{assert_scope_admin_page, AuthnUser};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
@@ -309,7 +309,7 @@ pub async fn create_category_job_service_main_admin(
     Json(req): Json<CreateCategoryJobServiceMainRequest>,
 ) -> Result<Response, Response> {
     let locale = current_locale();
-    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+    assert_scope_admin_page(&user, tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(
@@ -421,15 +421,6 @@ impl UpdateCategoryJobServiceMainRequest {
         if self.category_job_main_guid.trim().is_empty() {
             return Err("category_job_main_guid is required".to_string());
         }
-        let has_any_name = self
-            .category_job_service_name_la
-            .as_ref()
-            .or(self.category_job_service_name_en.as_ref())
-            .or(self.category_job_service_name_th.as_ref())
-            .or(self.category_job_service_name_zh.as_ref());
-        if has_any_name.is_none() {
-            return Err("at least one name (la/en/th/zh) is required".to_string());
-        }
         if !matches!(self.category_job_service_status, 0 | 1) {
             return Err("category_job_service_status must be 0 or 1".to_string());
         }
@@ -463,7 +454,7 @@ pub async fn update_category_job_service_main_admin(
     Json(req): Json<UpdateCategoryJobServiceMainRequest>,
 ) -> Result<Response, Response> {
     let locale = current_locale();
-    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+    assert_scope_admin_page(&user, tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(
@@ -560,7 +551,7 @@ pub async fn delete_category_job_service_main_admin(
     Path(service_guid): Path<String>,
 ) -> Result<Response, Response> {
     let locale = current_locale();
-    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+    assert_scope_admin_page(&user, tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(

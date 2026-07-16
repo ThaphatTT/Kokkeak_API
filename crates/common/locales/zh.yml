@@ -70,6 +70,17 @@ err_permission:
   too_many_override_items: "items 必须包含 1-500 条"
   invalid_override_effect: "effect 必须为 'allow' 或 'deny'"
   invalid_override_status: "status 必须为 0 或 1"
+  updated: "权限更新成功"
+  created: "权限创建成功"
+  no_change: "无需更改"
+  role_not_found: "未找到角色"
+
+err_permission_override:
+  updated: "权限覆盖更新成功"
+  created: "权限覆盖创建成功"
+  invalid_effect: "effect 值无效"
+  invalid_status: "status 值无效"
+  user_not_found: "未找到用户"
 
 err_admin_user:
   actor_required: "必须指定 actor"
@@ -98,6 +109,12 @@ err_admin_user:
   admin_role_not_found: "未找到 ADMIN 角色或未启用"
   employee_role_not_found: "未找到 EMPLOYEE 角色或未启用"
   user_not_found: "用户不存在或已删除"
+  user_guid_required: "必须指定 user_guid"
+  already_deleted: "用户已被删除"
+  deleted: "用户删除成功"
+  suspended: "用户停用成功"
+  already_suspended: "用户已被停用"
+  user_deleted_cannot_suspend: "无法停用已删除的用户"
   image_invalid: '字段 "{0}" 的图片上传失败'
 
 err_category_job_main:

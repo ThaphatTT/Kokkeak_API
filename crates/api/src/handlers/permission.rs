@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::error::{ApiError, IntoLocalizedResponse};
-use crate::middleware::auth::{assert_scope, AuthnUser};
+use crate::middleware::auth::{assert_scope_admin_page, AuthnUser};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -31,7 +31,7 @@ pub async fn list_users_permission(
     Query(q): Query<ListUsersQuery>,
 ) -> Result<Response, Response> {
     let locale = current_locale();
-    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+    assert_scope_admin_page(&user, tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(Permission::PagePermissionsView, &state.permission_checker)
@@ -72,7 +72,7 @@ pub async fn list_user_permissions_permission(
     Path(guid): Path<Uuid>,
 ) -> Result<Response, Response> {
     let locale = current_locale();
-    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+    assert_scope_admin_page(&user, tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(Permission::PagePermissionsView, &state.permission_checker)
@@ -126,6 +126,19 @@ pub struct UpdatePermissionOverridesRequest {
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct PermissionOverrideUpdateResultItem {
+    pub success: bool,
+    pub code: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_permission_override_guid: Option<String>,
+    pub user_permission_override_user_guid: String,
+    pub user_permission_override_permission_guid: String,
+    pub user_permission_override_effect: String,
+    pub user_permission_override_status: i32,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct UpdatePermissionOverridesResponse {
     pub total: usize,
 
@@ -135,7 +148,7 @@ pub struct UpdatePermissionOverridesResponse {
 
     pub failed: usize,
 
-    pub results: Vec<kokkak_domain::PermissionOverrideUpdateResult>,
+    pub results: Vec<PermissionOverrideUpdateResultItem>,
 }
 
 #[utoipa::path(
@@ -158,7 +171,7 @@ pub async fn update_permission_overrides(
     Json(req): Json<UpdatePermissionOverridesRequest>,
 ) -> Result<Response, Response> {
     let locale = current_locale();
-    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+    assert_scope_admin_page(&user, tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(Permission::PermissionsUpdate, &state.permission_checker)
@@ -215,14 +228,49 @@ pub async fn update_permission_overrides(
     let mut updated = 0usize;
     let mut created = 0usize;
     let mut failed = 0usize;
-    for r in &results {
-        match r.code.as_str() {
-            kokkak_domain::PermissionOverrideUpdateResult::CODE_UPDATED => updated += 1,
-            kokkak_domain::PermissionOverrideUpdateResult::CODE_CREATED => created += 1,
-            _ => failed += 1,
+    let locale = current_locale();
+    let result_items: Vec<PermissionOverrideUpdateResultItem> = results
+        .into_iter()
+        .map(|r| {
+            match r.code.as_str() {
+                kokkak_domain::PermissionOverrideUpdateResult::CODE_UPDATED => updated += 1,
+                kokkak_domain::PermissionOverrideUpdateResult::CODE_CREATED => created += 1,
+                _ => failed += 1,
+            }
+            let i18n_key = sp_override_status_key(&r.code);
+            PermissionOverrideUpdateResultItem {
+                success: r.success,
+                code: r.code,
+                message: tr(i18n_key, &locale, &[]),
+                user_permission_override_guid: r.user_permission_override_guid,
+                user_permission_override_user_guid: r.user_permission_override_user_guid,
+                user_permission_override_permission_guid: r
+                    .user_permission_override_permission_guid,
+                user_permission_override_effect: r.user_permission_override_effect,
+                user_permission_override_status: r.user_permission_override_status,
+            }
+        })
+        .collect();
+    let total = result_items.len();
+
+    let affected_user_guids: std::collections::HashSet<&str> = result_items
+        .iter()
+        .filter(|r| r.success)
+        .map(|r| r.user_permission_override_user_guid.as_str())
+        .collect();
+    for guid_str in &affected_user_guids {
+        if let Ok(guid) = Uuid::parse_str(guid_str) {
+            if let Err(e) = state.permission_checker.invalidate_user(guid).await {
+                tracing::warn!(
+                    user_guid = %guid_str,
+                    error = %e,
+                    "permission cache invalidation failed (non-fatal)"
+                );
+            } else {
+                metrics::counter!("kokkeak_permission_cache_invalidations_total").increment(1);
+            }
         }
     }
-    let total = results.len();
 
     Ok((
         StatusCode::OK,
@@ -233,13 +281,24 @@ pub async fn update_permission_overrides(
                 updated,
                 created,
                 failed,
-                results,
+                results: result_items,
             }),
             error: None,
             meta: None,
         }),
     )
         .into_response())
+}
+
+fn sp_override_status_key(sp_code: &str) -> &'static str {
+    match sp_code {
+        "UPDATED" => "err_permission_override.updated",
+        "CREATED" => "err_permission_override.created",
+        "INVALID_EFFECT" => "err_permission_override.invalid_effect",
+        "INVALID_STATUS" => "err_permission_override.invalid_status",
+        "USER_NOT_FOUND" => "err_permission_override.user_not_found",
+        _ => "err.internal",
+    }
 }
 
 fn validation_envelope(message: &str, index: usize, field: &str) -> Response {

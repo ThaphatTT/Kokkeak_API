@@ -11,6 +11,7 @@ pub mod category_job_service_sub;
 pub mod category_job_service_sub_fee;
 pub mod category_job_service_sub_warranty;
 pub mod chat;
+pub mod circuit_breaker;
 pub mod error;
 pub mod health;
 pub mod idempotency;
@@ -26,11 +27,11 @@ pub mod traits;
 pub mod user;
 
 pub use admin_user::{
-    AdminInsertUserError, AdminInsertUserRequest, AdminInsertUserResult, AdminUpdateUserError,
-    AdminUpdateUserRequest, AdminUpdateUserResult, AdminUserDetail, AdminUserDetailAttachment,
-    AdminUserDetailBankAccount, AdminUserDetailCompany, AdminUserDetailCountry,
-    AdminUserDetailPosition, AdminUserDetailProfileImage, AdminUserDetailRoles,
-    AdminUserDetailSalary, AdminUserDetailScope, AdminUserDetailUsername,
+    AdminDeleteUserError, AdminDeleteUserResult, AdminInsertUserError, AdminInsertUserRequest,
+    AdminInsertUserResult, AdminUpdateUserError, AdminUpdateUserRequest, AdminUpdateUserResult,
+    AdminUserDetail, AdminUserDetailAttachment, AdminUserDetailBankAccount, AdminUserDetailCompany,
+    AdminUserDetailCountry, AdminUserDetailPosition, AdminUserDetailProfileImage,
+    AdminUserDetailRoles, AdminUserDetailSalary, AdminUserDetailScope, AdminUserDetailUsername,
 };
 pub use auth::{
     AuthError, AuthSession, Claims, CreateSession, NoopSessionStore, PublicUser, SessionInfo,
@@ -84,6 +85,7 @@ pub use category_job_service_sub_warranty::{
     CategoryJobServiceSubWarrantyUpdateResult,
 };
 pub use chat::{ChatError, ChatMessage, ChatRoom, MessageId, Participant, RoomId, RoomSummary};
+pub use circuit_breaker::{CircuitBreakerConfig, CircuitSnapshot, CircuitState};
 pub use error::LocalizedError;
 pub use health::{CheckOutcome, HealthCheck, HealthError, HealthRegistry, ReadyReport};
 pub use idempotency::{CachedResponse, IdempotencyStore};

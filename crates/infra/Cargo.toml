@@ -17,6 +17,7 @@ kokkak-application = { path = "../application" }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
+async-stream = { workspace = true }
 
 
 thiserror = { workspace = true }

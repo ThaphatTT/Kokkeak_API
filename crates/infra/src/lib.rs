@@ -3,6 +3,7 @@
 pub mod audit;
 pub mod auth;
 pub mod cache;
+pub mod circuit_breaker;
 pub mod db;
 pub mod health;
 pub mod idempotency;

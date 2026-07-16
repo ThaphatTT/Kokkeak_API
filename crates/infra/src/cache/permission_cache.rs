@@ -1,5 +1,3 @@
-
-
 use deadpool_redis::Pool;
 use thiserror::Error;
 use uuid::Uuid;
@@ -8,7 +6,6 @@ use kokkak_domain::Permission;
 
 #[derive(Debug, Error)]
 pub enum PermissionCacheError {
-
     #[error("redis pool: {0}")]
     Pool(#[from] deadpool_redis::PoolError),
 
@@ -21,17 +18,17 @@ pub enum PermissionCacheError {
 
 #[derive(Clone)]
 pub struct RedisPermissionCache {
-
     pool: Option<Pool>,
     ttl_secs: u64,
+    namespace: String,
 }
 
 impl RedisPermissionCache {
-
-    pub fn new(pool: Pool, ttl_secs: u64) -> Self {
+    pub fn new(pool: Pool, ttl_secs: u64, namespace: String) -> Self {
         Self {
             pool: Some(pool),
             ttl_secs,
+            namespace,
         }
     }
 
@@ -39,15 +36,16 @@ impl RedisPermissionCache {
         Self {
             pool: None,
             ttl_secs,
+            namespace: "kokkeak-production".into(),
         }
     }
 
-    fn key(user_guid: Uuid, code: Permission) -> String {
-        format!("kokkak:v1:perm:{user_guid}:{}", code.code())
+    fn key(&self, user_guid: Uuid, code: Permission) -> String {
+        format!("{}:perm:{}:{}", self.namespace, user_guid, code.code())
     }
 
-    fn pattern_for_user(user_guid: Uuid) -> String {
-        format!("kokkak:v1:perm:{user_guid}:*")
+    fn pattern_for_user(&self, user_guid: Uuid) -> String {
+        format!("{}:perm:{}:*", self.namespace, user_guid)
     }
 
     pub async fn get(
@@ -58,7 +56,7 @@ impl RedisPermissionCache {
         let pool = self.pool.as_ref().ok_or(PermissionCacheError::Disabled)?;
         let mut conn = pool.get().await?;
         let v: Option<String> = redis::cmd("GET")
-            .arg(Self::key(user_guid, code))
+            .arg(self.key(user_guid, code))
             .query_async(&mut *conn)
             .await?;
         Ok(v.map(|s| s == "1"))
@@ -73,7 +71,7 @@ impl RedisPermissionCache {
         let pool = self.pool.as_ref().ok_or(PermissionCacheError::Disabled)?;
         let mut conn = pool.get().await?;
         let _: () = redis::cmd("SET")
-            .arg(Self::key(user_guid, code))
+            .arg(self.key(user_guid, code))
             .arg(if value { "1" } else { "0" })
             .arg("EX")
             .arg(self.ttl_secs)
@@ -85,7 +83,7 @@ impl RedisPermissionCache {
     pub async fn invalidate_user(&self, user_guid: Uuid) -> Result<u64, PermissionCacheError> {
         let pool = self.pool.as_ref().ok_or(PermissionCacheError::Disabled)?;
         let mut conn = pool.get().await?;
-        let pattern = Self::pattern_for_user(user_guid);
+        let pattern = self.pattern_for_user(user_guid);
         let mut cursor: u64 = 0;
         let mut deleted: u64 = 0;
         loop {

@@ -1,19 +1,16 @@
-
-
 use async_trait::async_trait;
 use thiserror::Error;
 use uuid::Uuid;
 
 use crate::admin_user::{
-    AdminInsertUserError, AdminInsertUserRequest, AdminInsertUserResult, AdminUpdateUserError,
-    AdminUpdateUserRequest, AdminUpdateUserResult, AdminUserDetail, AdminUserListPagingInput,
-    AdminUserListPagingPage,
+    AdminDeleteUserError, AdminDeleteUserResult, AdminInsertUserError, AdminInsertUserRequest,
+    AdminInsertUserResult, AdminUpdateUserError, AdminUpdateUserRequest, AdminUpdateUserResult,
+    AdminUserDetail, AdminUserListPagingInput, AdminUserListPagingPage,
 };
 use crate::user::{User, UserListRow};
 
 #[derive(Debug, Error)]
 pub enum RepoError {
-
     #[error("not found: {0}")]
     NotFound(String),
 
@@ -26,7 +23,6 @@ pub enum RepoError {
 
 #[async_trait]
 pub trait UserRepository: Send + Sync {
-
     async fn find_by_id(&self, id: Uuid) -> Result<Option<User>, RepoError>;
 
     async fn find_by_username(&self, username: &str) -> Result<Option<User>, RepoError>;
@@ -78,6 +74,30 @@ pub trait UserRepository: Send + Sync {
         Err(AdminUpdateUserError::new(
             "internal",
             "admin_update_full: not implemented by this repository adapter",
+        ))
+    }
+
+    async fn admin_delete_user(
+        &self,
+        actor_user_username_guid: &str,
+        user_guid: &str,
+    ) -> Result<AdminDeleteUserResult, AdminDeleteUserError> {
+        let _ = (actor_user_username_guid, user_guid);
+        Err(AdminDeleteUserError::new(
+            "internal",
+            "admin_delete_user: not implemented by this repository adapter",
+        ))
+    }
+
+    async fn admin_suspend_user(
+        &self,
+        actor_user_username_guid: &str,
+        user_guid: &str,
+    ) -> Result<AdminDeleteUserResult, AdminDeleteUserError> {
+        let _ = (actor_user_username_guid, user_guid);
+        Err(AdminDeleteUserError::new(
+            "internal",
+            "admin_suspend_user: not implemented by this repository adapter",
         ))
     }
 }

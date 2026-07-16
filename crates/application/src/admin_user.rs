@@ -1,15 +1,13 @@
-
-
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 pub use kokkak_domain::admin_user::{
-    AdminInsertUserError, AdminInsertUserRequest, AdminInsertUserResult, AdminUpdateUserError,
-    AdminUpdateUserRequest, AdminUpdateUserResult, AdminUserDetail, AdminUserDetailAttachment,
-    AdminUserDetailBankAccount, AdminUserDetailCompany, AdminUserDetailCountry,
-    AdminUserDetailPosition, AdminUserDetailProfileImage, AdminUserDetailRoles,
-    AdminUserDetailSalary, AdminUserDetailScope, AdminUserDetailUsername, AdminUserListPagingInput,
-    AdminUserListPagingPage, DaySchedule, WeeklySchedule,
+    AdminDeleteUserError, AdminDeleteUserResult, AdminInsertUserError, AdminInsertUserRequest,
+    AdminInsertUserResult, AdminUpdateUserError, AdminUpdateUserRequest, AdminUpdateUserResult,
+    AdminUserDetail, AdminUserDetailAttachment, AdminUserDetailBankAccount, AdminUserDetailCompany,
+    AdminUserDetailCountry, AdminUserDetailPosition, AdminUserDetailProfileImage,
+    AdminUserDetailRoles, AdminUserDetailSalary, AdminUserDetailScope, AdminUserDetailUsername,
+    AdminUserListPagingInput, AdminUserListPagingPage, DaySchedule, WeeklySchedule,
 };
 use kokkak_domain::traits::user::RepoError;
 use kokkak_domain::UserRepository;
@@ -21,7 +19,6 @@ use crate::auth::PasswordHasherPort;
 #[derive(Debug, Clone)]
 #[allow(missing_docs)]
 pub struct AdminInsertUserFullInput {
-
     pub user_guid: Option<String>,
     pub first_name: String,
     pub last_name: String,
@@ -85,7 +82,6 @@ pub struct AdminInsertUserFullInput {
 #[derive(Debug, Clone)]
 #[allow(missing_docs)]
 pub struct AdminUpdateUserFullInput {
-
     pub user_guid: String,
     pub first_name: String,
     pub last_name: String,
@@ -150,7 +146,6 @@ pub struct AdminUserService {
 }
 
 impl AdminUserService {
-
     pub fn new(users: Arc<dyn UserRepository>, hasher: Arc<dyn PasswordHasherPort>) -> Self {
         Self { users, hasher }
     }
@@ -160,7 +155,6 @@ impl AdminUserService {
         actor_user_guid: Uuid,
         input: AdminInsertUserFullInput,
     ) -> Result<AdminInsertUserResult, AdminInsertUserError> {
-
         let actor_user_username_guid = self
             .users
             .find_username_guid_by_user_guid(actor_user_guid)
@@ -241,7 +235,6 @@ impl AdminUserService {
         actor: Uuid,
         input: AdminUserListPagingInput,
     ) -> Result<AdminUserListPagingPage, RepoError> {
-
         let trim_to_none = |s: Option<String>| -> Option<String> {
             s.map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
         };
@@ -280,7 +273,6 @@ impl AdminUserService {
         actor_user_guid: Uuid,
         input: AdminUpdateUserFullInput,
     ) -> Result<AdminUpdateUserResult, AdminUpdateUserError> {
-
         let actor_user_username_guid = self
             .users
             .find_username_guid_by_user_guid(actor_user_guid)
@@ -350,6 +342,50 @@ impl AdminUserService {
 
         self.users.admin_update_full(&req).await
     }
+
+    pub async fn admin_delete_user(
+        &self,
+        actor_user_guid: Uuid,
+        user_guid: &str,
+    ) -> Result<AdminDeleteUserResult, AdminDeleteUserError> {
+        let actor_user_username_guid = self
+            .users
+            .find_username_guid_by_user_guid(actor_user_guid)
+            .await
+            .map_err(|e| AdminDeleteUserError::new("internal", format!("actor lookup: {e}")))?
+            .ok_or_else(|| {
+                AdminDeleteUserError::new(
+                    "actor_not_found",
+                    "actor user_username_guid not found or inactive",
+                )
+            })?;
+
+        self.users
+            .admin_delete_user(&actor_user_username_guid, user_guid)
+            .await
+    }
+
+    pub async fn admin_suspend_user(
+        &self,
+        actor_user_guid: Uuid,
+        user_guid: &str,
+    ) -> Result<AdminDeleteUserResult, AdminDeleteUserError> {
+        let actor_user_username_guid = self
+            .users
+            .find_username_guid_by_user_guid(actor_user_guid)
+            .await
+            .map_err(|e| AdminDeleteUserError::new("internal", format!("actor lookup: {e}")))?
+            .ok_or_else(|| {
+                AdminDeleteUserError::new(
+                    "actor_not_found",
+                    "actor user_username_guid not found or inactive",
+                )
+            })?;
+
+        self.users
+            .admin_suspend_user(&actor_user_username_guid, user_guid)
+            .await
+    }
 }
 
 fn schedule_missing_times(s: &WeeklySchedule) -> Result<(), &'static str> {
@@ -400,7 +436,6 @@ mod tests {
     }
 
     fn on(t: &str) -> DaySchedule {
-
         let parsed = t.parse::<chrono::NaiveTime>().expect("test time parse");
         DaySchedule {
             is_working: true,
@@ -539,7 +574,6 @@ mod tests {
     }
 
     fn svc_with(repo: Arc<dyn UserRepository>) -> AdminUserService {
-
         use crate::auth::PasswordHasherPort;
         struct NoopHasher;
         impl PasswordHasherPort for NoopHasher {
@@ -552,7 +586,6 @@ mod tests {
                 Err(kokkak_domain::AuthError::Backend("noop".into()))
             }
             fn dummy_hash(&self) -> &str {
-
                 "$argon2id$v=19$m=19456,t=2,p=1$YWFhYWFhYWFhYWFh$YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE"
             }
         }
@@ -849,7 +882,6 @@ mod tests {
 
     #[tokio::test]
     async fn get_user_detail_full_forwards_actor_unchanged() {
-
         let repo = Arc::new(DetailMock::default());
         let svc = svc_with(repo.clone());
         let actor = Uuid::new_v4();
@@ -896,7 +928,6 @@ mod tests {
             &self,
             _id: Uuid,
         ) -> Result<Option<String>, RepoError> {
-
             Ok(Some(Uuid::nil().to_string()))
         }
         async fn admin_insert_full(
@@ -1026,7 +1057,6 @@ mod tests {
 
     #[tokio::test]
     async fn admin_update_full_returns_actor_not_found_when_admin_lookup_fails() {
-
         struct MissingActorRepo;
         #[async_trait::async_trait]
         impl UserRepository for MissingActorRepo {
@@ -1089,11 +1119,7 @@ mod tests {
                 Err(RepoError::Backend("unused".into()))
             }
         }
-        let svc = AdminUserService::new(
-            Arc::new(MissingActorRepo),
-
-            Arc::new(NoopHasher),
-        );
+        let svc = AdminUserService::new(Arc::new(MissingActorRepo), Arc::new(NoopHasher));
 
         let err = svc
             .admin_update_full(Uuid::new_v4(), update_input(&Uuid::new_v4().to_string()))
@@ -1104,7 +1130,6 @@ mod tests {
 
     #[tokio::test]
     async fn admin_update_full_short_circuits_on_invalid_schedule() {
-
         let repo = Arc::new(UpdateMock::default());
         let svc = svc_with(repo.clone());
 

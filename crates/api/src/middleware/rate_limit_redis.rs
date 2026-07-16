@@ -1,5 +1,3 @@
-
-
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -24,11 +22,8 @@ local ttl = redis.call('TTL', KEYS[1])
 return {current, ttl}
 "#;
 
-const KEY_PREFIX: &str = "kokkak:rl:v1:ip:";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RateLimitDecision {
-
     pub allowed: bool,
 
     pub retry_after_secs: u64,
@@ -42,17 +37,22 @@ pub struct RedisRateLimit {
     burst: u64,
     window_secs: u64,
     script: Arc<Script>,
+    key_prefix: String,
 }
 
 impl RedisRateLimit {
-
-    pub fn new(pool: Pool, burst: u64, window_secs: u64) -> Self {
+    pub fn new(pool: Pool, burst: u64, window_secs: u64, namespace: &str) -> Self {
         Self {
             pool,
             burst,
             window_secs,
             script: Arc::new(Script::new(RATE_LIMIT_SCRIPT)),
+            key_prefix: format!("{}:kokkeak:rl:v1:ip:", namespace),
         }
+    }
+
+    pub fn key_prefix(&self) -> &str {
+        &self.key_prefix
     }
 
     pub async fn check(&self, key: &str) -> Result<RateLimitDecision, RedisRateLimitError> {
@@ -81,7 +81,6 @@ impl RedisRateLimit {
 
 #[derive(Debug, Error)]
 pub enum RedisRateLimitError {
-
     #[error("redis pool: {0}")]
     Pool(#[from] deadpool_redis::PoolError),
 
@@ -95,10 +94,9 @@ pub async fn rate_limit_redis_middleware(
     req: Request,
     next: Next,
 ) -> Response {
-    let key = format!("{KEY_PREFIX}{}", addr.ip());
+    let key = format!("{}{}", limiter.key_prefix(), addr.ip());
     match limiter.check(&key).await {
         Ok(decision) if decision.allowed => {
-
             tracing::trace!(ip = %addr.ip(), current = decision.current, "rate limit ok");
             next.run(req).await
         }
@@ -112,7 +110,6 @@ pub async fn rate_limit_redis_middleware(
             build_429_response(decision.retry_after_secs)
         }
         Err(err) => {
-
             tracing::warn!(
                 ip = %addr.ip(),
                 error = %err,
@@ -141,12 +138,6 @@ fn build_429_response(retry_after_secs: u64) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn key_prefix_is_versioned() {
-        assert!(KEY_PREFIX.starts_with("kokkak:rl:"));
-        assert!(KEY_PREFIX.contains(":v1:"));
-    }
 
     #[test]
     fn decision_allows_at_or_below_burst() {

@@ -496,6 +496,9 @@ pub struct RedisSettings {
 
     #[serde(default = "default_redis_pool_size")]
     pub pool_size: usize,
+
+    #[serde(default = "default_redis_namespace")]
+    pub namespace: String,
 }
 
 impl RedisSettings {
@@ -509,6 +512,7 @@ impl Default for RedisSettings {
         Self {
             url: default_redis_url(),
             pool_size: default_redis_pool_size(),
+            namespace: default_redis_namespace(),
         }
     }
 }
@@ -718,6 +722,10 @@ fn default_redis_url() -> String {
 }
 fn default_redis_pool_size() -> usize {
     16
+}
+
+fn default_redis_namespace() -> String {
+    "kokkeak-production".into()
 }
 
 fn default_permission_cache_ttl_secs() -> u64 {

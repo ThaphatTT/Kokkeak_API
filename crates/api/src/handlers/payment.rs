@@ -14,7 +14,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::middleware::auth::{assert_role, assert_scope, AuthnUser};
+use crate::middleware::auth::{assert_role, assert_scope_admin_page, AuthnUser};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -353,7 +353,7 @@ pub async fn list_payouts_admin(
     Query(q): Query<ListPayoutsQuery>,
 ) -> Result<Response, Response> {
     let locale = current_locale();
-    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+    assert_scope_admin_page(&user, tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(Permission::FinanceExport, &state.permission_checker)
@@ -414,7 +414,7 @@ pub async fn mark_payout_paid_admin(
     Path(id): Path<Uuid>,
 ) -> Result<Response, Response> {
     let locale = current_locale();
-    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+    assert_scope_admin_page(&user, tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(Permission::FinanceEscrowRelease, &state.permission_checker)

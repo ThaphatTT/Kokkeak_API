@@ -18,9 +18,9 @@ use kokkak_common::i18n::{current_locale, tr};
 use kokkak_common::response::{created, ok, paginated, ApiResponse, PageMeta};
 #[allow(unused_imports)]
 use kokkak_domain::{
-    AdminInsertUserError, AdminInsertUserResult, AdminUpdateUserError, AdminUpdateUserResult,
-    AdminUserDetail, Permission, PermissionUpdateRow, PermissionUserGroup, RepoError, Role,
-    UserRoleWithPermissions,
+    AdminDeleteUserError, AdminInsertUserError, AdminInsertUserResult, AdminUpdateUserError,
+    AdminUpdateUserResult, AdminUserDetail, Permission, PermissionUpdateRow, PermissionUserGroup,
+    RepoError, Role, UserRoleWithPermissions,
 };
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -30,7 +30,7 @@ use validator::{Validate, ValidationError};
 use crate::error::{ApiError, IntoLocalizedResponse};
 use crate::extractors::ValidatedJson;
 use crate::handlers::auth::AuthResponse;
-use crate::middleware::auth::{assert_scope, AuthnUser};
+use crate::middleware::auth::{assert_scope_admin_page, AuthnUser};
 use crate::state::AppState;
 use kokkak_infra::image_processor::UserImageKind;
 
@@ -69,7 +69,7 @@ pub async fn create_user_admin(
     ValidatedJson(req): ValidatedJson<CreateUserRequest>,
 ) -> Result<Response, Response> {
     let locale = current_locale();
-    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+    assert_scope_admin_page(&user, tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(Permission::UsersCreate, &state.permission_checker)
@@ -156,7 +156,7 @@ pub async fn list_users_admin(
     Query(q): Query<ListUsersQuery>,
 ) -> Result<Response, Response> {
     let locale = current_locale();
-    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+    assert_scope_admin_page(&user, tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(Permission::PageUsersView, &state.permission_checker)
@@ -231,7 +231,7 @@ pub async fn list_user_permissions_admin(
     Path(guid): Path<Uuid>,
 ) -> Result<Response, Response> {
     let locale = current_locale();
-    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+    assert_scope_admin_page(&user, tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(Permission::PagePermissionsView, &state.permission_checker)
@@ -297,7 +297,7 @@ pub async fn get_user_detail_full_admin(
     Path(guid): Path<Uuid>,
 ) -> Result<Response, Response> {
     let locale = current_locale();
-    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+    assert_scope_admin_page(&user, tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(Permission::PageUsersView, &state.permission_checker)
@@ -399,7 +399,7 @@ pub async fn list_permissions(
     Query(q): Query<PermissionsQuery>,
 ) -> Result<Response, Response> {
     let locale = current_locale();
-    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+    assert_scope_admin_page(&user, tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(Permission::PagePermissionsView, &state.permission_checker)
@@ -567,7 +567,7 @@ pub async fn update_permissions_admin(
     ValidatedJson(req): ValidatedJson<UpdatePermissionsRequest>,
 ) -> Result<Response, Response> {
     let locale = current_locale();
-    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+    assert_scope_admin_page(&user, tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(Permission::PermissionsUpdate, &state.permission_checker)
@@ -619,6 +619,7 @@ pub async fn update_permissions_admin(
     let mut created = 0usize;
     let mut no_change = 0usize;
     let mut failed = 0usize;
+    let locale = current_locale();
     let results: Vec<PermissionUpdateResultItem> = rows
         .into_iter()
         .map(|r| {
@@ -628,7 +629,16 @@ pub async fn update_permissions_admin(
                 PermissionUpdateRow::CODE_NO_CHANGE => no_change += 1,
                 _ => failed += 1,
             }
-            PermissionUpdateResultItem::from(r)
+            let i18n_key = sp_permission_update_status_key(&r.code);
+            PermissionUpdateResultItem {
+                user_role_guid: r.user_role_guid,
+                user_permission_guid: r.user_permission_guid,
+                success: r.success,
+                code: r.code,
+                user_role_permission_guid: r.user_role_permission_guid,
+                user_role_permission_status: r.user_role_permission_status,
+                message: tr(i18n_key, &locale, &[]),
+            }
         })
         .collect();
     let total = results.len();
@@ -1108,7 +1118,7 @@ pub async fn admin_insert_user_full(
     ValidatedJson(req): ValidatedJson<AdminInsertUserRequest>,
 ) -> Result<Response, Response> {
     let locale = current_locale();
-    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+    assert_scope_admin_page(&user, tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(Permission::UsersCreate, &state.permission_checker)
@@ -1300,7 +1310,7 @@ pub async fn admin_update_user_full(
     ValidatedJson(req): ValidatedJson<AdminUpdateUserRequest>,
 ) -> Result<Response, Response> {
     let locale = current_locale();
-    assert_scope(&user, "admin_page", tr("err_auth.forbidden", &locale, &[]))?;
+    assert_scope_admin_page(&user, tr("err_auth.forbidden", &locale, &[]))?;
 
     if !user
         .has_permission(Permission::UsersUpdate, &state.permission_checker)
@@ -1453,7 +1463,346 @@ pub async fn admin_update_user_full(
         Err(e) => return Err(sp_update_error_envelope(&state, e)),
     };
 
+    if let Err(e) = state.permission_checker.invalidate_user(guid).await {
+        tracing::warn!(
+            user_guid = %guid,
+            error = %e,
+            "permission cache invalidation after user update failed (non-fatal)"
+        );
+    }
+
     Ok((StatusCode::OK, ok(AdminUpdateUserResponse::from(result))).into_response())
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/users/{guid}",
+    tag = "users",
+    params(
+        ("guid" = Uuid, Path, description = "User GUID to delete"),
+    ),
+    responses(
+        (status = 200, description = "User deleted", body = AdminDeleteUserResponse),
+        (status = 401, description = "Not authenticated", body = crate::openapi::ApiError),
+        (status = 403, description = "Permission denied", body = crate::openapi::ApiError),
+        (status = 404, description = "User not found", body = crate::openapi::ApiError),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn delete_user_admin(
+    State(state): State<AppState>,
+    user: AuthnUser,
+    Path(guid): Path<Uuid>,
+) -> Result<Response, Response> {
+    let locale = current_locale();
+    assert_scope_admin_page(&user, tr("err_auth.forbidden", &locale, &[]))?;
+
+    if !user
+        .has_permission(Permission::UsersDelete, &state.permission_checker)
+        .await
+    {
+        let code_str = Permission::UsersDelete.code();
+        let localized = tr("err_auth.permission_denied", &locale, &[code_str]);
+        return Err(ApiError::from(AppError::Localized {
+            status: StatusCode::FORBIDDEN,
+            code: ErrorCode::PERMISSION_DENIED,
+            message: localized,
+        })
+        .into_response());
+    }
+
+    let user_guid_str = guid.to_string();
+
+    let result = match state
+        .admin_users
+        .admin_delete_user(user.id(), &user_guid_str)
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => return Err(sp_delete_error_envelope(&state, e)),
+    };
+
+    if let Err(e) = state.permission_checker.invalidate_user(guid).await {
+        tracing::warn!(
+            user_guid = %guid,
+            error = %e,
+            "permission cache invalidation after user delete failed (non-fatal)"
+        );
+    }
+
+    let locale = current_locale();
+    let i18n_key = sp_delete_status_key(&result.code);
+    let localized = tr(i18n_key, &locale, &[]);
+    let resp = ApiResponse {
+        success: true,
+        data: Some(serde_json::json!({
+            "user_guid": result.user_guid,
+            "code": result.code,
+            "message": localized,
+        })),
+        error: None,
+        meta: None,
+    };
+    Ok((StatusCode::OK, Json(resp)).into_response())
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct AdminDeleteUserResponse {
+    pub user_guid: String,
+    pub code: String,
+    pub message: String,
+}
+
+impl From<kokkak_domain::AdminDeleteUserResult> for AdminDeleteUserResponse {
+    fn from(r: kokkak_domain::AdminDeleteUserResult) -> Self {
+        Self {
+            user_guid: r.user_guid,
+            code: r.code,
+            message: r.message,
+        }
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/users/{guid}/suspend",
+    tag = "users",
+    params(
+        ("guid" = Uuid, Path, description = "User GUID to suspend"),
+    ),
+    responses(
+        (status = 200, description = "User suspended", body = AdminDeleteUserResponse),
+        (status = 401, description = "Not authenticated", body = crate::openapi::ApiError),
+        (status = 403, description = "Permission denied", body = crate::openapi::ApiError),
+        (status = 404, description = "User not found", body = crate::openapi::ApiError),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn suspend_user_admin(
+    State(state): State<AppState>,
+    user: AuthnUser,
+    Path(guid): Path<Uuid>,
+) -> Result<Response, Response> {
+    let locale = current_locale();
+    assert_scope_admin_page(&user, tr("err_auth.forbidden", &locale, &[]))?;
+
+    if !user
+        .has_permission(Permission::UsersUpdate, &state.permission_checker)
+        .await
+    {
+        let code_str = Permission::UsersUpdate.code();
+        let localized = tr("err_auth.permission_denied", &locale, &[code_str]);
+        return Err(ApiError::from(AppError::Localized {
+            status: StatusCode::FORBIDDEN,
+            code: ErrorCode::PERMISSION_DENIED,
+            message: localized,
+        })
+        .into_response());
+    }
+
+    let user_guid_str = guid.to_string();
+
+    let result = match state
+        .admin_users
+        .admin_suspend_user(user.id(), &user_guid_str)
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => return Err(sp_suspend_error_envelope(&state, e)),
+    };
+
+    if let Err(e) = state.permission_checker.invalidate_user(guid).await {
+        tracing::warn!(
+            user_guid = %guid,
+            error = %e,
+            "permission cache invalidation after user suspend failed (non-fatal)"
+        );
+    }
+
+    let locale = current_locale();
+    let i18n_key = sp_suspend_status_key(&result.code);
+    let localized = tr(i18n_key, &locale, &[]);
+    let resp = ApiResponse {
+        success: true,
+        data: Some(serde_json::json!({
+            "user_guid": result.user_guid,
+            "code": result.code,
+            "message": localized,
+        })),
+        error: None,
+        meta: None,
+    };
+    Ok((StatusCode::OK, Json(resp)).into_response())
+}
+
+fn sp_suspend_error_envelope(state: &AppState, err: AdminDeleteUserError) -> Response {
+    let (status, code, i18n_key) = sp_suspend_status(&err.code);
+    let locale = current_locale();
+    let localized = tr(i18n_key, &locale, &[]);
+    tracing::warn!(
+        sp_code = %err.code,
+        sp_message = %err.message,
+        localized_code = code,
+        "SP_USER_SUSPEND rejected request"
+    );
+    let envelope: ApiResponse<()> = ApiResponse {
+        success: false,
+        data: None,
+        error: Some(kokkak_common::error::ApiErrorBody {
+            code: code.into(),
+            message: localized,
+        }),
+        meta: None,
+    };
+    let _ = state;
+    (status, Json(envelope)).into_response()
+}
+
+fn sp_suspend_status(sp_code: &str) -> (StatusCode, &'static str, &'static str) {
+    match sp_code {
+        "ACTOR_REQUIRED" => (
+            StatusCode::BAD_REQUEST,
+            ErrorCode::ACTOR_REQUIRED,
+            "err_admin_user.actor_required",
+        ),
+        "USER_GUID_REQUIRED" => (
+            StatusCode::BAD_REQUEST,
+            ErrorCode::VALIDATION,
+            "err_admin_user.user_guid_required",
+        ),
+        "ACTOR_NOT_FOUND" => (
+            StatusCode::UNAUTHORIZED,
+            ErrorCode::ACTOR_NOT_FOUND,
+            "err_admin_user.actor_not_found",
+        ),
+        "PERMISSION_DENIED" => (
+            StatusCode::FORBIDDEN,
+            ErrorCode::PERMISSION_DENIED,
+            "err_admin_user.permission_denied",
+        ),
+        "USER_NOT_FOUND" => (
+            StatusCode::NOT_FOUND,
+            ErrorCode::USER_NOT_FOUND,
+            "err_admin_user.user_not_found",
+        ),
+        "USER_DELETED" => (
+            StatusCode::CONFLICT,
+            "user_deleted",
+            "err_admin_user.user_deleted_cannot_suspend",
+        ),
+        "ALREADY_SUSPENDED" => (
+            StatusCode::OK,
+            "already_suspended",
+            "err_admin_user.already_suspended",
+        ),
+        "SUSPENDED" => (StatusCode::OK, "suspended", "err_admin_user.suspended"),
+        "ERROR" => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ErrorCode::INTERNAL,
+            "err.internal",
+        ),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ErrorCode::INTERNAL,
+            "err.internal",
+        ),
+    }
+}
+
+fn sp_suspend_status_key(sp_code: &str) -> &'static str {
+    match sp_code {
+        "SUSPENDED" => "err_admin_user.suspended",
+        "ALREADY_SUSPENDED" => "err_admin_user.already_suspended",
+        "USER_DELETED" => "err_admin_user.user_deleted_cannot_suspend",
+        _ => "err.internal",
+    }
+}
+
+fn sp_delete_error_envelope(state: &AppState, err: AdminDeleteUserError) -> Response {
+    let (status, code, i18n_key) = sp_delete_status(&err.code);
+    let locale = current_locale();
+    let localized = tr(i18n_key, &locale, &[]);
+    tracing::warn!(
+        sp_code = %err.code,
+        sp_message = %err.message,
+        localized_code = code,
+        "SP_USER_DELETE rejected request"
+    );
+    let envelope: ApiResponse<()> = ApiResponse {
+        success: false,
+        data: None,
+        error: Some(kokkak_common::error::ApiErrorBody {
+            code: code.into(),
+            message: localized,
+        }),
+        meta: None,
+    };
+    let _ = state;
+    (status, Json(envelope)).into_response()
+}
+
+fn sp_delete_status(sp_code: &str) -> (StatusCode, &'static str, &'static str) {
+    match sp_code {
+        "ACTOR_REQUIRED" => (
+            StatusCode::BAD_REQUEST,
+            ErrorCode::ACTOR_REQUIRED,
+            "err_admin_user.actor_required",
+        ),
+        "USER_GUID_REQUIRED" => (
+            StatusCode::BAD_REQUEST,
+            ErrorCode::VALIDATION,
+            "err_admin_user.user_guid_required",
+        ),
+        "ACTOR_NOT_FOUND" => (
+            StatusCode::UNAUTHORIZED,
+            ErrorCode::ACTOR_NOT_FOUND,
+            "err_admin_user.actor_not_found",
+        ),
+        "PERMISSION_DENIED" => (
+            StatusCode::FORBIDDEN,
+            ErrorCode::PERMISSION_DENIED,
+            "err_admin_user.permission_denied",
+        ),
+        "USER_NOT_FOUND" => (
+            StatusCode::NOT_FOUND,
+            ErrorCode::USER_NOT_FOUND,
+            "err_admin_user.user_not_found",
+        ),
+        "ALREADY_DELETED" => (
+            StatusCode::OK,
+            "already_deleted",
+            "err_admin_user.already_deleted",
+        ),
+        "DELETED" => (StatusCode::OK, "deleted", "err_admin_user.deleted"),
+        "ERROR" => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ErrorCode::INTERNAL,
+            "err.internal",
+        ),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ErrorCode::INTERNAL,
+            "err.internal",
+        ),
+    }
+}
+
+fn sp_delete_status_key(sp_code: &str) -> &'static str {
+    match sp_code {
+        "DELETED" => "err_admin_user.deleted",
+        "ALREADY_DELETED" => "err_admin_user.already_deleted",
+        _ => "err.internal",
+    }
+}
+
+fn sp_permission_update_status_key(sp_code: &str) -> &'static str {
+    match sp_code {
+        "UPDATED" => "err_permission.updated",
+        "CREATED" => "err_permission.created",
+        "NO_CHANGE" => "err_permission.no_change",
+        "ROLE_NOT_FOUND" => "err_permission.role_not_found",
+        _ => "err.internal",
+    }
 }
 
 fn dto_to_day_schedule(d: &DayScheduleDto) -> kokkak_domain::admin_user::DaySchedule {

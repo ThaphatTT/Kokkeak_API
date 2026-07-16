@@ -1,5 +1,3 @@
-
-
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,7 +20,6 @@ pub struct LayeredCache {
 }
 
 impl LayeredCache {
-
     pub fn new(l1_capacity: u64, l1_max_ttl: Duration) -> Self {
         let l1 = MokaCache::builder()
             .max_capacity(l1_capacity)
@@ -40,6 +37,35 @@ impl LayeredCache {
         self
     }
 
+    pub fn start_invalidation_listener(&self) {
+        let Some(l2) = self.l2.clone() else {
+            return;
+        };
+        let l1 = self.l1.clone();
+        tokio::spawn(async move {
+            match l2.subscribe_invalidations().await {
+                Ok(mut stream) => {
+                    use futures::StreamExt;
+                    tracing::info!(
+                        namespace = %l2.namespace(),
+                        "cache invalidation listener started"
+                    );
+                    while let Some(key) = stream.next().await {
+                        let prefixed = format!("{}:{}", l2.namespace(), key.as_str());
+                        l1.invalidate(&prefixed).await;
+                        l1.invalidate(key.as_str()).await;
+                        metrics::counter!("kokkeak_cache_invalidations_received_total")
+                            .increment(1);
+                    }
+                    tracing::warn!("cache invalidation listener stream ended");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to start cache invalidation listener");
+                }
+            }
+        });
+    }
+
     pub async fn get_or_load<F, Fut>(
         &self,
         key: &CacheKey,
@@ -50,21 +76,20 @@ impl LayeredCache {
         F: FnOnce() -> Fut + Send,
         Fut: std::future::Future<Output = (Vec<u8>, bool)> + Send,
     {
-
         if let Some(v) = self.l1.get(key.as_str()).await {
-            metrics::counter!("kokkak_cache_hits_total", "tier" => "l1").increment(1);
+            metrics::counter!("kokkeak_cache_hits_total", "tier" => "l1").increment(1);
             return Ok(v);
         }
 
         if let Some(l2) = &self.l2 {
             if let Some(v) = l2.get(key).await? {
                 self.l1.insert(key.as_str().to_string(), v.clone()).await;
-                metrics::counter!("kokkak_cache_hits_total", "tier" => "l2").increment(1);
+                metrics::counter!("kokkeak_cache_hits_total", "tier" => "l2").increment(1);
                 return Ok(v);
             }
         }
 
-        metrics::counter!("kokkak_cache_misses_total").increment(1);
+        metrics::counter!("kokkeak_cache_misses_total").increment(1);
 
         let mutex = {
             let mut map = self.inflight.lock().await;
@@ -104,17 +129,17 @@ impl LayeredCache {
 impl Cache for LayeredCache {
     async fn get(&self, key: &CacheKey) -> Result<Option<Vec<u8>>, CacheError> {
         if let Some(v) = self.l1.get(key.as_str()).await {
-            metrics::counter!("kokkak_cache_hits_total", "tier" => "l1").increment(1);
+            metrics::counter!("kokkeak_cache_hits_total", "tier" => "l1").increment(1);
             return Ok(Some(v));
         }
         if let Some(l2) = &self.l2 {
             if let Some(v) = l2.get(key).await? {
                 self.l1.insert(key.as_str().to_string(), v.clone()).await;
-                metrics::counter!("kokkak_cache_hits_total", "tier" => "l2").increment(1);
+                metrics::counter!("kokkeak_cache_hits_total", "tier" => "l2").increment(1);
                 return Ok(Some(v));
             }
         }
-        metrics::counter!("kokkak_cache_misses_total").increment(1);
+        metrics::counter!("kokkeak_cache_misses_total").increment(1);
         Ok(None)
     }
 
@@ -268,7 +293,6 @@ mod tests {
                     .get_or_load(&key, Duration::from_secs(5), || {
                         let c = counter.clone();
                         async move {
-
                             tokio::time::sleep(Duration::from_millis(50)).await;
                             c.fetch_add(1, Ordering::SeqCst);
                             (b"only-once".to_vec(), false)

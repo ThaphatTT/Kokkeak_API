@@ -1,5 +1,3 @@
-
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,7 +18,6 @@ impl<R> CachedTranslationRepository<R>
 where
     R: TranslationRepository + 'static,
 {
-
     pub fn new(inner: R) -> Self {
         Self::with_ttl(inner, Duration::from_secs(60), 10_000)
     }
@@ -59,10 +56,10 @@ where
     async fn get(&self, locale: &str, key: &str) -> Result<Option<String>, TranslationError> {
         let cache_key = (locale.to_string(), key.to_string());
         if let Some(hit) = self.cache.get(&cache_key).await {
-            metrics::counter!("kokkak_translation_cache_hits_total").increment(1);
+            metrics::counter!("kokkeak_translation_cache_hits_total").increment(1);
             return Ok(hit);
         }
-        metrics::counter!("kokkak_translation_cache_misses_total").increment(1);
+        metrics::counter!("kokkeak_translation_cache_misses_total").increment(1);
         let value = self.inner.get(locale, key).await?;
 
         self.cache.insert(cache_key, value.clone()).await;
@@ -70,14 +67,12 @@ where
     }
 
     async fn put(&self, locale: &str, key: &str, value: &str) -> Result<(), TranslationError> {
-
         self.invalidate(locale, key).await;
         self.inner.put(locale, key, value).await?;
         Ok(())
     }
 
     async fn count(&self) -> Result<usize, TranslationError> {
-
         self.inner.count().await
     }
 }

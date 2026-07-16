@@ -1,20 +1,15 @@
-
-
 use std::time::Duration;
 
 use async_trait::async_trait;
 use deadpool_redis::{Config, Pool, Runtime};
-use futures::stream;
+use futures::StreamExt;
 use kokkak_common::config::RedisSettings;
 use kokkak_domain::{Cache, CacheError, CacheKey, InvalidationStream};
 use redis::AsyncCommands;
 use thiserror::Error;
 
-const INVALIDATE_CHANNEL: &str = "kokkak.cache.invalidate";
-
 #[derive(Debug, Error)]
 pub enum RedisCacheError {
-
     #[error("redis pool build failed: {0}")]
     PoolBuild(String),
 
@@ -34,10 +29,11 @@ impl From<RedisCacheError> for CacheError {
 #[derive(Clone, Debug)]
 pub struct RedisCache {
     pool: Pool,
+    url: String,
+    namespace: String,
 }
 
 impl RedisCache {
-
     pub fn new(settings: &RedisSettings) -> Result<Self, RedisCacheError> {
         if !settings.is_configured() {
             return Err(RedisCacheError::PoolBuild(
@@ -53,10 +49,15 @@ impl RedisCache {
         tracing::info!(
             url = %settings.url,
             pool_size = settings.pool_size,
+            namespace = %settings.namespace,
             "redis pool built"
         );
 
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            url: settings.url.clone(),
+            namespace: settings.namespace.clone(),
+        })
     }
 
     pub async fn conn(&self) -> Result<deadpool_redis::Connection, RedisCacheError> {
@@ -66,24 +67,35 @@ impl RedisCache {
     pub fn pool(&self) -> deadpool_redis::Pool {
         self.pool.clone()
     }
+
+    pub fn namespace(&self) -> &str {
+        &self.namespace
+    }
+
+    fn prefixed_key(&self, key: &CacheKey) -> String {
+        format!("{}:{}", self.namespace, key.as_str())
+    }
+
+    fn invalidate_channel(&self) -> String {
+        format!("{}.cache.invalidate", self.namespace)
+    }
 }
 
 #[async_trait]
 impl Cache for RedisCache {
     async fn get(&self, key: &CacheKey) -> Result<Option<Vec<u8>>, CacheError> {
         let mut conn = self.pool.get().await.map_err(RedisCacheError::from)?;
-        let value: Option<Vec<u8>> = conn
-            .get(key.as_str())
-            .await
-            .map_err(RedisCacheError::from)?;
+        let pk = self.prefixed_key(key);
+        let value: Option<Vec<u8>> = conn.get(&pk).await.map_err(RedisCacheError::from)?;
         Ok(value)
     }
 
     async fn set(&self, key: &CacheKey, value: &[u8], ttl: Duration) -> Result<(), CacheError> {
         let mut conn = self.pool.get().await.map_err(RedisCacheError::from)?;
+        let pk = self.prefixed_key(key);
         let ttl_secs = ttl.as_secs().max(1);
         let _: () = conn
-            .set_ex(key.as_str(), value, ttl_secs)
+            .set_ex(&pk, value, ttl_secs)
             .await
             .map_err(RedisCacheError::from)?;
         Ok(())
@@ -91,26 +103,49 @@ impl Cache for RedisCache {
 
     async fn delete(&self, key: &CacheKey) -> Result<bool, CacheError> {
         let mut conn = self.pool.get().await.map_err(RedisCacheError::from)?;
-        let removed: i64 = conn
-            .del(key.as_str())
-            .await
-            .map_err(RedisCacheError::from)?;
+        let pk = self.prefixed_key(key);
+        let removed: i64 = conn.del(&pk).await.map_err(RedisCacheError::from)?;
         Ok(removed > 0)
     }
 
     async fn invalidate(&self, key: &CacheKey) -> Result<(), CacheError> {
-
         let mut conn = self.pool.get().await.map_err(RedisCacheError::from)?;
+        let channel = self.invalidate_channel();
         let _: i64 = conn
-            .publish(INVALIDATE_CHANNEL, key.as_str())
+            .publish(&channel, key.as_str())
             .await
             .map_err(RedisCacheError::from)?;
         Ok(())
     }
 
     async fn subscribe_invalidations(&self) -> Result<InvalidationStream, CacheError> {
+        let client = redis::Client::open(self.url.as_str())
+            .map_err(|e| CacheError::Backend(e.to_string()))?;
+        let mut pubsub = client
+            .get_async_pubsub()
+            .await
+            .map_err(|e| CacheError::Backend(e.to_string()))?;
+        let channel = self.invalidate_channel();
+        pubsub
+            .subscribe(&channel)
+            .await
+            .map_err(|e| CacheError::Backend(e.to_string()))?;
 
-        Ok(Box::pin(stream::empty()))
+        let ns = self.namespace.clone();
+        let s = async_stream::stream! {
+            let mut msg_stream = pubsub.on_message();
+            while let Some(msg) = msg_stream.next().await {
+                if let Ok(payload) = msg.get_payload::<String>() {
+                    if let Some(raw) = payload.strip_prefix(&format!("{}:", ns)) {
+                        yield CacheKey::from_wire(raw);
+                    } else {
+                        yield CacheKey::from_wire(payload);
+                    }
+                }
+            }
+        };
+
+        Ok(Box::pin(s))
     }
 }
 

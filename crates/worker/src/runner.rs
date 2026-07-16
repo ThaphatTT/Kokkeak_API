@@ -1,5 +1,3 @@
-
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,10 +11,10 @@ use tracing::{error, info, warn};
 
 use crate::handlers::{Handler, HandlerError};
 use crate::idempotency::{Idempotency, IdempotencyKey, InMemoryIdempotency};
+use crate::retry::RetryPolicy;
 
 #[derive(Debug, Error)]
 pub enum WorkerError {
-
     #[error("nats connect failed: {0}")]
     Nats(String),
 
@@ -24,9 +22,10 @@ pub enum WorkerError {
     Config(String),
 }
 
+const X_RETRY_COUNT_HEADER: &str = "x-retry-count";
+
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
-
     pub subjects: Vec<String>,
 
     pub stream_name: String,
@@ -36,6 +35,10 @@ pub struct WorkerConfig {
     pub pull_max_messages: usize,
 
     pub pull_expires_in: Duration,
+
+    pub retry_policy: RetryPolicy,
+
+    pub dlq_subject: String,
 }
 
 impl Default for WorkerConfig {
@@ -56,6 +59,8 @@ impl Default for WorkerConfig {
             idempotency_ttl: Duration::from_secs(24 * 3600),
             pull_max_messages: 100,
             pull_expires_in: Duration::from_secs(30),
+            retry_policy: RetryPolicy::default(),
+            dlq_subject: "kokkak.dlq".into(),
         }
     }
 }
@@ -69,7 +74,6 @@ pub struct Worker {
 }
 
 impl Worker {
-
     pub fn new(
         config: WorkerConfig,
         queue: Arc<NatsQueue>,
@@ -94,9 +98,13 @@ impl Worker {
     }
 
     pub async fn ensure_topology(&self) -> Result<(), WorkerError> {
-        let subjects: Vec<&str> = self.config.subjects.iter().map(|s| s.as_str()).collect();
+        let mut subjects: Vec<String> = self.config.subjects.clone();
+        if !subjects.contains(&self.config.dlq_subject) {
+            subjects.push(self.config.dlq_subject.clone());
+        }
+        let subject_refs: Vec<&str> = subjects.iter().map(|s| s.as_str()).collect();
         self.queue
-            .ensure_stream(&self.config.stream_name, &subjects)
+            .ensure_stream(&self.config.stream_name, &subject_refs)
             .await
             .map_err(|e| WorkerError::Nats(e.to_string()))
     }
@@ -141,6 +149,7 @@ impl Worker {
             };
             let stream = stream.clone();
             let idempotency = idempotency.clone();
+            let queue = self.queue.clone();
             let subject = subject.clone();
             let cfg = cfg.clone();
             let mut shutdown_rx = shutdown_rx.clone();
@@ -216,6 +225,14 @@ impl Worker {
                                 warn!(subject = %subject, error = %e, "idempotency check failed; will process");
                             }
                         }
+                        let retry_count = msg
+                            .message
+                            .headers
+                            .as_ref()
+                            .and_then(|h| h.get(X_RETRY_COUNT_HEADER))
+                            .and_then(|v| v.as_str().parse::<u32>().ok())
+                            .unwrap_or(0);
+
                         match handler.handle(&message_id, &payload).await {
                             Ok(()) => {
                                 if let Err(e) = msg.ack().await {
@@ -223,9 +240,43 @@ impl Worker {
                                 }
                             }
                             Err(HandlerError::Failed(reason)) => {
-                                error!(subject = %subject, message_id = %message_id, %reason, "handler failed");
-                                if let Err(e) = msg.ack_with(async_nats::jetstream::AckKind::Term).await {
-                                    warn!(subject = %subject, error = %e, "nack failed");
+                                if cfg.retry_policy.should_retry(retry_count) {
+                                    let delay = cfg.retry_policy.delay_for(retry_count);
+                                    warn!(
+                                        subject = %subject,
+                                        message_id = %message_id,
+                                        attempt = retry_count + 1,
+                                        max_retries = cfg.retry_policy.max_retries,
+                                        delay_ms = delay.as_millis() as u64,
+                                        %reason,
+                                        "handler failed; will retry"
+                                    );
+                                    if let Err(e) = msg.ack_with(async_nats::jetstream::AckKind::Nak(Some(delay))).await {
+                                        warn!(subject = %subject, error = %e, "nak failed");
+                                    }
+                                } else {
+                                    error!(
+                                        subject = %subject,
+                                        message_id = %message_id,
+                                        retries = retry_count,
+                                        %reason,
+                                        "handler failed after max retries; sending to DLQ"
+                                    );
+                                    let dlq_payload = serde_json::json!({
+                                        "original_subject": subject,
+                                        "message_id": message_id,
+                                        "retry_count": retry_count,
+                                        "last_error": reason,
+                                        "payload": String::from_utf8_lossy(&payload),
+                                    });
+                                    if let Ok(dlq_bytes) = serde_json::to_vec(&dlq_payload) {
+                                        if let Err(e) = queue.publish(&cfg.dlq_subject, &dlq_bytes).await {
+                                            error!(error = %e, "DLQ publish failed");
+                                        }
+                                    }
+                                    if let Err(e) = msg.ack_with(async_nats::jetstream::AckKind::Term).await {
+                                        warn!(subject = %subject, error = %e, "term ack failed");
+                                    }
                                 }
                             }
                         }

@@ -446,6 +446,7 @@ pub fn build_app_state_with(
     let session_store: Arc<dyn kokkak_domain::SessionStore> = match redis_pool {
         Some(pool) => Arc::new(kokkak_infra::auth::session_store::RedisSessionStore::new(
             pool,
+            &settings.redis.namespace,
         )),
         None => Arc::new(kokkak_domain::NoopSessionStore),
     };
@@ -512,6 +513,7 @@ pub fn build_app_state_with(
                 kokkak_infra::cache::permission_cache::RedisPermissionCache::new(
                     rc.pool(),
                     settings.permission_cache.ttl_secs,
+                    settings.redis.namespace.clone(),
                 ),
             ),
             Err(e) => {

@@ -1025,6 +1025,7 @@ fn row_to_sub_image_row(row: &tiberius::Row) -> CategoryJobServiceSubImageRow {
     }
 }
 
+#[allow(dead_code)]
 fn row_to_sub_fee_row(row: &tiberius::Row) -> CategoryJobServiceSubFeeRow {
     CategoryJobServiceSubFeeRow {
         category_job_service_sub_fee_guid: read_guid_str(row, "category_job_service_sub_fee_guid"),
@@ -1041,6 +1042,7 @@ fn row_to_sub_fee_row(row: &tiberius::Row) -> CategoryJobServiceSubFeeRow {
     }
 }
 
+#[allow(dead_code)]
 fn row_to_sub_warranty_row(row: &tiberius::Row) -> CategoryJobServiceSubWarrantyRow {
     CategoryJobServiceSubWarrantyRow {
         category_job_service_sub_warranty_guid: read_guid_str(

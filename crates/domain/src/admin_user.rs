@@ -50,6 +50,29 @@ impl AdminUpdateUserError {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminDeleteUserResult {
+    pub user_guid: String,
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("SP_USER_DELETE failed: {code} — {message}")]
+pub struct AdminDeleteUserError {
+    pub code: String,
+    pub message: String,
+}
+
+impl AdminDeleteUserError {
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct DaySchedule {

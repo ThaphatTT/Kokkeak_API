@@ -63,6 +63,12 @@ pub struct CategoryJobMainPage {
     pub page_size: u32,
 
     pub total_page: u32,
+
+    #[serde(default)]
+    pub active: i64,
+
+    #[serde(default)]
+    pub close: i64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

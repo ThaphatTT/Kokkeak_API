@@ -1,5 +1,3 @@
-
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -9,14 +7,12 @@ use tokio::sync::Mutex;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IdempotencyKey {
-
     pub consumer: String,
 
     pub message_id: String,
 }
 
 impl IdempotencyKey {
-
     pub fn new(consumer: impl Into<String>, message_id: impl Into<String>) -> Self {
         Self {
             consumer: consumer.into(),
@@ -25,20 +21,18 @@ impl IdempotencyKey {
     }
 
     pub fn cache_key(&self) -> String {
-        format!("kokkak:idemp:{}:{}", self.consumer, self.message_id)
+        format!("kokkeak:idemp:{}:{}", self.consumer, self.message_id)
     }
 }
 
 #[derive(Debug, Error)]
 pub enum IdempotencyError {
-
     #[error("idempotency backend error: {0}")]
     Backend(String),
 }
 
 #[async_trait]
 pub trait Idempotency: Send + Sync {
-
     async fn claim(&self, key: &IdempotencyKey, ttl: Duration) -> Result<bool, IdempotencyError>;
 }
 
@@ -48,7 +42,6 @@ pub struct InMemoryIdempotency {
 }
 
 impl InMemoryIdempotency {
-
     pub fn new(max_entries: usize) -> Self {
         Self {
             seen: Arc::new(Mutex::new(std::collections::HashSet::new())),
@@ -66,7 +59,6 @@ impl Idempotency for InMemoryIdempotency {
             return Ok(false);
         }
         if seen.len() >= self.max_entries {
-
             let to_drop: Vec<String> = seen.iter().take(self.max_entries / 2).cloned().collect();
             for k in to_drop {
                 seen.remove(&k);
@@ -82,7 +74,6 @@ pub struct RedisIdempotency {
 }
 
 impl RedisIdempotency {
-
     pub fn new(pool: deadpool_redis::Pool) -> Self {
         Self { pool }
     }
@@ -139,6 +130,6 @@ mod tests {
     #[tokio::test]
     async fn in_memory_cache_key_includes_consumer() {
         let key = IdempotencyKey::new("a", "x");
-        assert_eq!(key.cache_key(), "kokkak:idemp:a:x");
+        assert_eq!(key.cache_key(), "kokkeak:idemp:a:x");
     }
 }

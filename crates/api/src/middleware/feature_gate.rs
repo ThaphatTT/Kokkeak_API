@@ -1,5 +1,3 @@
-
-
 use std::sync::Arc;
 
 use axum::{
@@ -22,7 +20,7 @@ fn feature_disabled_response() -> Response {
             "data": null,
             "error": {
                 "code": "feature_disabled",
-                "message": "Endpoint is currently served by the legacy service"
+                "message": "Endpoint is not available"
             }
         })),
     )
@@ -121,7 +119,6 @@ mod tests {
 
     #[test]
     fn gate_can_be_disabled_individually() {
-
         let yaml = "auth: false\norders: true\npayments: false\nchat: true\nadmin: true\n";
         let flags: FeatureFlagSettings = serde_yaml::from_str(yaml).expect("parse");
         assert!(!flags.auth);
