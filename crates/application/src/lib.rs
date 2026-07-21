@@ -1,5 +1,6 @@
 #![deny(unsafe_code)]
 
+pub mod admin_order_service;
 pub mod admin_user;
 pub mod audit;
 pub mod auth;

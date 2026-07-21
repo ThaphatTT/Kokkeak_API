@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use kokkak_application::admin_order_service::AdminOrderService;
 use kokkak_application::auth::AuthService;
 use kokkak_application::catalog::CatalogService;
 use kokkak_application::category_job_main::CategoryJobMainService;
@@ -68,6 +69,8 @@ pub struct AppState {
     pub master: Arc<MasterDropdownService>,
 
     pub orders: Arc<OrderService>,
+
+    pub admin_order_service: Arc<AdminOrderService>,
 
     pub chat: ChatHandle,
 
@@ -185,6 +188,7 @@ impl AppState {
         category_job_service_sub_warranty: Arc<CategoryJobServiceSubWarrantyService>,
         master: Arc<MasterDropdownService>,
         orders: Arc<OrderService>,
+        admin_order_service: Arc<AdminOrderService>,
         chat: ChatHandle,
         payments: Arc<PaymentService>,
         permission: Arc<PermissionUserService>,
@@ -212,6 +216,7 @@ impl AppState {
             category_job_service_sub_warranty,
             master,
             orders,
+            admin_order_service,
             chat,
             payments,
             permission,
@@ -268,6 +273,7 @@ impl AppState {
             ),
             master,
             orders,
+            admin_order_service: Arc::new(AdminOrderService::disabled()),
             chat: chat_handle,
             payments,
             permission,

@@ -19,6 +19,7 @@ pub use state::{AppState, ChatHandle};
 
 use std::sync::Arc;
 
+use kokkak_application::admin_order_service::AdminOrderService;
 use kokkak_application::admin_user::AdminUserService;
 use kokkak_application::audit::{AuditLogger, NoopAuditLogger};
 use kokkak_application::auth::AuthService;
@@ -417,6 +418,61 @@ impl kokkak_domain::CategoryJobServiceSubWarrantyRepository
     }
 }
 
+struct MssqlAdminOrderServiceRepositoryNoop;
+
+#[async_trait::async_trait]
+impl kokkak_domain::AdminOrderServiceRepository for MssqlAdminOrderServiceRepositoryNoop {
+    async fn create_full(
+        &self,
+        _actor_user_guid: &str,
+        _idempotency_key: &str,
+        _correlation_id: Option<&str>,
+        _payload_json: &str,
+    ) -> Result<kokkak_domain::AdminCreateOrderResult, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+            "admin_order_service repo not wired in build_app_state (set KOKKAK_DATABASE__SQLSERVER_URL)"
+                .into(),
+        ))
+    }
+
+    async fn list(
+        &self,
+        _input: &kokkak_domain::AdminOrderListInput,
+    ) -> Result<kokkak_domain::AdminOrderPage, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+            "admin_order_service repo not wired".into(),
+        ))
+    }
+
+    async fn detail(
+        &self,
+        _order_guid: &str,
+    ) -> Result<Option<kokkak_domain::AdminOrderDetailRow>, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+            "admin_order_service repo not wired".into(),
+        ))
+    }
+
+    async fn update(
+        &self,
+        _input: &kokkak_domain::AdminOrderUpdateInput,
+    ) -> Result<kokkak_domain::AdminOrderUpdateResult, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+            "admin_order_service repo not wired".into(),
+        ))
+    }
+
+    async fn delete(
+        &self,
+        _order_guid: &str,
+        _actor_user_guid: &str,
+    ) -> Result<kokkak_domain::AdminOrderDeleteResult, kokkak_domain::RepoError> {
+        Err(kokkak_domain::RepoError::Backend(
+            "admin_order_service repo not wired".into(),
+        ))
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn build_app_state_with(
     bundle: RepoBundle,
@@ -479,6 +535,7 @@ pub fn build_app_state_with(
         bundle.category_job_service_sub_warranty.clone(),
     ));
     let orders = Arc::new(OrderService::new(bundle.orders.clone()));
+    let admin_order_service = Arc::new(AdminOrderService::new(bundle.admin_order_service.clone()));
     let local: Arc<BroadcastTransport> = Arc::new(BroadcastTransport::default());
     let transport: Arc<dyn ChatTransport> = local.clone();
     let chat_service = Arc::new(ChatService::new(bundle.chat.clone(), transport));
@@ -549,6 +606,7 @@ pub fn build_app_state_with(
         category_job_service_sub_warranty,
         master,
         orders,
+        admin_order_service,
         chat,
         payments,
         permission,
@@ -609,6 +667,7 @@ pub fn build_app_state(
         category_job_service_sub_warranty: Arc::new(
             MssqlCategoryJobServiceSubWarrantyRepositoryNoop,
         ),
+        admin_order_service: Arc::new(MssqlAdminOrderServiceRepositoryNoop),
         mssql_pool: backend_marker,
         topology: None,
     };
@@ -659,6 +718,7 @@ pub fn build_app_state_json(
         category_job_service_sub_warranty: Arc::new(
             MssqlCategoryJobServiceSubWarrantyRepositoryNoop,
         ),
+        admin_order_service: Arc::new(MssqlAdminOrderServiceRepositoryNoop),
         mssql_pool: backend_marker,
         topology: None,
     };

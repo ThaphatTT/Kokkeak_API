@@ -444,6 +444,116 @@ pub struct UserListRow {
     pub user_username_status: i32,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct UserAutocompleteInput {
+    pub keyword: Option<String>,
+
+    pub page_number: Option<i32>,
+
+    pub page_size: Option<i32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct UserAutocompletePage {
+    pub items: Vec<UserAutocompleteRow>,
+
+    pub page_number: i32,
+
+    pub page_size: i32,
+
+    pub total_records: i64,
+
+    pub total_pages: i32,
+
+    pub has_next_page: bool,
+
+    pub has_previous_page: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct UserAutocompleteRow {
+    pub user_guid: String,
+
+    pub user_first_name: String,
+
+    pub user_last_name: String,
+
+    pub user_full_name: String,
+
+    pub user_tel: Option<String>,
+
+    pub user_province: Option<String>,
+
+    pub user_district: Option<String>,
+
+    pub user_sub_district: Option<String>,
+
+    pub user_village: Option<String>,
+
+    pub user_post: Option<String>,
+
+    pub user_is_customer_company: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct UserAddressRow {
+    pub user_address_guid: String,
+
+    pub user_address_user_guid: String,
+
+    pub user_address_type: Option<i32>,
+
+    pub user_address_province: Option<String>,
+
+    pub user_address_district: Option<String>,
+
+    pub user_address_sub_district: Option<String>,
+
+    pub user_address_village: Option<String>,
+
+    pub user_address_post: Option<String>,
+
+    pub user_address_lat: Option<f64>,
+
+    pub user_address_long: Option<f64>,
+
+    pub user_address_full_text: Option<String>,
+
+    pub user_address_description: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct UserAddressInput {
+    pub user_guid: String,
+
+    pub page_number: Option<i32>,
+
+    pub page_size: Option<i32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct UserAddressPage {
+    pub items: Vec<UserAddressRow>,
+
+    pub page_number: i32,
+
+    pub page_size: i32,
+
+    pub total_records: i64,
+
+    pub total_pages: i32,
+
+    pub has_next_page: bool,
+
+    pub has_previous_page: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

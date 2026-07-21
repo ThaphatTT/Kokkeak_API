@@ -2,6 +2,7 @@ pub mod migrate;
 pub mod mongo;
 pub mod mongo_chat;
 pub mod mssql;
+pub mod mssql_admin_order_service;
 pub mod mssql_catalog;
 pub mod mssql_category_job_main;
 pub mod mssql_category_job_service_main;

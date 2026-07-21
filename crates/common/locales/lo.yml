@@ -58,6 +58,8 @@ err_payment_repo:
 
 err_order:
   invalid_total: "ຍອດເງິນບໍ່ຖືກຕ້ອງ"
+  success: "ດຳເນີນການສຳເລັດ"
+  invalid_status: "ສະຖານະບໍ່ຖືກຕ້ອງ"
 
 err_request:
   bad_timestamp: "after ຕ້ອງເປັນ timestamp ແບບ RFC3339"

@@ -14,7 +14,8 @@ use kokkak_domain::{Permission, RepoError, Role, User, UserListRow, UserReposito
 use uuid::Uuid;
 
 use crate::db::mssql::{
-    exec_sp, read_datetime, read_decimal, read_guid_str, read_i32, read_str, MssqlPool, SpError,
+    exec_sp, exec_sp_multi, read_datetime, read_decimal, read_guid_str, read_i32, read_str,
+    MssqlPool, SpError,
 };
 
 #[derive(Clone)]
@@ -798,6 +799,110 @@ impl UserRepository for MssqlUserRepository {
             message,
         })
     }
+
+    async fn autocomplete(
+        &self,
+        input: &kokkak_domain::UserAutocompleteInput,
+    ) -> Result<kokkak_domain::UserAutocompletePage, RepoError> {
+        let keyword: Option<&str> = input.keyword.as_deref();
+        let page_number: Option<i32> = input.page_number;
+        let page_size: Option<i32> = input.page_size;
+
+        let sets = exec_sp_multi(
+            &self.pool,
+            "EXEC dbo.SP_USER_GET_AUTOCOMPLETE \
+                    @keyword = @P1, \
+                    @page_number = @P2, \
+                    @page_size = @P3",
+            &[
+                &keyword as &dyn ToSql,
+                &page_number as &dyn ToSql,
+                &page_size as &dyn ToSql,
+            ],
+        )
+        .await?;
+
+        let items = sets
+            .first()
+            .map(|rs| rs.iter().map(row_to_user_autocomplete_row).collect())
+            .unwrap_or_default();
+
+        let meta = sets.get(1).and_then(|rs| rs.first());
+
+        Ok(kokkak_domain::UserAutocompletePage {
+            items,
+            page_number: meta
+                .and_then(|r| r.get::<i32, _>("page_number"))
+                .unwrap_or(1),
+            page_size: meta
+                .and_then(|r| r.get::<i32, _>("page_size"))
+                .unwrap_or(20),
+            total_records: meta
+                .and_then(|r| r.get::<i64, _>("total_records"))
+                .unwrap_or(0),
+            total_pages: meta
+                .and_then(|r| r.get::<i32, _>("total_pages"))
+                .unwrap_or(0),
+            has_next_page: meta
+                .and_then(|r| r.get::<bool, _>("has_next_page"))
+                .unwrap_or(false),
+            has_previous_page: meta
+                .and_then(|r| r.get::<bool, _>("has_previous_page"))
+                .unwrap_or(false),
+        })
+    }
+
+    async fn get_addresses_by_user_guid(
+        &self,
+        input: &kokkak_domain::UserAddressInput,
+    ) -> Result<kokkak_domain::UserAddressPage, RepoError> {
+        let user_guid: &str = &input.user_guid;
+        let page_number: Option<i32> = input.page_number;
+        let page_size: Option<i32> = input.page_size;
+
+        let sets = exec_sp_multi(
+            &self.pool,
+            "EXEC dbo.SP_USER_ADDRESS_GET_BY_USER_GUID \
+                    @user_guid = @P1, \
+                    @page_number = @P2, \
+                    @page_size = @P3",
+            &[
+                &user_guid as &dyn ToSql,
+                &page_number as &dyn ToSql,
+                &page_size as &dyn ToSql,
+            ],
+        )
+        .await?;
+
+        let items = sets
+            .first()
+            .map(|rs| rs.iter().map(row_to_user_address_row).collect())
+            .unwrap_or_default();
+
+        let meta = sets.get(1).and_then(|rs| rs.first());
+
+        Ok(kokkak_domain::UserAddressPage {
+            items,
+            page_number: meta
+                .and_then(|r| r.get::<i32, _>("page_number"))
+                .unwrap_or(1),
+            page_size: meta
+                .and_then(|r| r.get::<i32, _>("page_size"))
+                .unwrap_or(20),
+            total_records: meta
+                .and_then(|r| r.get::<i64, _>("total_records"))
+                .unwrap_or(0),
+            total_pages: meta
+                .and_then(|r| r.get::<i32, _>("total_pages"))
+                .unwrap_or(0),
+            has_next_page: meta
+                .and_then(|r| r.get::<bool, _>("has_next_page"))
+                .unwrap_or(false),
+            has_previous_page: meta
+                .and_then(|r| r.get::<bool, _>("has_previous_page"))
+                .unwrap_or(false),
+        })
+    }
 }
 
 fn row_to_user(row: &tiberius::Row) -> Result<User, RepoError> {
@@ -975,6 +1080,41 @@ fn row_to_user_list_row(row: &tiberius::Row) -> UserListRow {
         has_override: row.get::<bool, _>("has_override").unwrap_or(false),
         user_status,
         user_username_status: read_i32(row, "user_username_status").unwrap_or(0),
+    }
+}
+
+fn row_to_user_autocomplete_row(row: &tiberius::Row) -> kokkak_domain::UserAutocompleteRow {
+    kokkak_domain::UserAutocompleteRow {
+        user_guid: read_guid_str(row, "user_guid"),
+        user_first_name: read_str(row, "user_first_name").unwrap_or("").to_string(),
+        user_last_name: read_str(row, "user_last_name").unwrap_or("").to_string(),
+        user_full_name: read_str(row, "user_full_name").unwrap_or("").to_string(),
+        user_tel: read_str(row, "user_tel").map(String::from),
+        user_province: read_str(row, "user_province").map(String::from),
+        user_district: read_str(row, "user_district").map(String::from),
+        user_sub_district: read_str(row, "user_sub_district").map(String::from),
+        user_village: read_str(row, "user_village").map(String::from),
+        user_post: read_str(row, "user_post").map(String::from),
+        user_is_customer_company: row
+            .get::<bool, _>("user_is_customer_company")
+            .unwrap_or(false),
+    }
+}
+
+fn row_to_user_address_row(row: &tiberius::Row) -> kokkak_domain::UserAddressRow {
+    kokkak_domain::UserAddressRow {
+        user_address_guid: read_guid_str(row, "user_address_guid"),
+        user_address_user_guid: read_guid_str(row, "user_address_user_guid"),
+        user_address_type: read_i32(row, "user_address_type"),
+        user_address_province: read_str(row, "user_address_province").map(String::from),
+        user_address_district: read_str(row, "user_address_district").map(String::from),
+        user_address_sub_district: read_str(row, "user_address_sub_district").map(String::from),
+        user_address_village: read_str(row, "user_address_village").map(String::from),
+        user_address_post: read_str(row, "user_address_post").map(String::from),
+        user_address_lat: read_str(row, "user_address_lat").and_then(|s| s.parse::<f64>().ok()),
+        user_address_long: read_str(row, "user_address_long").and_then(|s| s.parse::<f64>().ok()),
+        user_address_full_text: read_str(row, "user_address_full_text").map(String::from),
+        user_address_description: read_str(row, "user_address_description").map(String::from),
     }
 }
 

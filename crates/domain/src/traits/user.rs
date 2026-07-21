@@ -100,4 +100,24 @@ pub trait UserRepository: Send + Sync {
             "admin_suspend_user: not implemented by this repository adapter",
         ))
     }
+
+    async fn autocomplete(
+        &self,
+        input: &crate::user::UserAutocompleteInput,
+    ) -> Result<crate::user::UserAutocompletePage, RepoError> {
+        let _ = input;
+        Err(RepoError::Backend(
+            "autocomplete: not implemented by this repository adapter".into(),
+        ))
+    }
+
+    async fn get_addresses_by_user_guid(
+        &self,
+        input: &crate::user::UserAddressInput,
+    ) -> Result<crate::user::UserAddressPage, RepoError> {
+        let _ = input;
+        Err(RepoError::Backend(
+            "get_addresses_by_user_guid: not implemented by this repository adapter".into(),
+        ))
+    }
 }

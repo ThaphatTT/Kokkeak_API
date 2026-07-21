@@ -1,6 +1,7 @@
 #![deny(unsafe_code)]
 #![allow(missing_docs)]
 
+pub mod admin_order_service;
 pub mod admin_user;
 pub mod auth;
 pub mod cache;
@@ -26,6 +27,11 @@ pub mod storage;
 pub mod traits;
 pub mod user;
 
+pub use admin_order_service::{
+    AddressMapping, AdminCreateOrderData, AdminCreateOrderResult, AdminOrderDeleteResult,
+    AdminOrderDetailRow, AdminOrderListInput, AdminOrderPage, AdminOrderRow, AdminOrderUpdateInput,
+    AdminOrderUpdateResult, BodyMapping, InvitationMapping,
+};
 pub use admin_user::{
     AdminDeleteUserError, AdminDeleteUserResult, AdminInsertUserError, AdminInsertUserRequest,
     AdminInsertUserResult, AdminUpdateUserError, AdminUpdateUserRequest, AdminUpdateUserResult,
@@ -113,8 +119,11 @@ pub use traits::translation::{TranslationError, TranslationRepository};
 pub use traits::user::RepoError;
 pub use traits::user_role::UserRoleRepository;
 pub use traits::{
-    CategoryJobMainRepository, CategoryJobServiceMainRepository,
+    AdminOrderServiceRepository, CategoryJobMainRepository, CategoryJobServiceMainRepository,
     CategoryJobServiceSubFeeRepository, CategoryJobServiceSubRepository,
     CategoryJobServiceSubWarrantyRepository, ServiceRepository, UserRepository,
 };
-pub use user::{Permission, Role, User, UserListRow, UserStatus};
+pub use user::{
+    Permission, Role, User, UserAddressInput, UserAddressPage, UserAddressRow,
+    UserAutocompleteInput, UserAutocompletePage, UserAutocompleteRow, UserListRow, UserStatus,
+};

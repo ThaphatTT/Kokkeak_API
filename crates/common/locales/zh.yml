@@ -58,6 +58,8 @@ err_payment_repo:
 
 err_order:
   invalid_total: "金额无效"
+  success: "操作成功"
+  invalid_status: "状态无效"
 
 err_request:
   bad_timestamp: "after 必须为 RFC3339 时间戳"

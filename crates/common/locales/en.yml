@@ -58,6 +58,8 @@ err_payment_repo:
 
 err_order:
   invalid_total: "invalid total"
+  success: "order operation completed"
+  invalid_status: "invalid workflow status"
 
 err_request:
   bad_timestamp: "after must be an RFC3339 timestamp"

@@ -1,5 +1,3 @@
-
-
 use std::sync::Arc;
 
 use kokkak_domain::traits::user::RepoError;
@@ -7,7 +5,6 @@ use kokkak_domain::{AuthError, PublicUser, UserListRow, UserRepository};
 use uuid::Uuid;
 
 pub struct UserListPage {
-
     pub items: Vec<UserListRow>,
 
     pub next_cursor: Option<String>,
@@ -18,7 +15,6 @@ pub struct UserService {
 }
 
 impl UserService {
-
     pub fn new(users: Arc<dyn UserRepository>) -> Self {
         Self { users }
     }
@@ -39,6 +35,20 @@ impl UserService {
             .await
             .map_err(|e| AuthError::Backend(e.to_string()))?
             .ok_or(AuthError::InvalidCredentials)
+    }
+
+    pub async fn autocomplete(
+        &self,
+        input: kokkak_domain::UserAutocompleteInput,
+    ) -> Result<kokkak_domain::UserAutocompletePage, RepoError> {
+        self.users.autocomplete(&input).await
+    }
+
+    pub async fn get_addresses_by_user_guid(
+        &self,
+        input: kokkak_domain::UserAddressInput,
+    ) -> Result<kokkak_domain::UserAddressPage, RepoError> {
+        self.users.get_addresses_by_user_guid(&input).await
     }
 
     pub async fn list_users(
@@ -128,7 +138,6 @@ mod tests {
             &self,
             _caller_guid: Uuid,
         ) -> Result<Vec<kokkak_domain::UserListRow>, kokkak_domain::RepoError> {
-
             Ok(self.list_rows.lock().unwrap().clone())
         }
         async fn find_username_guid_by_user_guid(
@@ -236,5 +245,4 @@ mod tests {
         assert_eq!(page2.items[0].email, "carol@example.com");
         assert!(page2.next_cursor.is_none());
     }
-
 }

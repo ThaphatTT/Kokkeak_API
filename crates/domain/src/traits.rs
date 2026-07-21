@@ -1,3 +1,4 @@
+pub mod admin_order_service;
 pub mod catalog;
 pub mod category_job_main;
 pub mod category_job_service_main;
@@ -13,6 +14,7 @@ pub mod translation;
 pub mod user;
 pub mod user_role;
 
+pub use admin_order_service::AdminOrderServiceRepository;
 pub use catalog::ServiceRepository;
 pub use category_job_main::CategoryJobMainRepository;
 pub use category_job_service_main::CategoryJobServiceMainRepository;

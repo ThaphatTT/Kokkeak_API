@@ -275,6 +275,25 @@ pub fn build(state: AppState) -> Router {
             "/api/v1/permission/overrides",
             post(handlers::permission::update_permission_overrides),
         )
+        .route(
+            "/api/v1/order-services",
+            post(handlers::admin_order_service::create_order_service_admin)
+                .get(handlers::admin_order::list_order_services_admin),
+        )
+        .route(
+            "/api/v1/order-services/{guid}",
+            get(handlers::admin_order::get_order_service_admin)
+                .put(handlers::admin_order::update_order_service_admin)
+                .delete(handlers::admin_order::delete_order_service_admin),
+        )
+        .route(
+            "/api/v1/users/autocomplete",
+            get(handlers::user::autocomplete_users_admin),
+        )
+        .route(
+            "/api/v1/users/:user_guid/addresses",
+            get(handlers::user::get_user_addresses_admin),
+        )
         .layer(from_fn(admin_flag(Arc::new(state.clone()))));
 
     Router::new()

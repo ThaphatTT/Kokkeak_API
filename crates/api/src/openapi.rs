@@ -30,6 +30,8 @@ use crate::handlers;
         handlers::auth::revoke_session,
 
         handlers::user::get_me,
+        handlers::user::autocomplete_users_admin,
+        handlers::user::get_user_addresses_admin,
         handlers::catalog::list_services,
 
         handlers::category_job_main::list_category_job_mains,
@@ -59,8 +61,13 @@ use crate::handlers;
                         handlers::master::autocomplete_master_positions,
 
         handlers::order::list_my_orders,
-        handlers::order::list_assigned_orders,
-        handlers::order::create_order,
+handlers::order::list_assigned_orders,
+handlers::order::create_order,
+
+handlers::admin_order::list_order_services_admin,
+handlers::admin_order::get_order_service_admin,
+handlers::admin_order::update_order_service_admin,
+handlers::admin_order::delete_order_service_admin,
 
         handlers::payment::list_my_payments,
         handlers::payment::get_payment,
@@ -179,8 +186,18 @@ use crate::handlers;
 
                                                 handlers::admin::AdminUpdateUserRequest,
                                                 handlers::admin::AdminUpdateUserResponse,
-                                                handlers::admin::WeeklyScheduleDto,
-                                                handlers::admin::DayScheduleDto,
+                                                                                    handlers::admin::WeeklyScheduleDto,
+                                                                                    handlers::admin::DayScheduleDto,
+
+                                                            handlers::admin_order::ListAdminOrderQuery,
+                                                                                    handlers::admin_order::ListAdminOrderResponse,
+                                                                                    handlers::admin_order::ListAdminOrderMeta,
+                                                                                    handlers::admin_order::UpdateOrderServiceRequest,
+                                                                                    kokkak_domain::AdminOrderRow,
+                                                                                    kokkak_domain::AdminOrderPage,
+                                                                                    kokkak_domain::AdminOrderDetailRow,
+                                                                                    kokkak_domain::AdminOrderUpdateResult,
+                                                                                    kokkak_domain::AdminOrderDeleteResult,
 
                         kokkak_domain::AdminUserDetail,
                         kokkak_domain::AdminUserDetailUsername,
@@ -204,6 +221,11 @@ use crate::handlers;
 
                         kokkak_domain::PublicUser,
                                     kokkak_domain::UserListRow,
+                                    kokkak_domain::UserAutocompleteRow,
+                                                kokkak_domain::UserAutocompletePage,
+                                                            kokkak_domain::UserAddressPage,
+                                                            kokkak_domain::UserAddressRow,
+                                                handlers::user::UserAutocompleteQuery,
                                     kokkak_domain::admin_user::UserListPagingRow,
                                     kokkak_domain::admin_user::AdminUserListPagingPage,
                         kokkak_domain::ServiceCategory,

@@ -11,6 +11,7 @@ use kokkak_domain::{
     TranslationRepository, UserRepository, UserRoleRepository,
 };
 use kokkak_infra::cache::translation_cache::CachedTranslationRepository;
+use kokkak_infra::db::mssql_admin_order_service::MssqlAdminOrderServiceRepository;
 use kokkak_infra::db::mssql_catalog::MssqlServiceRepository;
 use kokkak_infra::db::mssql_category_job_main::MssqlCategoryJobMainRepository;
 use kokkak_infra::db::mssql_category_job_service_main::MssqlCategoryJobServiceMainRepository;
@@ -66,6 +67,8 @@ pub struct RepoBundle {
     pub category_job_service_sub_fee: Arc<dyn CategoryJobServiceSubFeeRepository>,
 
     pub category_job_service_sub_warranty: Arc<dyn CategoryJobServiceSubWarrantyRepository>,
+
+    pub admin_order_service: Arc<dyn kokkak_domain::AdminOrderServiceRepository>,
 
     pub mssql_pool: Option<kokkak_infra::db::mssql::MssqlPool>,
     pub topology: Option<DatabaseTopology>,
@@ -169,6 +172,9 @@ pub async fn from_settings(
                             &primary_pool,
                         )),
                     ),
+                    admin_order_service: Arc::new(MssqlAdminOrderServiceRepository::new(
+                        topo_pool(&topo, DbRole::Order, &primary_pool),
+                    )),
                     mssql_pool: Some(primary_pool),
                     topology: Some(topo),
                 })

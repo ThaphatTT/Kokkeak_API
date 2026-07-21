@@ -1,4 +1,6 @@
 pub mod admin;
+pub mod admin_order;
+pub mod admin_order_service;
 pub mod auth;
 pub mod catalog;
 pub mod category_job_main;
